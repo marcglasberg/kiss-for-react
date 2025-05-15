@@ -1,4 +1,4 @@
-![Kiss for React Platypus](https://kissforreact.org/img/PlatipusLandscape.jpg)
+![Kiss for React Image](https://kissforreact.org/img/LandscapeLake.jpg)
 
 Kiss is:
 
