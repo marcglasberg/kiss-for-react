@@ -8,8 +8,8 @@ Kiss is:
 
 ## What is it?
 
-An optimized, unofficial version of Redux, written from the ground up,
-created by [Marcelo Glasberg](https://github.com/marcglasberg), launched in July 2024.
+Kiss is a state management package for React,
+created by [Marcelo Glasberg](https://github.com/marcglasberg), and launched in May 2025.
 
 While new for React, it's a **mature solution** as it's
 been available for Flutter with the name [Async Redux](https://pub.dev/packages/async_redux) for years
