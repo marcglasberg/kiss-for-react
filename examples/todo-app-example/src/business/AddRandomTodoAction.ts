@@ -11,13 +11,15 @@ import { delayMillis } from "../utils/utils";
  */
 export class AddRandomTodoAction extends Action {
 
+  checkInternet = { dialog: true }
+
   async reduce() {
 
     // For demonstration purposes only. Just to give us some
     // time to see the spinner while the information loads.
     await delayMillis(250);
 
-    let text = await this.getTextFromTheNumbersAPI();
+    const text = await this.getTextFromTheNumbersAPI();
 
     return (state: State) => state
       .withTodos(this.state.todoList.addTodoFromText(text))
@@ -30,7 +32,7 @@ export class AddRandomTodoAction extends Action {
 
     do {
       // Connect with the NumbersAPI to get a random fact.
-      let response = await fetch('http://numbersapi.com/random/trivia');
+      const response = await fetch('http://numbersapi.com/random/trivia');
 
       // If the connection failed, throw an exception.
       if (!response.ok) throw new UserException('Failed to connect to the NumbersAPI.');

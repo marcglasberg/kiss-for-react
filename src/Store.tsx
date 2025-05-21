@@ -287,8 +287,8 @@ class RefStore<St, T> {
  */
 export class Store<St> {
 
-  public _refStateHooks: Set<React.MutableRefObject<RefState<St, any> | undefined>> = new Set();
-  public _refStoreHooks: Set<React.MutableRefObject<RefStore<St, any> | undefined>> = new Set();
+  public _refStateHooks: Set<React.RefObject<RefState<St, any> | undefined>> = new Set();
+  public _refStoreHooks: Set<React.RefObject<RefStore<St, any> | undefined>> = new Set();
 
   // Rebuilds components because of STATE changes.
   //
@@ -2121,7 +2121,7 @@ export const StoreContext = createContext<StoreContextType<any>>({
   store: null
 });
 
-export function StoreProvider<St>({store, children}: StoreProviderProps<St>): JSX.Element {
+export function StoreProvider<St>({store, children}: StoreProviderProps<St>): React.ReactElement {
   const [_store] = useState<Store<St>>(store);
   return (
     <StoreContext.Provider value={{store: _store}}>

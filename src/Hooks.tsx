@@ -20,7 +20,7 @@ import { KissAction, ActionStatus } from './KissAction';
 export function useSelect<St, T>(selector: (state: St) => T): T {
 
   // This ref will persist for the full lifetime of the component.
-  let ref = useRef<RefState<St, T>>();
+  let ref = useRef<RefState<St, T>>(undefined);
 
   // The initial value is the value selected from the current state in the store.
   let store: Store<St> = _useStoreFromContext<St>();
@@ -312,7 +312,7 @@ export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction
 function _useStoreSelector<St, T>(selector: (store: Store<St>) => T): T {
 
   // This ref will persist for the full lifetime of the component.
-  let ref = useRef<RefStore<St, T>>();
+  let ref = useRef<RefStore<St, T>>(undefined);
 
   // The initial value is the value selected from the current state in the store.
   let store: Store<St> = _useStoreFromContext<St>();

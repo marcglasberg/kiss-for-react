@@ -1,4 +1,4 @@
-![Kiss for React Image](https://kissforreact.org/img/LandscapeLake.jpg)
+![Kiss for React Image](https://kissforreact.org/img/KISS_outline.svg)
 
 Kiss is:
 

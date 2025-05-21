@@ -31,6 +31,13 @@ export type AsyncReducer<St> = Promise<((state: St) => (St | null)) | null>;
 
 export type AsyncReducerResult<St> = ((state: St) => (St | null)) | null;
 
+// Interface for the checkInternet property.
+interface CheckInternetOptions {
+  /** Whether to show a dialog when no internet connection is available. */
+  dialog: boolean;
+}
+
+/** Base action. All other actions should extend this one. */
 export abstract class KissAction<St> {
 
   get attempts(): number {
@@ -55,14 +62,81 @@ export abstract class KissAction<St> {
    * resolves.
    *
    * This method is useful for actions that need to perform some checks before executing the
-   * reducer. For example, if an action needs internet connection, it can check the presence of
-   * the connection before executing the reducer. If the connection is not present, the before
-   * method can throw a `UserException("Please, check your internet connection.");`. This will
-   * prevent the reducer from running.
+   * reducer. If necessary, it can prevent the reducer from running by throwing an exception.
+   * 
+   * For example, the default `before()` method checks if the `checkInternet` property was set.
+   * If it was set, it checks if the device has an internet connection. If the connection is not
+   * present, it throws a `UserException`, preventing the reducer from running.
    *
-   * Note the `after` method always runs, even if the before method throws an exception.
+   * Note the `after()` method always runs, even if the `before()` method throws an exception.
    */
   before(): void | Promise<void> {
+    if (this.checkInternet) {
+      const dialog = this.checkInternet.dialog;
+
+      return this.hasInternet().then((isConnected: boolean) => {
+        if (!isConnected) {
+          if (dialog) {
+            throw new UserException("Please, verify your connection.").withTitle("There is no Internet");
+          } else {
+            throw new UserException("No Internet").withDialog(false);
+          }
+        }
+      });
+    }
+
+    // Return void (not a Promise) when we don't need to check internet.
+    else return;
+  }
+
+  /**
+  * Checks if the device has an internet connection.
+  * Can be overridden by subclasses to provide custom internet connectivity checks.
+  *   
+  * By default, in web environment it uses `navigator.onLine`, and for other environments it returns `true`.  
+  * Note `navigator.onLine` is not very useful, as it only tells you if there's a local connection, 
+  * and not whether the internet is accessible.
+  * 
+  * It's recommended to override this method in your base action, to check for internet connectivity
+  * in some other way that suits your needs.
+  * 
+  * For example, in React Native environments, we could use the `NetInfo` package 
+  * (https://www.npmjs.com/package/@rescript-react-native/netinfo) to check for internet connectivity.
+  * 
+  * First, add NetInfo to your `package.json`:
+  * 
+  * ```json
+  * "dependencies": {
+  *   "@react-native-community/netinfo": "^11.4.1"
+  * }
+  * ```	
+  * 
+  * Then, import it in your action:
+  * 
+  * ```typescript
+  * import NetInfo from '@react-native-community/netinfo';
+  * ```
+  * 
+  * Finally, override the `hasInternet()` method:
+  * 
+  * ```typescript
+  * protected hasInternet(): Promise<boolean> {
+  *   return NetInfo.fetch().then(state => state.isConnected);
+  * }
+  * ```
+  * 
+  * Another option, for Node.js and the browser is using https://www.npmjs.com/package/is-online
+  * 
+  * Note: Instead of adding this to every action, you can create a base class 
+  * that extends `KissAction` and implement the `hasInternet()` method there.
+  */
+  protected hasInternet(): Promise<boolean> {
+
+    // Web environment detection.
+    const isWebEnvironment = typeof window !== 'undefined' && 'navigator' in window;
+
+    // In web environment, use navigator.onLine. Otherwise, assume connected.
+    return Promise.resolve(isWebEnvironment ? navigator.onLine : true);
   }
 
   /**
@@ -106,6 +180,33 @@ export abstract class KissAction<St> {
     return error;
   };
 
+  /**
+   * If the action should check for internet connection or not.
+   * - If `checkInternet = { dialog: true }`, throw a UserException with a dialog.
+   * - If `checkInternet = { dialog: false }`, throw a UserException without a dialog.
+   * - If `checkInternet` is undefined/null, don't check for internet.
+   * 
+   * The default is checking for internet connectivity with `navigator.onLine`. To customize how 
+   * internet connectivity is checked, you may override the `hasInternet()` method:
+   * 
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   checkInternet = { dialog: true };
+   * 
+   *   protected hasInternet(): Promise<boolean> {
+   *     // Custom internet check implementation
+   *     return Promise.resolve(navigator.onLine &&  await this.pingServer('https://api.example.com/health');
+   *   }
+   * 
+   *   reduce() { ... }
+   * }
+   * ```
+   * 
+   * By default, the `hasInternet()` method uses `navigator.onLine` in web environments 
+   * and returns true for other environments.
+   */
+  checkInternet?: CheckInternetOptions;
+
   private _store: Store<St> | null = null;
   private _resolve: ((value: ActionStatus) => void) | null = null;
   private _status = new ActionStatus();
@@ -128,7 +229,7 @@ export abstract class KissAction<St> {
    * ```
    */
   log(key: string, value: any) {
-    this._log.push({key, value});
+    this._log.push({ key, value });
   }
 
   /**
@@ -665,9 +766,9 @@ export abstract class KissAction<St> {
 
     return this.store.waitActionCondition(
       condition, {
-        completeImmediately: completeImmediately,
-        timeoutMillis: timeoutMillis
-      });
+      completeImmediately: completeImmediately,
+      timeoutMillis: timeoutMillis
+    });
   }
 
   /**
@@ -770,9 +871,9 @@ export abstract class KissAction<St> {
 
     return this.store.waitAllActions(
       actions, {
-        completeImmediately: completeImmediately,
-        timeoutMillis: timeoutMillis
-      });
+      completeImmediately: completeImmediately,
+      timeoutMillis: timeoutMillis
+    });
   }
 
   /**
@@ -877,9 +978,9 @@ export abstract class KissAction<St> {
     } = {}): Promise<KissAction<St> | null> {
     return this.store.waitActionType(
       actionType, {
-        completeImmediately: completeImmediately,
-        timeoutMillis: timeoutMillis
-      });
+      completeImmediately: completeImmediately,
+      timeoutMillis: timeoutMillis
+    });
   }
 
   /**
@@ -978,9 +1079,9 @@ export abstract class KissAction<St> {
     } = {}): Promise<void> {
     return this.store.waitAllActionTypes(
       actionTypes, {
-        completeImmediately: completeImmediately,
-        timeoutMillis: timeoutMillis
-      });
+      completeImmediately: completeImmediately,
+      timeoutMillis: timeoutMillis
+    });
   }
 
   /**
@@ -1085,8 +1186,8 @@ export abstract class KissAction<St> {
     } = {}): Promise<KissAction<St>> {
     return this.store.waitAnyActionTypeFinishes(
       actionTypes, {
-        timeoutMillis: timeoutMillis
-      });
+      timeoutMillis: timeoutMillis
+    });
   }
 
   /**
@@ -1097,7 +1198,7 @@ export abstract class KissAction<St> {
     this._initialState = _store.state;
 
     if (!!this.retry) {
-      this._retry = {...this._retry, ...this.retry, on: true};
+      this._retry = { ...this._retry, ...this.retry, on: true };
       this.retry = this._retry;
     }
   }

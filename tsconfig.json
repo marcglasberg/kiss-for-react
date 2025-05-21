@@ -9,7 +9,7 @@
     "declaration": true,
     "declarationMap": true,
     "allowSyntheticDefaultImports": true,
-    "jsx": "react",
+    "jsx": "react-jsx",
     "lib": [
       "ES2022",
       "DOM"
