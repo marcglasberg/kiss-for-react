@@ -1,19 +1,13 @@
-![Kiss for React Image](https://kissforreact.org/img/KISS_outline.svg)
-
-Kiss is:
+<img src="https://kissforreact.org/img/KISS_outline.svg" alt="Kiss for React Image" width="150" />
 
 * Simple to learn and easy to use
 * Powerful enough to handle complex apps with millions of users
 * Testable
+<br></br>
 
 ## What is it?
 
-Kiss is a state management package for React,
-created by [Marcelo Glasberg](https://github.com/marcglasberg), and launched in May 2025.
-
-While new for React, it's a **mature solution** as it's
-been available for Flutter with the name [Async Redux](https://pub.dev/packages/async_redux) for years
-(top 8% of packages), battle-tested in hundreds of real-world applications.
+Kiss is a state management package for React, launched in May 2025. While new to React, it's a **mature solution**, having been available for Flutter for years under the name [Async Redux](https://pub.dev/packages/async_redux) (top 8% of packages), battle-tested in hundreds of real-world applications.
 
 ## Documentation
 
@@ -26,18 +20,16 @@ at **[https://kissforreact.org](https://kissforreact.org)**
 
 ## How does it compare?
 
-State management solutions can sometimes overwhelm with the complexity of concepts you
-have to grasp and the significant knowledge overhead needed to navigate the pitfalls.
-**Kiss** is the opposite:
-There's no need to be super clever to make things work.
+State management solutions can sometimes overwhelm you with complex concepts and the significant knowledge overhead needed to avoid pitfalls. Kiss is the opposite, as there's no need to be especially clever to make things work.
+[Detailed comparison](https://kissforreact.org/react/category/comparisons).
 
-[Compare it with Redux Toolkit, TanStack Query, Zustand and Mobx](https://kissforreact.org/react/category/comparisons).
+**AI ready:** Kiss centralizes state and business logic in predictable ways, making it easier for AI models to reason about code. This improves AI-driven generation, and helps you achieve results with surprisingly little effort.
 
 ---
 
 # Overview
 
-For a quick overview, here are the main concepts:
+Here are the main concepts:
 
 ## Store and state
 
@@ -547,9 +539,14 @@ class SelectItem extends Action {
 }
 ```
 
----
-
 &nbsp;
 
-_To learn more, the complete Kiss documentation is published
-at **[https://kissforreact.org](https://kissforreact.org)**_
+## More
+
+* Complete docs: [https://kissforreact.org](https://kissforreact.org)
+
+* [Kiss GitHub](https://github.com/marcglasberg/kiss-for-react)
+
+* Created by [Marcelo Glasberg](https://glasberg.dev) ([GitHub](https://github.com/marcglasberg), [LinkedIn](https://www.linkedin.com/in/marcglasberg/))
+
+

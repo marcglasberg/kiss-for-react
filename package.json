@@ -1,6 +1,6 @@
 {
   "name": "kiss-for-react",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "Kiss state management, launched May 2025. Visit kissforreact.org for detailed docs and plenty of examples.",
   "exports": {
     ".": {
