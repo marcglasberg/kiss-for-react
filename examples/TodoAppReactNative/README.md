@@ -19,7 +19,7 @@ In it's `package.json` file it adds Kiss as a dependency like this:
 ```json
 {
   "dependencies": {
-    "kiss-for-react": "^1.1.1"
+    "kiss-for-react": "^1.0.1"
   }
 }
 ```
