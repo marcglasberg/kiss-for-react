@@ -1,4 +1,4 @@
-import React, { createContext, useState } from 'react';
+import React, { createContext, useMemo, useState } from 'react';
 import { UserException } from './UserException';
 import { Persistor } from './Persistor';
 import {
@@ -2123,8 +2123,9 @@ export const StoreContext = createContext<StoreContextType<any>>({
 
 export function StoreProvider<St>({store, children}: StoreProviderProps<St>): React.ReactElement {
   const [_store] = useState<Store<St>>(store);
+  const storeMemo = useMemo(() => ({ store: _store }), [_store]);
   return (
-    <StoreContext.Provider value={{store: _store}}>
+    <StoreContext.Provider value={storeMemo}>
       {children}
     </StoreContext.Provider>
   );

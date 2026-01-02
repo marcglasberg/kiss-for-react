@@ -348,7 +348,7 @@ function _useStoreSelector<St, T>(selector: (store: Store<St>) => T): T {
 
 function _useStoreFromContext<St>(): Store<St> {
   const context = useContext<StoreContextType<St>>(StoreContext) as StoreContextType<St>;
-  if (context === undefined) {
+  if (!context?.store) {
     throw new StoreException('useStore must be used within a StoreProvider');
   }
   return context.store as Store<St>;
