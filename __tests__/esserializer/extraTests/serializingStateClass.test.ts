@@ -5,18 +5,18 @@ import { ESSerializer } from '../../../src/Esserializer';
 
 test('State class', () => {
 
-  let todo1 = new TodoItem('First', false);
-  let todo2 = new TodoItem('Second', false);
-  let todo3 = new TodoItem('Third', true);
-  let todoList = new TodoList([todo1, todo2, todo3]);
-  let filter = Filter.showActive;
+  const todo1 = new TodoItem('First', false);
+  const todo2 = new TodoItem('Second', false);
+  const todo3 = new TodoItem('Third', true);
+  const todoList = new TodoList([todo1, todo2, todo3]);
+  const filter = Filter.showActive;
 
-  let state = new State({todoList: todoList, filter});
+  const state = new State({todoList: todoList, filter});
 
   ESSerializer.registerClasses([State, TodoList, TodoItem, Filter]);
 
-  let serialized = ESSerializer.serialize(state);
-  let deserialized = ESSerializer.deserialize(serialized);
+  const serialized = ESSerializer.serialize(state);
+  const deserialized = ESSerializer.deserialize(serialized);
 
   expect(serialized).toBe('' +
     '{' +
@@ -36,7 +36,7 @@ test('State class', () => {
 
   expect(deserialized instanceof State).toBeTruthy();
 
-  let stateDeserialized = deserialized as State;
+  const stateDeserialized = deserialized as State;
 
   expect(stateDeserialized.toString())
     .toBe('' +
@@ -47,7 +47,7 @@ test('State class', () => {
 
   expect(stateDeserialized.hasTodos()).toBeTruthy();
 
-  let deserializedTodos = stateDeserialized.todoList;
+  const deserializedTodos = stateDeserialized.todoList;
 
   expect(deserializedTodos.isEmpty()).toBeFalsy();
   expect(deserializedTodos.ifExists('xxx')).toBeFalsy();

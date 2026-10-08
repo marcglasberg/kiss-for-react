@@ -86,7 +86,7 @@ Bdd(feature)
     store.dispatch(new IncrementAsync());
 
     // Wait for the state to become 42.
-    let action = await store.waitCondition((state: State) => state.count === 42);
+    const action = await store.waitCondition((state: State) => state.count === 42);
     expect(action).toBeInstanceOf(Add20Async);
 
     // But it immediately became 0, because the ResetSync action was dispatched.
@@ -142,7 +142,7 @@ Bdd(feature)
       '11. ResetSync end: State(42) → State(0)\n' +
       ']');
 
-    let result = store.record.result()[9];
+    const result = store.record.result()[9];
     expect(result.action instanceof Add20Async).toBeTruthy();
     expect(result.prevState.count).toBe(22);
     expect(result.newState.count).toBe(42);

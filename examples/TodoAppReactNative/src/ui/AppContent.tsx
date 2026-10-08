@@ -181,9 +181,9 @@ function TodoItemComponent({item}: {item: TodoItem}) {
     size={30}
     style={styles.checkbox}
     isChecked={item.completed}
-    disableBuiltInState={true}
+    useBuiltInState={false}
     fillColor="#555"
-    unfillColor="#FFE"
+    unFillColor="#FFE"
     text={item.text}
     innerIconStyle={{borderWidth: 2}}
     onPress={(_) => {

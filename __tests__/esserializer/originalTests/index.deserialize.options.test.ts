@@ -9,15 +9,13 @@ describe('Test special object properties', () => {
   //
   test('can serialize and deserialize getter/setter defined in class constructor', () => {
     const user = new User('P123456', 'Mike');
-    // @ts-ignore
+    // @ts-expect-error -- `location` is added with Object.defineProperty in the constructor, so it is not in the type.
     user.location = 'Zhejiang_Ningbo';
     const serializedString = ESSerializer.serialize(user);
     const deserializedObj = ESSerializer.deserialize(serializedString, [User]);
     expect(deserializedObj.location).toBe('Zhejiang : Ningbo');
-    // @ts-ignore
-    expect(typeof Object.getOwnPropertyDescriptor(deserializedObj, 'location').get).toBe('function');
-    // @ts-ignore
-    expect(typeof Object.getOwnPropertyDescriptor(deserializedObj, 'location').set).toBe('function');
+    expect(typeof Object.getOwnPropertyDescriptor(deserializedObj, 'location')!.get).toBe('function');
+    expect(typeof Object.getOwnPropertyDescriptor(deserializedObj, 'location')!.set).toBe('function');
   });
 
   // TODO: This test is from the original Esserializer, and it's not working.

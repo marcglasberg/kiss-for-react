@@ -17,7 +17,7 @@ export class AddTodoAction extends Action {
         });
     }
 
-    let newTodos = this.state.todoList.addTodoFromText(this.text);
+    const newTodos = this.state.todoList.addTodoFromText(this.text);
 
     return this.state
       .withTodos(newTodos)

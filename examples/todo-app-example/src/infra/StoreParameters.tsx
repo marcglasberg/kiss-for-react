@@ -1,4 +1,4 @@
-import { ClassPersistor, ShowUserException, UserException, } from 'kiss-for-react';
+import { ClassPersistor, type ShowUserException, UserException, } from 'kiss-for-react';
 import { Button, Dialog, DialogActions, DialogContent } from '@mui/material';
 import { State } from '../business/State';
 import { TodoItem, TodoList } from '../business/TodoList';

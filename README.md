@@ -433,6 +433,10 @@ It supports serializing JavaScript objects **and** ES6 classes out of the box.
 const store = createStore<State>({  
   persistor: new Persistor(),
 });  
+
+// Wait for the saved state to load, then start the app.
+await store.ready();
+store.dispatch(new InitAppAction());
 ```
 
 &nbsp;
@@ -496,6 +500,18 @@ globalWrapError: (error: any) => {
       ? UserException('Error connecting to Firebase')
       : error;
    }  
+```
+
+By default, Kiss logs what it does (for example, each dispatched action) to the console.
+Use `logger` to send these messages somewhere else, or set it to `null` to turn logging off.
+With `null`, Kiss doesn't even build the log messages:
+
+```tsx
+const store = createStore<State>({
+  initialState: new State(),
+  logger: (obj) => myLogger.info(obj), // Or `null` to turn logging off.
+  logStateChanges: true, // Also log every state change.
+});
 ```
 
 &nbsp;

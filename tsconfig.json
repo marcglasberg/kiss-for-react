@@ -16,7 +16,8 @@
     ],
     "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
+    "types": ["jest", "node"],
     "outDir": "./lib/esm",
     "declarationDir": "./lib/esm/types"
   },

@@ -20,7 +20,7 @@ Bdd(feature)
   .note('We only have to test dispatch, because its the same abort code as dispatchSync/dispatchAndWait.')
   .run(async (_) => {
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 

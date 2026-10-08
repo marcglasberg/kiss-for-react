@@ -11,12 +11,12 @@ enum Filter {
 
 test('Filter enum', () => {
 
-  let filter = Filter.showActive;
+  const filter = Filter.showActive;
 
   ESSerializer.registerClasses([Filter]);
 
-  let serialized = ESSerializer.serialize(filter);
-  let deserialized = ESSerializer.deserialize(serialized);
+  const serialized = ESSerializer.serialize(filter);
+  const deserialized = ESSerializer.deserialize(serialized);
 
   function isFilter(value: any): value is Filter {
     return Object.values(Filter).includes(value);
@@ -24,7 +24,7 @@ test('Filter enum', () => {
 
   expect(isFilter(deserialized)).toBeTruthy();
 
-  let filterDeserialized = deserialized as Filter;
+  const filterDeserialized = deserialized as Filter;
   expect(serialized).toBe('"Showing ACTIVE"');
   expect(filterDeserialized.toString()).toBe('Showing ACTIVE');
 });

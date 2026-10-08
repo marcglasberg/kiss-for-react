@@ -4,9 +4,9 @@
 import { ESSerializer } from '../../../src/Esserializer';
 
 test('Simple class', () => {
-  let myClass = new MyClass(123, 'Lorem ipsum');
-  let serialized = ESSerializer.serialize(myClass);
-  let deserialized = ESSerializer.deserialize(serialized, [MyClass]);
+  const myClass = new MyClass(123, 'Lorem ipsum');
+  const serialized = ESSerializer.serialize(myClass);
+  const deserialized = ESSerializer.deserialize(serialized, [MyClass]);
 
   expect(serialized).toBe('{"' +
     'someNumber":123,' +
@@ -16,7 +16,7 @@ test('Simple class', () => {
 
   expect(deserialized instanceof MyClass).toBeTruthy();
 
-  let myClassDeserialized = deserialized as MyClass;
+  const myClassDeserialized = deserialized as MyClass;
 
   expect(myClassDeserialized.someNumber).toBe(123);
   expect(myClassDeserialized.someText).toBe('Lorem ipsum');

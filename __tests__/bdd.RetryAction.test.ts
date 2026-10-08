@@ -22,16 +22,16 @@ Bdd(feature)
 
     let errorInErrorObserver: any;
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
-      errorObserver: (error: any, action: KissAction<State>, store: Store<State>) => {
+      errorObserver: (error: any) => {
         errorInErrorObserver = error;
         return false;
       },
     });
 
     expect(store.state.count).toBe(1);
-    let action = new SyncActionThatRetriesAndSucceeds();
+    const action = new SyncActionThatRetriesAndSucceeds();
     await store.dispatchAndWait(action);
     expect(action.attempts).toBe(5);
     expect(action.log).toBe('012345');
@@ -55,12 +55,12 @@ Bdd(feature)
   .then('It does change the state.')
   .run(async (_) => {
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 
     expect(store.state.count).toBe(1);
-    let action = new AsyncActionThatRetriesAndSucceeds();
+    const action = new AsyncActionThatRetriesAndSucceeds();
     await store.dispatchAndWait(action);
     expect(action.attempts).toBe(5);
     expect(action.log).toBe('012345');
@@ -76,12 +76,12 @@ Bdd(feature)
   .then('It does change the state.')
   .note('Without the "UnlimitedRetries" it would fail because the default is 3 retries.')
   .run(async (_) => {
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 
     expect(store.state.count).toBe(1);
-    let action = new ActionThatRetriesUnlimitedAndFails();
+    const action = new ActionThatRetriesUnlimitedAndFails();
     await store.dispatchAndWait(action);
     expect(action.status.isCompletedOk).toBe(true);
     expect(store.state.count).toBe(2);
@@ -96,12 +96,12 @@ Bdd(feature)
   .when('The action is dispatched.')
   .then('It does NOT change the state.')
   .run(async (_) => {
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 
     expect(store.state.count).toBe(1);
-    let action = new ActionThatRetriesAndFails();
+    const action = new ActionThatRetriesAndFails();
     await store.dispatchAndWait(action);
     expect(store.state.count).toBe(1);
     expect(action.attempts).toBe(4);
@@ -116,12 +116,12 @@ Bdd(feature)
   .then('It cannot be dispatched SYNC anymore.')
   .run(async (_) => {
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 
     expect(store.state.count).toBe(1);
-    let action = new ActionThatRetriesButSucceedsTheFirstTry();
+    const action = new ActionThatRetriesButSucceedsTheFirstTry();
     await store.dispatchAndWait(action);
     expect(action.attempts).toBe(0);
     expect(action.log).toBe('0');
@@ -184,7 +184,7 @@ class ActionThatRetriesAndFails extends KissAction<State> {
   async reduce() {
     this.log += this.attempts.toString();
     if (this.attempts <= 4) throw new UserException(`Failed: ${this.attempts}`);
-    return (state: State) => new State(this.state.count + 1);
+    return () => new State(this.state.count + 1);
   }
 }
 
@@ -199,7 +199,7 @@ class ActionThatRetriesButSucceedsTheFirstTry extends KissAction<State> {
 
   async reduce() {
     this.log += this.attempts.toString();
-    return (state: State) => new State(this.state.count + 1);
+    return () => new State(this.state.count + 1);
   }
 }
 
@@ -215,6 +215,6 @@ class ActionThatRetriesUnlimitedAndFails extends KissAction<State> {
   async reduce() {
     this.log += this.attempts.toString();
     if (this.attempts <= 6) throw new UserException(`Failed: ${this.attempts}`);
-    return (state: State) => new State(this.state.count + 1);
+    return () => new State(this.state.count + 1);
   }
 }

@@ -8,7 +8,7 @@ export class ToggleTodoAction extends Action {
   }
 
   reduce() {
-    let newTodos = this.state.todoList.toggleTodo(this.item);
+    const newTodos = this.state.todoList.toggleTodo(this.item);
     return this.state.withTodos(newTodos);
   }
 }

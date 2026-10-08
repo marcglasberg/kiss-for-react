@@ -103,7 +103,7 @@ test('waitAnyActionTypeFinishes', async () => {
   // As soon as the action finishes, the promise resolves.
   let store = new Store<State>({initialState: new State(1), logger: logger});
   store.dispatch(new DelayedAction(1, 10));
-  let action = await store.waitAnyActionTypeFinishes([DelayedAction], {timeoutMillis: 2000});
+  const action = await store.waitAnyActionTypeFinishes([DelayedAction], {timeoutMillis: 2000});
   expect(action).toBeInstanceOf(DelayedAction);
   expect(action.status.isCompletedOk).toBe(true);
 
@@ -125,8 +125,8 @@ test('waitActionCondition', async () => {
   // Returns a promise that resolves when the actions of the given type that are in progress
   // meet the given condition. Since no actions are currently in progress, and we're checking
   // to see if there are no actions in progress, the promise resolves immediately.
-  let store = new Store<State>({initialState: new State(1), logger: logger});
-  await store.waitActionCondition((actions, triggerAction) => actions.size === 0, {completeImmediately: true});
+  const store = new Store<State>({initialState: new State(1), logger: logger});
+  await store.waitActionCondition((actions) => actions.size === 0, {completeImmediately: true});
 });
 
 test('waitAllActionTypes', async () => {
@@ -164,7 +164,7 @@ Bdd(feature)
   .then('After we wait, all actions finished.')
   .run(async (_) => {
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 
@@ -187,7 +187,7 @@ Bdd(feature)
   .then('After we wait, the 3 actions finished, and the fourth did not.')
   .run(async (_) => {
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 
@@ -209,7 +209,7 @@ Bdd(feature)
   .when('The action is dispatched.')
   .then('We wait until its type finished dispatching.')
   .run(async (_) => {
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 
@@ -234,16 +234,16 @@ Bdd(feature)
   .then('After we wait, the 3 actions finished, and the fourth did not.')
   .run(async (_) => {
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1), logger: logger,
     });
 
     expect(store.state.count).toBe(1);
 
-    let action50 = new DelayedAction(10, 50);
-    let action100 = new AnotherDelayedAction(100, 100);
-    let action200 = new YetAnotherDelayedAction(100000, 200);
-    let action10 = new DelayedAction(1000, 10)
+    const action50 = new DelayedAction(10, 50);
+    const action100 = new AnotherDelayedAction(100, 100);
+    const action200 = new YetAnotherDelayedAction(100000, 200);
+    const action10 = new DelayedAction(1000, 10)
 
     store.dispatch(action50);
     store.dispatch(action100);
@@ -273,7 +273,7 @@ class IncrementAction extends KissAction<State> {
 class IncrementActionAsync extends KissAction<State> {
   async reduce() {
     await new Promise(resolve => setTimeout(resolve, 10));
-    return (state: State) => new State(this.state.count + 1);
+    return () => new State(this.state.count + 1);
   }
 }
 

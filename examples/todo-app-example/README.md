@@ -18,7 +18,7 @@ Redux.
 
 ## Note
 
-This project was created following [https://vitejs.dev/guide](https://vitejs.dev/guide):
+This project was created following [https://vite.dev/guide](https://vite.dev/guide):
 
 ```s
 npm create vite@latest todo-app-example -- --template react-ts
@@ -31,7 +31,7 @@ In it's `package.json` file it adds Kiss as a dependency like this:
 ```json
 {
   "dependencies": {
-    "kiss-for-react": "file:/../../"
+    "kiss-for-react": "file:../.."
   }
 }
 ```
@@ -42,12 +42,24 @@ If you run it from an independent project, you'll need to include Kiss from npm 
 ```json
 {
   "dependencies": {
-    "kiss-for-react": "^1.0.1"
+    "kiss-for-react": "^1.1.0"
   }
 }
 ```
 
 But be sure to use the newest package version.
+
+## Vite configuration
+
+The `vite.config.ts` file has two settings worth knowing about:
+
+* `resolve.dedupe: ['react', 'react-dom']` is only needed here, because Kiss is linked from the
+  repository root, which has its own copy of React. Without it, the app would load two copies of
+  React and the hooks would fail.
+
+* `build.rolldownOptions.output.keepNames: true` is needed in **any** project that uses Kiss's
+  `ClassPersistor`, because it saves and restores the state using the class names. Without it,
+  the production build minifies the class names, and the persisted state can't be restored.
 
 ## Importing
 

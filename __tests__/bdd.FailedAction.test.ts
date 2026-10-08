@@ -29,7 +29,7 @@ Bdd(feature)
 
     // When the SYNC action fails, the failed flag is set.
     expect(store.isFailed(SyncActionThatFails)).toBe(false);
-    let actionFail = new SyncActionThatFails(true);
+    const actionFail = new SyncActionThatFails(true);
     expect(actionFail.status.originalError).toEqual(null);
     expect(actionFail.status.wrappedError).toEqual(null);
     store.dispatch(actionFail);
@@ -39,7 +39,7 @@ Bdd(feature)
     expect(actionFail.status.wrappedError).toEqual(new UserException('Yes, it failed.'));
 
     // When the same action is dispatched and does not fail, the failed flag is cleared.
-    let actionSuccess = new SyncActionThatFails(false);
+    const actionSuccess = new SyncActionThatFails(false);
     expect(actionSuccess.status.originalError).toEqual(null);
     expect(actionSuccess.status.wrappedError).toEqual(null);
     store.dispatch(actionSuccess);

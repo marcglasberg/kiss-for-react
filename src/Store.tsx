@@ -1,6 +1,6 @@
 import React, { createContext, useMemo, useState } from 'react';
 import { UserException } from './UserException';
-import { Persistor } from './Persistor';
+import { PersistAction, Persistor } from './Persistor';
 import {
   ActionStatus,
   AsyncReducer,
@@ -84,16 +84,16 @@ interface ConstructorParams<St> {
    * Note, if you don't define a logger yourself, the default is to print
    * the log messages to the console with `console.log()`.
    *
-   * This is how you may completely disable the default logger:
+   * This is how you may completely turn logging off:
    *
    * ```ts
    * const store = new Store<State>({
    *   initialState: new State(),
-   *   logger: (obj: any) => {}
+   *   logger: null
    * });
    * ```
    */
-  logger: (obj: any) => void;
+  logger?: ((obj: any) => void) | null;
 
   /**
    * If `true`, will use Store.log() to log all state changes.
@@ -110,7 +110,7 @@ interface ConstructorParams<St> {
    * });
    * ```
    */
-  logStateChanges: boolean;
+  logStateChanges?: boolean;
 
   /**
    * Global function to wrap errors.
@@ -245,8 +245,17 @@ interface ConstructorParams<St> {
    *       }
    * }
    * ```
+   *
+   * The `errorObserver` is also given the errors of the `Persistor` (errors thrown by
+   * `persistDifference` after the persistor's `wrapError`, errors thrown while reading the
+   * persisted state, and errors added with `Persistor.addError`). For those errors the `action`
+   * is `null`. Since there is no `dispatch` call to throw them to, returning `true` will log
+   * them with `Store.log()`, and returning `false` will swallow them. Note persistence errors of
+   * type `UserException` are always shown to the user, before the `errorObserver` is called.
+   *
+   * Note: Declared as a method so that observers typed with a non-null `action` still compile.
    */
-  errorObserver?: (error: any, action: KissAction<St>, store: Store<St>) => boolean;
+  errorObserver?(error: any, action: KissAction<St> | null, store: Store<St>): boolean;
 }
 
 /**
@@ -306,7 +315,16 @@ export class Store<St> {
     this._refStateHooks.forEach((hookRef) => {
       if (hookRef.current) {
         const [selector, currentValue, setValue] = hookRef.current.selectorAndValueAndSetValue;
-        const newSelectedValue = selector(this._state);
+        let newSelectedValue;
+        try {
+          newSelectedValue = selector(this._state);
+        } catch {
+          // The selector threw, probably because the component is a "zombie child" that will be
+          // unmounted by its parent. Re-render it instead of failing the action: when rendering,
+          // the selector runs again with the latest props, and any error goes to React.
+          setValue(currentValue);
+          return;
+        }
         if (newSelectedValue !== currentValue) {
           setValue(newSelectedValue);
           hookRef.current.selectorAndValueAndSetValue[1] = newSelectedValue; // Update the current value in the ref
@@ -331,7 +349,16 @@ export class Store<St> {
     this._refStoreHooks.forEach((hookRef) => {
       if (hookRef.current) {
         const [selector, currentValue, setValue] = hookRef.current.selectorAndValueAndSetValue;
-        const newSelectedValue = selector(this);
+        let newSelectedValue;
+        try {
+          newSelectedValue = selector(this);
+        } catch {
+          // The selector threw, probably because the component is a "zombie child" that will be
+          // unmounted by its parent. Re-render it instead of failing the action: when rendering,
+          // the selector runs again with the latest props, and any error goes to React.
+          setValue(currentValue);
+          return;
+        }
         if (newSelectedValue !== currentValue) {
           setValue(newSelectedValue);
           hookRef.current.selectorAndValueAndSetValue[1] = newSelectedValue; // Update the current value in the ref
@@ -372,16 +399,35 @@ export class Store<St> {
    * Note, if you don't define a logger yourself, the default is to print
    * the log messages to the console with `console.log()`.
    *
-   * This is how you may completely disable the default logger:
+   * This is how you may completely turn logging off:
    *
    * ```ts
    * const store = new Store<State>({
    *   initialState: new State(),
-   *   logger: (obj: any) => {};
+   *   logger: null;
    * });
    * ```
+   *
+   * Setting the logger to `null` is better than using an empty function, because Kiss then
+   * skips building its log messages (for example, the description of each dispatched action).
    */
   public static log: (obj: any) => void;
+
+  // The logger used when the `logger` constructor parameter is `null`.
+  private static _noLogger = (_obj: any) => {};
+
+  /**
+   * For Kiss internal use only. Logs the message returned by `buildMessage`, but only calls it
+   * when logging is turned on, so that no work is done to build messages that are discarded.
+   */
+  static _logLazy(buildMessage: () => any): void {
+    if (Store._isLogging()) Store.log(buildMessage());
+  }
+
+  // Returns false when the logger was set to `null`.
+  private static _isLogging(): boolean {
+    return Store.log !== Store._noLogger;
+  }
 
   private _state: St;
 
@@ -488,7 +534,7 @@ export class Store<St> {
   private readonly _globalWrapError?: (error: any, action: KissAction<St>) => any;
   private readonly _actionObserver?: (action: KissAction<St>, dispatchCount: number, ini: boolean) => void;
   private readonly _stateObserver?: (action: KissAction<St>, prevState: St, newState: St, error: any, dispatchCount: number) => void;
-  private readonly _errorObserver?: (error: any, action: KissAction<St>, store: Store<St>) => boolean;
+  private readonly _errorObserver?: (error: any, action: KissAction<St> | null, store: Store<St>) => boolean;
 
   /**
    * You can use `store.mocks` to mock actions. You should use this for testing purposes, only.
@@ -575,7 +621,7 @@ export class Store<St> {
 
   // The default Ui just logs all user-exceptions and removes them from the queue.
   private _defaultShowUserException(exception: UserException, _count: number, next: () => void) {
-    Store.log(`User got an exception: ${exception}`);
+    Store._logLazy(() => `User got an exception: ${exception}`);
     next();
   };
 
@@ -603,12 +649,47 @@ export class Store<St> {
     this._awaitableActions = new Set();
     this._failedActions = new Map<new (...args: any[]) => KissAction<St>, KissAction<St>>();
     this._actionsWeCanCheckFailed = new Set();
-    Store.log = logger || this._defaultLogger;
+    Store.log = (logger === null) ? Store._noLogger : (logger || this._defaultLogger);
     this._logStateChanges = logStateChanges ?? true;
 
     if (this._processPersistence != null) {
-      this._processPersistence.readInitialState(this, initialState).then();
+      this._processPersistence.onError = (error: any) => this._processPersistorError(error);
+      this._processPersistence.readInitialState(this, initialState).catch(() => {});
     }
+
+    this._ready = this._processPersistence?.ready() ?? Promise.resolve();
+  }
+
+  private readonly _ready: Promise<void>;
+
+  /**
+   * Returns a promise that resolves when the store has finished everything it needs to do at
+   * startup. Currently, this means reading the persisted state (if there is a persistor) and
+   * putting it into the store. In the future, other startup work may be added here.
+   *
+   * While the store is not ready, its state is the `initialState` passed to the constructor.
+   * Your UI can show that state normally (for example, showing loading indicators where data
+   * is missing). Note: state changes made before the store is ready may be overwritten when
+   * the persisted state is loaded. For this reason, wait for the store to be ready before
+   * dispatching the actions that start your app:
+   *
+   * ```ts
+   * const store = createStore<AppState>({
+   *   initialState: AppState.initialState(),
+   *   persistor: new MyPersistor(),
+   * });
+   *
+   * await store.ready();
+   * store.dispatch(new InitAppAction());
+   * ```
+   *
+   * The promise never rejects. If reading the persisted state fails, the error is reported
+   * (see `errorObserver`) and the store keeps the initial state. It always returns the same
+   * promise, so it can be called many times, and does not read the persisted state again.
+   * A store without a persistor is ready right away.
+   */
+  ready(): Promise<void> {
+    return this._ready;
   }
 
   get state(): St {
@@ -630,24 +711,17 @@ export class Store<St> {
    */
   dispatch(action: KissAction<St>): void {
     if (this._shutDown) {
-      Store.log(`Can't dispatch action ${action} because the store is shut down.`);
+      Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
 
-    let mockedActionOrAction = this._mockActionOrNot(action);
+    const mockedActionOrAction = this._mockActionOrNot(action);
 
     // 1) If mocked as `null`, the action is ignored.
     if (mockedActionOrAction === null) return; // If mocked as null, the action is ignored.
 
-    // 2) If the action wants to abort the dispatch, aborts, swallowing potential errors.
-    // Note: It's up to the developer to make sure `abortDispatch` doesn't throw any errors.
-    try {
-      if (mockedActionOrAction.abortDispatch()) return;
-      if (mockedActionOrAction.nonReentrant && this.isWaiting(mockedActionOrAction.constructor as new (...args: any[]) => KissAction<St>)) return;
-    } catch (error) {
-      Store.log(`Method '${action}.abortDispatch()' has thrown an error: ${error}.`);
-      return;
-    }
+    // 2) If the action wants to abort the dispatch, or is non-reentrant and already running, aborts.
+    if (this._mustAbortDispatch(mockedActionOrAction)) return;
 
     // 3) If the action is mocked to return another action, we dispatch the mock.
     this._processDispatch(mockedActionOrAction, false);
@@ -669,26 +743,20 @@ export class Store<St> {
    */
   dispatchAndWait(action: KissAction<St>): Promise<ActionStatus> {
     if (this._shutDown) {
-      Store.log(`Can't dispatch action ${action} because the store is shut down.`);
+      Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return Promise.resolve(new ActionStatus());
     }
 
-    let mockedActionOrAction = this._mockActionOrNot(action);
+    const mockedActionOrAction = this._mockActionOrNot(action);
 
     // 1) If mocked as `null`, the action is ignored.
     if (mockedActionOrAction === null) return Promise.resolve(new ActionStatus());
 
-    // 2) If the action wants to abort the dispatch, aborts, swallowing potential errors.
-    // Note: It's up to the developer to make sure `abortDispatch` doesn't throw any errors.
-    try {
-      if (mockedActionOrAction.abortDispatch()) return Promise.resolve(new ActionStatus());
-    } catch (error) {
-      Store.log(`Method '${action}.abortDispatch()' has thrown an error: ${error}.`);
-      return Promise.resolve(new ActionStatus());
-    }
+    // 2) If the action wants to abort the dispatch, or is non-reentrant and already running, aborts.
+    if (this._mustAbortDispatch(mockedActionOrAction)) return Promise.resolve(new ActionStatus());
 
     // 3) If the action is mocked to return another action, we dispatch the mock.
-    let promise = mockedActionOrAction._createPromise();
+    const promise = mockedActionOrAction._createPromise();
     this._processDispatch(mockedActionOrAction, false);
     return promise;
   }
@@ -724,8 +792,8 @@ export class Store<St> {
    * - `dispatchAll` which dispatches all given actions in parallel.
    */
   async dispatchAndWaitAll(actions: KissAction<St>[]): Promise<KissAction<St>[]> {
-    let promises: Promise<ActionStatus> [] = [];
-    for (let action of actions) {
+    const promises: Promise<ActionStatus> [] = [];
+    for (const action of actions) {
       promises.push(this.dispatchAndWait(action));
     }
     await Promise.all(promises);
@@ -747,7 +815,7 @@ export class Store<St> {
    * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
    * - `dispatchSync` which dispatches sync actions, and throws if the action is async. */
   dispatchAll(actions: KissAction<St>[]): KissAction<St>[] {
-    for (let action of actions) {
+    for (const action of actions) {
       this.dispatch(action);
     }
     return actions;
@@ -771,25 +839,34 @@ export class Store<St> {
    */
   dispatchSync(action: KissAction<St>): void {
     if (this._shutDown) {
-      Store.log(`Can't dispatch action ${action} because the store is shut down.`);
+      Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
 
-    let mockedActionOrAction = this._mockActionOrNot(action);
+    const mockedActionOrAction = this._mockActionOrNot(action);
 
     // 1) If mocked as `null`, the action is ignored.
     if (mockedActionOrAction === null) return; // If mocked as null, the action is ignored.
 
-    // 2) If the action wants to abort the dispatch, aborts, swallowing potential errors.
-    // Note: It's up to the developer to make sure `abortDispatch` doesn't throw any errors.
-    try {
-      if (mockedActionOrAction.abortDispatch()) return;
-    } catch (error) {
-      Store.log(`Method '${action}.abortDispatch()' has thrown an error: ${error}.`);
-      return;
-    }
+    // 2) If the action wants to abort the dispatch, or is non-reentrant and already running, aborts.
+    if (this._mustAbortDispatch(mockedActionOrAction)) return;
+
     // 3) If the action is mocked to return another action, we dispatch the mock.
     this._processDispatch(mockedActionOrAction, true);
+  }
+
+  // Returns true if the dispatch must be aborted: either `abortDispatch()` returns true, or the
+  // action is `nonReentrant` and an action of the same type is already running.
+  // Note: It's up to the developer to make sure `abortDispatch` doesn't throw any errors.
+  // If it does, the error is logged and swallowed, and the dispatch is aborted.
+  private _mustAbortDispatch(action: KissAction<St>): boolean {
+    try {
+      if (action.abortDispatch()) return true;
+      return action.nonReentrant && this.isWaiting(action.constructor as new (...args: any[]) => KissAction<St>);
+    } catch (error) {
+      Store._logLazy(() => `Method '${action}.abortDispatch()' has thrown an error: ${error}.`);
+      return true;
+    }
   }
 
   // Mocks an action to return another action.
@@ -809,12 +886,12 @@ export class Store<St> {
 
       // If the mock returns null, the action is ignored.
       if (mockAction === null) {
-        Store.log(`Dispatch of ${action} aborted by mock.`);
+        Store._logLazy(() => `Dispatch of ${action} aborted by mock.`);
         return null;
       }
       // Otherwise, the mock is used.
       else {
-        Store.log(`Dispatch of ${action} mocked by ${mockAction}.`);
+        Store._logLazy(() => `Dispatch of ${action} mocked by ${mockAction}.`);
         return mockAction;
       }
     }
@@ -825,12 +902,12 @@ export class Store<St> {
   private _processDispatch(action: KissAction<St>, mustBeSync: boolean) {
 
     if (this._shutDown) {
-      Store.log(`Can't dispatch action ${action} because the store is shut down.`);
+      Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
 
     this._dispatchCount++;
-    Store.log(`${this._dispatchCount}) ${action}`);
+    Store._logLazy(() => `${this._dispatchCount}) ${action}`);
 
     if (action.status.isDispatched)
       throw new StoreException('The action was already dispatched. Please, create a new action each time.');
@@ -857,13 +934,13 @@ export class Store<St> {
   _calculateIsWaitingIsFailed(action: KissAction<St>) {
 
     // If the action is failable (that is to say, we have once called `isFailed` for this action),
-    let failable = this._actionsWeCanCheckFailed.has(action.constructor as new (...args: any[]) => KissAction<St>);
+    const failable = this._actionsWeCanCheckFailed.has(action.constructor as new (...args: any[]) => KissAction<St>);
 
     let theUIHasAlreadyUpdated = false;
 
     if (failable) {
       // Dispatch is starting, so we remove the action from the list of failed actions.
-      let wasInTheList = this._failedActions.delete(action.constructor as new (...args: any[]) => KissAction<St>);
+      const wasInTheList = this._failedActions.delete(action.constructor as new (...args: any[]) => KissAction<St>);
 
       // Then we notify the UI. Note we don't notify if the action was never checked.
       if (wasInTheList) {
@@ -875,12 +952,25 @@ export class Store<St> {
     // Add the action to the list of actions in progress.
     this._actionsInProgress.add(action);
 
+    // The action just entered the set of actions in progress, so we check the wait conditions.
+    this._checkAllActionConditions(action);
+
     // Note: If the UI hasn't updated yet, AND
     // the action is awaitable (that is to say, we have already called `isWaiting` for this action),
-    if (!theUIHasAlreadyUpdated && this._awaitableActions.has(action.constructor as new (...args: any[]) => KissAction<St>)) {
+    // Note: We use `instanceof`, like `isWaiting` does, so that waiting for a base class
+    // also rebuilds when a subclass action starts.
+    if (!theUIHasAlreadyUpdated && this._isAwaitable(action)) {
       // Then we notify the UI. Note we don't notify if the action was never checked.
       this._rebuildFromStoreHooks();
     }
+  }
+
+  // Returns true if `isWaiting` was already called for the action's type, or for one of its superclasses.
+  private _isAwaitable(action: KissAction<St>): boolean {
+    for (const type of this._awaitableActions) {
+      if (action instanceof type) return true;
+    }
+    return false;
   }
 
   // Wraps SYNC actions.
@@ -997,7 +1087,7 @@ export class Store<St> {
           // Note: When the error-observer is defined, we don't make a distinction between
           // `UserExceptions` and other errors, anymore. We let the error-observer do a
           // distinction if it wants by returning true or false depending on the error type.
-          let shouldThrow = this._errorObserver(error, action, this);
+          const shouldThrow = this._errorObserver(error, action, this);
           if (shouldThrow) throw error;
         }
       }
@@ -1006,11 +1096,19 @@ export class Store<St> {
 
   private _processWrapsFinally(action: KissAction<St>) {
     // We run the `after` method of the action.
-    try {
-      action.after();
-    } catch (error) {
-      Store.log(`The after() method of the action ${action} threw an error: ${error}. 
+    const logAfterError = (error: any) =>
+      Store._logLazy(() => `The after() method of the action ${action} threw an error: ${error}.
       This error will be ignored, but you should fix this, as after() methods should not throw errors.`);
+
+    try {
+      // The `after()` method should be sync, but TypeScript lets it be overridden as `async`.
+      // In that case, we catch its rejection, so that it doesn't become an unhandled rejection.
+      const result: any = action.after();
+      if (result && typeof result.then === 'function') {
+        result.then(undefined, logAfterError);
+      }
+    } catch (error) {
+      logAfterError(error);
     } finally {
       action._changeStatus({hasFinishedMethodAfter: true});
     }
@@ -1039,10 +1137,10 @@ export class Store<St> {
   // of `_actionsInProgress` that triggered the check.
   private _checkAllActionConditions(triggerAction: KissAction<St>) {
 
-    let toRemove: any[] = [];
+    const toRemove: any[] = [];
 
     // Iterate over the conditions, resolve the ones that check, and add the ones to be removed to the separate array.
-    for (let condition of this._waitActionConditions) {
+    for (const condition of this._waitActionConditions) {
       if (condition.check(this.actionsInProgress(), triggerAction)) {
         condition.resolve(this.actionsInProgress(), triggerAction);
         toRemove.push(condition);
@@ -1060,7 +1158,7 @@ export class Store<St> {
 
     // 1) Runs the `before` method.
     // It may be sync or async, but it doesn't return anything.
-    let beforeResult: void | Promise<void> = action.before();
+    const beforeResult: void | Promise<void> = action.before();
 
     // 2) If it's async, wait for the `before` method to finish.
     if (beforeResult instanceof Promise) {
@@ -1078,13 +1176,13 @@ export class Store<St> {
     // 3)
     // - Runs the SYNC `reduce` method; OR
     // - Runs the initial sync part of the ASYNC `reduce` method.
-    let reduceResult: ReduxReducer<St> =
+    const reduceResult: ReduxReducer<St> =
       action.wrapReduce(action.reduce.bind(action))();
 
     // 4) If the reducer returned null, or if it returned the unaltered state, we simply do nothing.
     if (reduceResult === null || reduceResult === this.state) {
       action._changeStatus({hasFinishedMethodReduce: true});
-      this._record(action, false, this.state, this.state, null);
+      this._registerUnchangedState(action);
       return false; // Kept SYNC.
     }
       //
@@ -1101,7 +1199,7 @@ export class Store<St> {
 
       if (action.abortReduce(reduceResult)) {
         action._changeStatus({hasFinishedMethodReduce: true});
-        this._record(action, false, this.state, this.state, null);
+        this._registerUnchangedState(action);
         return false; // Kept SYNC.
       }
 
@@ -1112,7 +1210,7 @@ export class Store<St> {
 
   private _retryWrapReduce(action: KissAction<St>): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
 
-    let retry = (action.retry as RetryOptions);
+    const retry = (action.retry as RetryOptions);
 
     if (!retry.on) {
       function _wrapReduceOff(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
@@ -1126,9 +1224,8 @@ export class Store<St> {
       /// Start with the `initialDelay`, and then increase it by `multiplier` each time this is called.
       /// If the delay exceeds `maxDelay`, it will be set to `maxDelay`.
       function nextDelay(retry: RetryOptions): number {
-        let _multiplier = retry.multiplier;
-        if (_multiplier <= 1) _multiplier = 2;
-
+        const _multiplier = retry.multiplier;
+        
         retry.currentDelay = (retry.currentDelay == null) //
           ? retry.initialDelay //
           : retry.currentDelay! * _multiplier;
@@ -1151,10 +1248,10 @@ export class Store<St> {
             //
           catch (error) {
             (action.retry as RetryOptions).attempts++;
-            let maxRetries = (action.retry as RetryOptions).maxRetries;
-            if ((maxRetries >= 0) && (action.attempts > maxRetries)) throw error;
+            const { maxRetries, unlimitedRetries } = action.retry as RetryOptions;
+            if (!unlimitedRetries && (maxRetries >= 0) && (action.attempts > maxRetries)) throw error;
 
-            let currentDelay = nextDelay(action.retry as RetryOptions);
+            const currentDelay = nextDelay(action.retry as RetryOptions);
             await new Promise(resolve => setTimeout(resolve, currentDelay));
             return action.wrapReduce(reduce)() as any;
           }
@@ -1210,7 +1307,7 @@ export class Store<St> {
       // 2.3) If the reducer returned null, or if it returned the unaltered state, we simply do nothing.
       if (reduceResult === null || reduceResult === this.state) {
         action._changeStatus({hasFinishedMethodReduce: true});
-        this._record(action, false, this.state, this.state, null);
+        this._registerUnchangedState(action);
         return; // Get out of here.
       }
         //
@@ -1220,21 +1317,22 @@ export class Store<St> {
         action._changeStatus({hasFinishedMethodReduce: true});
 
         if (reduceResult === null || reduceResult === this.state) {
-          this._record(action, false, this.state, this.state, null);
+          this._registerUnchangedState(action);
         }
         //
         else {
           if (action.ifRetryIsOn && !this._isFunction(reduceResult))
             throw new StoreException(`Since action '${action}' retries, it should have an ASYNC reducer, that returns a Promise<(St) => St>.`);
 
-          let newAsyncState = reduceResult(this.state);
+          const newAsyncState = reduceResult(this.state);
           if (newAsyncState != null) {
 
             if (action.abortReduce(newAsyncState)) {
-              this._record(action, false, this.state, this.state, null);
+              this._registerUnchangedState(action);
             } else
               this._registerState(action, newAsyncState);
-          }
+          } else
+            this._registerUnchangedState(action);
         }
 
         return; // Get out of here.
@@ -1246,7 +1344,7 @@ export class Store<St> {
 
         if (action.abortReduce(reduceResult)) {
           action._changeStatus({hasFinishedMethodReduce: true});
-          this._record(action, false, this.state, this.state, null);
+          this._registerUnchangedState(action);
         } else
           this._registerState(action, reduceResult);
 
@@ -1260,12 +1358,12 @@ export class Store<St> {
     this._wrapsAsync(action, async () => {
 
       // 5.1) Method `reduce` is ASYNC, so we wait for it to finish.
-      let functionalReduceResult: AsyncReducerResult<St> = await reduceResult;
+      const functionalReduceResult: AsyncReducerResult<St> = await reduceResult;
       action._changeStatus({hasFinishedMethodReduce: true});
 
       // 5.2) If the reducer returned null, we simply do nothing.
       if (functionalReduceResult === null) {
-        this._record(action, false, this.state, this.state, null);
+        this._registerUnchangedState(action);
         return; // Get out of here.
       }
         //
@@ -1275,15 +1373,16 @@ export class Store<St> {
         if (action.ifRetryIsOn && !this._isFunction(functionalReduceResult))
           throw new StoreException(`Since action '${action}' retries, it should have an ASYNC reducer, that returns a Promise<(St) => St>.`);
 
-        let finalReduceState = functionalReduceResult(this.state);
+        const finalReduceState = functionalReduceResult(this.state);
 
         if (finalReduceState != null) {
 
           if (action.abortReduce(finalReduceState)) {
-            this._record(action, false, this.state, this.state, null);
+            this._registerUnchangedState(action);
           } else
             this._registerState(action, finalReduceState);
-        }
+        } else
+          this._registerUnchangedState(action);
 
         return; // Get out of here.
       }
@@ -1294,13 +1393,27 @@ export class Store<St> {
     return typeof obj === 'function';
   }
 
+  /**
+   * Called when the action finished with no error, but did not change the state: the reducer
+   * returned null or the unchanged state, or `abortReduce()` returned true. The state-observer
+   * is still called, with the same `prevState` and `newState`. And if the action is a
+   * `PersistAction`, the state is persisted right away.
+   */
+  private _registerUnchangedState(action: KissAction<St>) {
+    this._stateObserver?.(action, this._state, this._state, null, this._dispatchCount);
+    this._record(action, false, this._state, this._state, null);
+
+    if (action instanceof PersistAction && this._processPersistence != null)
+      this._processPersistence.process(action, this._state);
+  }
+
   private _registerState(action: KissAction<St>, newState: St) {
 
-    if (this._logStateChanges) {
+    if (this._logStateChanges && Store._isLogging()) {
       try {
-        let stateChangeDescription = Store.describeStateChange(this.state, newState);
+        const stateChangeDescription = Store.describeStateChange(this.state, newState);
         if (stateChangeDescription !== '') Store.log(stateChangeDescription);
-      } catch (error) {
+      } catch {
         // Swallow error and do nothing, as this is just a debug print.
       }
     }
@@ -1382,14 +1495,14 @@ export class Store<St> {
     // 2.1) If no UI is open,
     else {
       // 2.2) Check to see if any errors are in the queue. If so, remove the first error from the queue.
-      let currentError = this.userExceptionsQueue.shift();
+      const currentError = this.userExceptionsQueue.shift();
       if (currentError !== undefined) {
 
         // 3.1) In this case, we mark the UI as open,
         this._isUserExceptionUiOpen = true;
 
         // 3.2) and count the number of errors still in the queue.
-        let queued = this.userExceptionsQueue.length;
+        const queued = this.userExceptionsQueue.length;
 
         // 2.3) And show it in the UI.
         this._showUserException?.(currentError, queued,
@@ -1408,6 +1521,30 @@ export class Store<St> {
   };
 
   private _isUserExceptionUiOpen: boolean = false;
+
+  // Processes the errors of the Persistor. They are never thrown, since there is no `dispatch`
+  // call to throw them to (and in Node an unhandled rejection would kill the process).
+  // - Errors of type `UserException` are shown to the user.
+  // - If there is an `errorObserver`, it's called with a `null` action. If it returns
+  //   `true`, the error is logged.
+  // - If there's no `errorObserver`, errors that are not `UserException` are logged.
+  private _processPersistorError(error: any) {
+    if ((error instanceof UserException) && error.ifOpenDialog) {
+      this._addUserException(error);
+      this._openSomeUiToShowUserException();
+    }
+
+    let ifLog = !(error instanceof UserException);
+    if (this._errorObserver) {
+      try {
+        ifLog = this._errorObserver(error, null, this);
+      } catch (_error) {
+        Store.log(`The errorObserver threw an error: ${_error}.`);
+      }
+    }
+
+    if (ifLog) Store.log(`Persistor error: ${error}`);
+  }
 
   private _addUserException(error: UserException) {
     this.userExceptionsQueue.push(error);
@@ -1454,8 +1591,8 @@ export class Store<St> {
     new(...args: any[]): T
   }): (UserException | null) {
     this._actionsWeCanCheckFailed.add(type);
-    let action = this._failedActions.get(type);
-    let error = action?.status.wrappedError;
+    const action = this._failedActions.get(type);
+    const error = action?.status.wrappedError;
     return (error instanceof UserException) ? error : null;
   }
 
@@ -1473,7 +1610,7 @@ export class Store<St> {
    * ```
    */
   clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T }): void {
-    let result = this._failedActions.delete(type);
+    const result = this._failedActions.delete(type);
     if (result) this._rebuildFromStoreHooks();
   }
 
@@ -1485,7 +1622,7 @@ export class Store<St> {
    * `describeStateChange` is used together with `Store.log()` to print all state changes to
    * the console. Note you should turn this off in production.
    */
-  static describeStateChange(obj1: any, obj2: any, path: string = ''): String {
+  static describeStateChange(obj1: any, obj2: any, path: string = ''): string {
     // Ensure both parameters are objects
     if (typeof obj1 !== 'object' || typeof obj2 !== 'object' || obj1 == null || obj2 == null) {
       return '';
@@ -1538,12 +1675,13 @@ export class Store<St> {
                   throttle = 3000,
                   actionsThrottle = 6000,
                 }: {
-    store: Store<St>,
+    /** @deprecated Ignored. The store is always `this`. */
+    store?: Store<St>,
     initialState: St,
     throttle?: number,
     actionsThrottle?: number,
   }): Promise<void> {
-    this._processPersistence?.logOut({
+    return this._processPersistence?.logOut({
       store: this, initialState, throttle, actionsThrottle
     });
   }
@@ -1565,9 +1703,10 @@ export class Store<St> {
   /**
    * Persists the current state (if it's not yet persisted), then pauses the Persistor temporarily.
    *
-   * When persistAndPausePersistor is called, this will not affect the current persistence
-   * process, if one is currently running. If no persistence process was running, it will
-   * immediately start a new persistence process (ignoring Persistor.throttle).
+   * When persistAndPausePersistor is called while the persisted state is still being read, or
+   * while a persistence process is running, it waits for them to finish. Then, if the current
+   * state is not yet persisted, it immediately starts a new persistence process (ignoring
+   * Persistor.throttle). The returned promise completes when the current state is persisted.
    *
    * Then, the Persistor will not start another persistence process, until method
    * resumePersistor is called.
@@ -1575,8 +1714,8 @@ export class Store<St> {
    * Note: A persistence process starts when the Persistor.persistDifference method is called,
    * and finishes when the promise returned by that method completes.
    */
-  persistAndPausePersistor(): void {
-    this._processPersistence?.persistAndPause();
+  persistAndPausePersistor(): Promise<void> {
+    return this._processPersistence?.persistAndPause() ?? Promise.resolve();
   }
 
   /**
@@ -1928,8 +2067,8 @@ export class Store<St> {
       completeImmediately?: boolean,
       timeoutMillis?: number | null
     } = {}): Promise<KissAction<St> | null> {
-    let {actions, triggerAction} = await this.waitActionCondition(
-      (actionsInProgress, triggerAction) => {
+    const {triggerAction} = await this.waitActionCondition(
+      (actionsInProgress) => {
         return !(Array.from(actionsInProgress).some((action) => action.constructor === actionType));
       },
       {
@@ -1992,7 +2131,7 @@ export class Store<St> {
 
     if (actionTypes.length === 0) {
       await this.waitActionCondition(
-        (actions, triggerAction) => actions.size === 0,
+        (actions) => actions.size === 0,
         {
           completeImmediately: completeImmediately,
           completedErrorMessage: "No actions are in progress",
@@ -2001,7 +2140,7 @@ export class Store<St> {
       );
     } else {
       await this.waitActionCondition(
-        (actionsInProgress, triggerAction) => {
+        (actionsInProgress) => {
           for (const actionType of actionTypes) {
             if (Array.from(actionsInProgress).some(action => action.constructor === actionType)) return false;
           }
@@ -2065,7 +2204,7 @@ export class Store<St> {
       timeoutMillis = null
     }: {
       timeoutMillis?: number | null
-    }
+    } = {}
   ): Promise<KissAction<St>> {
 
     const {triggerAction} = await this.waitActionCondition(
@@ -2136,8 +2275,9 @@ class Mocks<St> {
 
   add<T extends KissAction<St>>(
     actionType: new (...args: any[]) => T,
-    mockFunction: (action: T) => KissAction<St> | null): void {
-    this.mocks.set(actionType, mockFunction);
+    mockFunction: ((action: T) => KissAction<St> | null) | null): void {
+    // A `null` mock function means the dispatch is aborted.
+    this.mocks.set(actionType, mockFunction ?? (() => null));
   }
 
   remove(actionType: new () => KissAction<St>): void {

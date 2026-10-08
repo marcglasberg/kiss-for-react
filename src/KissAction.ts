@@ -132,11 +132,10 @@ export abstract class KissAction<St> {
   */
   protected hasInternet(): Promise<boolean> {
 
-    // Web environment detection.
-    const isWebEnvironment = typeof window !== 'undefined' && 'navigator' in window;
-
-    // In web environment, use navigator.onLine. Otherwise, assume connected.
-    return Promise.resolve(isWebEnvironment ? navigator.onLine : true);
+    // In the browser, use navigator.onLine. Otherwise (Node.js, React Native, which has
+    // `navigator` but no `navigator.onLine`), assume connected.
+    const hasOnLine = typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean';
+    return Promise.resolve(hasOnLine ? navigator.onLine : true);
   }
 
   /**
@@ -404,6 +403,7 @@ export abstract class KissAction<St> {
    * Method `abortReduce()` is an advanced feature only useful under rare circumstances,
    * and you should only use it if you know what you are doing.
    */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameter documents the signature to override.
   abortReduce(state: St): boolean {
     return false;
   }
@@ -504,13 +504,21 @@ export abstract class KissAction<St> {
    * }
    * ```
    *
-   * If you want to retry unlimited times, make `maxRetries` equal to: `-1`:
+   * A `multiplier` of `1` keeps the delay constant.
+   *
+   * Invalid values (for example, a `multiplier` below `1`, a negative delay, or a `maxRetries`
+   * that is not an integer `>= -1`) make the dispatch throw a `StoreException` that explains the problem.
+   *
+   * If you want to retry unlimited times, make `maxRetries` equal to `-1`,
+   * or set `unlimitedRetries` to `true`:
    *
    * ```ts
    * class MyAction extends KissActiontate> {
    *    retry = {maxRetries: -1};
    * }
    * ```
+   *
+   * To turn off a retry that a base class turned on, use `retry = {on: false}`.
    *
    * Notes:
    *
@@ -550,7 +558,7 @@ export abstract class KissAction<St> {
     maxRetries: 3,
     maxDelay: 5000,
     unlimitedRetries: false,
-    currentDelay: 0,
+    currentDelay: null,
   };
 
   get ifRetryIsOn(): boolean {
@@ -1197,10 +1205,37 @@ export abstract class KissAction<St> {
     this._store = _store;
     this._initialState = _store.state;
 
-    if (!!this.retry) {
-      this._retry = { ...this._retry, ...this.retry, on: true };
+    if (this.retry) {
+      this._validateRetry(this.retry);
+      this._retry = { ...this._retry, on: true, ...this.retry };
       this.retry = this._retry;
     }
+  }
+
+  /**
+   * Throws a `StoreException` if some `retry` option has an invalid value.
+   * Options that are not set (`undefined`) use their defaults.
+   */
+  private _validateRetry(retry: Retry) {
+    const fail = (option: string, rule: string, value: any) => {
+      throw new StoreException(
+        `Action ${this.constructor.name} has an invalid retry option: ` +
+        `retry.${option} ${rule}, but got ${typeof value === 'string' ? `"${value}"` : String(value)}.`);
+    };
+
+    const isNumber = (v: any) => typeof v === 'number' && Number.isFinite(v);
+
+    const check = (option: keyof Retry, isValid: (v: any) => boolean, rule: string) => {
+      const value = retry[option];
+      if (value !== undefined && !isValid(value)) fail(option, rule, value);
+    };
+
+    check('on', v => typeof v === 'boolean', 'must be a boolean');
+    check('unlimitedRetries', v => typeof v === 'boolean', 'must be a boolean');
+    check('initialDelay', v => isNumber(v) && v >= 0, 'must be a number >= 0 (milliseconds)');
+    check('maxDelay', v => isNumber(v) && v >= 0, 'must be a number >= 0 (milliseconds)');
+    check('multiplier', v => isNumber(v) && v >= 1, 'must be a number >= 1 (use 1 for a constant delay)');
+    check('maxRetries', v => Number.isInteger(v) && v >= -1, 'must be an integer >= -1 (use -1 for unlimited retries)');
   }
 
   /**
@@ -1247,11 +1282,28 @@ export abstract class KissAction<St> {
         // Note: This simple line assumes that `value` can be meaningfully represented as a string.
         // You might need a more complex handling for objects, arrays, etc.
         const value = (this as any)[key];
-        keyValuePairs.push(`${key}:${JSON.stringify(value)}`);
+        keyValuePairs.push(`${key}:${KissAction._describeValue(value)}`);
       }
     }
     // Join all key-value pairs with a comma and space, and format it according to your requirements
     return `${this.constructor.name}(${keyValuePairs.join(', ').replace(/"/g, '')})`;
+  }
+
+  /**
+   * Turns a field value into a string for `toString()`. Never throws, so that an action
+   * with a circular, BigInt or otherwise unserializable field can still be dispatched.
+   */
+  private static _describeValue(value: any): string {
+    if (typeof value === 'bigint') return `${value}n`;
+    try {
+      return JSON.stringify(value, (_key, v) => typeof v === 'bigint' ? `${v}n` : v);
+    } catch {
+      try {
+        return String(value);
+      } catch {
+        return '[object]';
+      }
+    }
   }
 }
 
@@ -1553,8 +1605,12 @@ export abstract class OptimisticUpdate<St> extends KissAction<St> {
   /**
    * You should reload the `value` from the cloud.
    * If you want to skip this step, simply don't provide this method.
+   *
+   * If the save fails, the rollback is applied before the reload, so the reloaded value wins.
+   * If the reload throws, the action fails with that error (unless the save also failed,
+   * in which case the action fails with the save error).
    */
-  abstract reloadValue(): Promise<any>;
+  reloadValue?(): Promise<any>;
 
   async reduce() {
     // Updates the value optimistically.
@@ -1562,25 +1618,38 @@ export abstract class OptimisticUpdate<St> extends KissAction<St> {
     const action = new UpdateStateAction((state: St) => this.applyState(_newValue, state));
     this.dispatch(action);
 
+    let saveError: unknown = undefined;
+    let saveFailed = false;
+
     try {
       // Saves the new value to the cloud.
       await this.saveValue(_newValue);
     } catch (e) {
+      saveFailed = true;
+      saveError = e;
+
       // If the state still contains our optimistic update, we roll back.
       // If the state now contains something else, we DO NOT roll back.
+      // The rollback is dispatched right away, so that it comes before the reload.
       if (this.getValueFromState(this.state) === _newValue) {
-        let initialValue = this.getValueFromState(this.initialState);
-        return (state: St) => this.applyState(initialValue, state); // Rollback.
-      }
-    } finally {
-      try {
-        let reloadedValue = await this.reloadValue();
-        const action = new UpdateStateAction((state: St) => this.applyState(reloadedValue, state));
-        this.dispatch(action);
-      } catch (e) {
-        // If the reload was not implemented, do nothing.
+        const initialValue = this.getValueFromState(this.initialState);
+        this.dispatch(new UpdateStateAction((state: St) => this.applyState(initialValue, state)));
       }
     }
+
+    // Loads the value from the cloud, if `reloadValue` was provided.
+    if (this.reloadValue !== undefined) {
+      try {
+        const reloadedValue = await this.reloadValue();
+        this.dispatch(new UpdateStateAction((state: St) => this.applyState(reloadedValue, state)));
+      } catch (reloadError) {
+        // If both fail, the save error is the one that matters.
+        if (!saveFailed) throw reloadError;
+      }
+    }
+
+    // Rethrow, so that the action fails, and the user can be notified.
+    if (saveFailed) throw saveError;
 
     return null;
   }
@@ -1627,7 +1696,7 @@ export type Retry = {
 export type RetryOptions = {
   on: boolean,
   attempts: number,
-  currentDelay: number,
+  currentDelay: number | null,
   initialDelay: number,
   multiplier: number,
   maxRetries: number,

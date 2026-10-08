@@ -118,14 +118,7 @@ export class UserException extends Error {
    ```
    */
   withTitle(title: string): UserException {
-    return new UserException(
-      this.message,
-      {
-        title: title,
-        hardCause: this.hardCause,
-        ifOpenDialog: this.ifOpenDialog,
-        errorText: this.errorText
-      });
+    return this.copy({title});
   }
 
   /**
@@ -139,13 +132,7 @@ export class UserException extends Error {
    ```
    */
   withMessage(message: string): UserException {
-    return new UserException(
-      message, {
-        title: this.title,
-        hardCause: this.hardCause,
-        ifOpenDialog: this.ifOpenDialog,
-        errorText: this.errorText
-      });
+    return this.copy({message});
   }
 
   /**
@@ -158,13 +145,7 @@ export class UserException extends Error {
    * ```
    */
   withHardCause(hardCause: any): UserException {
-    return new UserException(
-      this.message, {
-        title: this.title,
-        hardCause: hardCause,
-        ifOpenDialog: this.ifOpenDialog,
-        errorText: this.errorText
-      });
+    return this.copy({hardCause});
   }
 
   /**
@@ -180,13 +161,7 @@ export class UserException extends Error {
    *
    */
   withDialog(ifOpenDialog: boolean): UserException {
-    return new UserException(
-      this.message, {
-        title: this.title,
-        hardCause: this.hardCause,
-        ifOpenDialog: ifOpenDialog,
-        errorText: this.errorText
-      });
+    return this.copy({ifOpenDialog});
   }
 
   /**
@@ -214,13 +189,7 @@ export class UserException extends Error {
    *
    */
   withErrorText(errorText: string | null): UserException {
-    return new UserException(
-      this.message, {
-        title: this.title,
-        hardCause: this.hardCause,
-        ifOpenDialog: this.ifOpenDialog,
-        errorText: errorText,
-      });
+    return this.copy({errorText});
   }
 
   /**
@@ -229,19 +198,7 @@ export class UserException extends Error {
    */
   addProps(moreProps?: { [key: string]: any }): UserException {
     if (!moreProps) return this;
-
-    return new UserException(
-      this.message,
-      {
-        title: this.title,
-        hardCause: this.hardCause,
-        ifOpenDialog: this.ifOpenDialog,
-        errorText: this.errorText,
-        onOk: this.onOk,
-        onCancel: this.onCancel,
-        props: {...this._props, ...moreProps}
-      }
-    );
+    return this.copy({props: {...this._props, ...moreProps}});
   }
 
   /**
@@ -275,17 +232,34 @@ export class UserException extends Error {
         onCancel?.();
       };
 
+    return this.copy({onOk: _onOk, onCancel: _onCancel});
+  }
+
+  /**
+   * Returns a new `UserException` with the same fields as this one,
+   * except for the ones given in `changes`.
+   */
+  private copy(changes: {
+    message?: string,
+    title?: string,
+    hardCause?: any,
+    ifOpenDialog?: boolean,
+    errorText?: string | null,
+    onOk?: () => void,
+    onCancel?: () => void,
+    props?: { [key: string]: any }
+  }): UserException {
+    const has = (key: string) => Object.prototype.hasOwnProperty.call(changes, key);
     return new UserException(
-      this.message,
+      has('message') ? changes.message! : this.message,
       {
-        title: this.title,
-        hardCause: this.hardCause,
-        ifOpenDialog: this.ifOpenDialog,
-        errorText: this.errorText,
-        onOk: _onOk,
-        onCancel: _onCancel,
-        props: this._props
-      }
-    );
+        title: has('title') ? changes.title : this.title,
+        hardCause: has('hardCause') ? changes.hardCause : this.hardCause,
+        ifOpenDialog: has('ifOpenDialog') ? changes.ifOpenDialog : this.ifOpenDialog,
+        errorText: has('errorText') ? changes.errorText : this.errorText,
+        onOk: has('onOk') ? changes.onOk : this.onOk,
+        onCancel: has('onCancel') ? changes.onCancel : this.onCancel,
+        props: has('props') ? changes.props : this._props,
+      });
   }
 }

@@ -12,15 +12,52 @@ export class ProcessPersistence<St> {
   timer?: ReturnType<typeof setTimeout>; // Timer's type
   isPaused = false;
   isInit = false;
+  // False while `readInitialState` is running. State changes are only persisted after it finishes.
+  isReady = false;
+  private readonly _ready: Promise<void>;
+  private _resolveReady!: () => void;
+  // The persistence process currently running, if any.
+  private _persisting: Promise<void> | null = null;
   finishedPersistingCallback: (() => void) | null = null;
+
+  /**
+   * Called with the persistence errors: the errors thrown by `Persistor.persistDifference`
+   * (after `Persistor.wrapError`, and only if it didn't return `null`), the errors thrown
+   * while reading the persisted state, and the errors added with `Persistor.addError`.
+   * If not set, the errors are logged with `Store.log()`.
+   */
+  onError: ((error: any) => void) | null = null;
 
   constructor(persistor: Persistor<St>, lastPersistedState: St | null) {
     this.persistor = persistor;
     this.lastPersistedState = lastPersistedState;
     this.newestState = null;
+    this._ready = new Promise<void>(resolve => this._resolveReady = resolve);
+  }
+
+  /**
+   * Resolves when the persisted state has been read (or failed to read) at startup.
+   * Never rejects.
+   */
+  ready(): Promise<void> {
+    return this._ready;
   }
 
   async readInitialState(store: Store<St>, initialState: St) {
+    try {
+      await this._readInitialState(store, initialState);
+    }
+      //
+    finally {
+      // Now persist the state changes that happened while reading/saving the initial state.
+      this.processAddedErrors();
+      this.isReady = true;
+      this._resolveReady();
+      if (this.isInit) this.process(null, this.newestState as St);
+    }
+  }
+
+  private async _readInitialState(store: Store<St>, initialState: St) {
 
     let stateReadFromPersistor: St | null = null;
 
@@ -28,11 +65,13 @@ export class ProcessPersistence<St> {
       stateReadFromPersistor = await this.persistor.readState();
     } catch (error) {
       this.log('Error reading state:' + error + '. State will reset.');
+      this.reportError(error);
 
       try {
         await this.persistor.deleteState();
       } catch (error) {
         this.log('Error deleting the state:' + error + '.');
+        this.reportError(error);
       }
     }
 
@@ -43,6 +82,7 @@ export class ProcessPersistence<St> {
         await this.persistor.saveInitialState(initialState);
       } catch (error) {
         this.log('Error saving initial state:' + error + '.');
+        this.reportError(error);
       }
     }
     //
@@ -62,8 +102,39 @@ export class ProcessPersistence<St> {
   private log(message: string) {
     try {
       Store.log(message);
-    } catch (error) {
+    } catch {
       // Discard error.
+    }
+  }
+
+  /**
+   * Gives the error to `onError`, or logs it if `onError` is not set.
+   */
+  private reportError(error: any) {
+    if (this.onError) {
+      try {
+        this.onError(error);
+      } catch (_error) {
+        this.log('Error processing a persistence error:' + _error + '.');
+      }
+    }
+    //
+    else this.log('Persistence error:' + error + '.');
+  }
+
+  /**
+   * Reports the errors added with `Persistor.addError`, removing them from the persistor.
+   */
+  processAddedErrors(): void {
+    while (true) {
+      let error: any;
+      try {
+        error = this.persistor.getAndRemoveFirstError?.();
+      } catch {
+        return;
+      }
+      if (error === null || error === undefined) break;
+      this.reportError(error);
     }
   }
 
@@ -73,16 +144,24 @@ export class ProcessPersistence<St> {
 
   async saveInitialState(initialState: St): Promise<void> {
     this.lastPersistedState = initialState;
-    await this.persistor.saveInitialState(initialState);
+    try {
+      await this.persistor.saveInitialState(initialState);
+    } finally {
+      this.processAddedErrors();
+    }
   }
 
   /**
    * Same as `Persistor.readState` but will remember the read state as the `lastPersistedState`.
    */
   async readState(): Promise<St | null> {
-    const state = await this.persistor.readState();
-    this.lastPersistedState = state;
-    return state;
+    try {
+      const state = await this.persistor.readState();
+      this.lastPersistedState = state;
+      return state;
+    } finally {
+      this.processAddedErrors();
+    }
   }
 
   /**
@@ -90,7 +169,11 @@ export class ProcessPersistence<St> {
    */
   async deleteState(): Promise<void> {
     this.lastPersistedState = null;
-    await this.persistor.deleteState();
+    try {
+      await this.persistor.deleteState();
+    } finally {
+      this.processAddedErrors();
+    }
   }
 
   /**
@@ -132,10 +215,13 @@ export class ProcessPersistence<St> {
     // Set the store to shut down, so it doesn't start any new actions.
     store.setShutDown(true);
 
-    // If the state is NOT currently being persisted,
-    if (!this.isPersisting) {
-
-      // Clear the callback that is called when it finishes persisting.
+    try {
+      // If the state is currently being persisted, we can't delete it right now.
+      // Wait until the current persistence finishes. Since the persistor is
+      // paused, no new persistence process will start after that.
+      while (this.isPersisting) {
+        await new Promise<void>(resolve => this.finishedPersistingCallback = resolve);
+      }
       this.finishedPersistingCallback = null;
 
       // Wait for the throttle period to finish.
@@ -147,30 +233,32 @@ export class ProcessPersistence<St> {
         timeoutMillis: actionsThrottle,
         completeImmediately: true
       })
-        .catch((error) => {
+        .catch(() => {
         });
 
       // Delete the old persisted state.
       await this.deleteState();
 
       // Synchronously change the store state to the initial-state.
-      store.dispatchSync(new UpdateStateAction((state: St) => initialState));
+      // The store must not be shut down, or `dispatchSync` would ignore the action.
+      // The persistor is paused, so this doesn't start a persistence process.
+      store.setShutDown(false);
+      store.dispatchSync(new UpdateStateAction(() => initialState));
+      store.setShutDown(true);
 
       // Persist the new initial-state.
-      await this._persist(new Date(), initialState).then();
+      await this._persist(new Date(), initialState);
+    }
+      //
+    finally {
+      this.finishedPersistingCallback = null;
 
       // Restart the store accepting new actions.
       store.setShutDown(false);
-    }
-      //
-    // If it's currently being persisted, we can't delete the state right now.
-    else {
-      // But as soon as it finishes persisting, try again.
-      this.finishedPersistingCallback = async () => {
-        await this.logOut({
-          store, initialState, throttle, actionsThrottle
-        });
-      }
+
+      // Resume persisting. If the state changed after the initial-state
+      // was persisted, this persists the new state.
+      this.resume();
     }
   }
 
@@ -195,6 +283,9 @@ export class ProcessPersistence<St> {
       this.lastPersistedState = this.newestState;
       return false;
     }
+
+    // While the initial state is being read/saved, don't persist. It will be persisted when it finishes.
+    if (!this.isReady) return false;
 
     // 1) If we're still persisting the last time, don't persist no matter what.
     if (this.isPersisting) {
@@ -239,7 +330,13 @@ export class ProcessPersistence<St> {
     }
   }
 
-  private async _persist(now: Date, newState: St): Promise<void> {
+  private _persist(now: Date, newState: St): Promise<void> {
+    const persisting = this._doPersist(now, newState);
+    this._persisting = persisting;
+    return persisting;
+  }
+
+  private async _doPersist(now: Date, newState: St): Promise<void> {
     this.isPersisting = true;
     this.lastPersistTime = now;
     this.isANewStateAvailable = false;
@@ -249,11 +346,29 @@ export class ProcessPersistence<St> {
         this.lastPersistedState,
         newState
       );
+
+      // Only consider the state persisted if it succeeded. Otherwise, the next time we persist,
+      // the difference will be calculated from the last state that was actually persisted.
+      this.lastPersistedState = newState;
+    }
+      //
+    catch (error) {
+      // The error is reported, never thrown, so it can't become an unhandled rejection.
+      // Note the save is not retried here. It will be tried again when the state changes.
+      let processedError: any;
+      try {
+        processedError = this.persistor.wrapError ? this.persistor.wrapError(error) : error;
+      } catch (_error) {
+        // If `wrapError` throws, the thrown error is used instead.
+        processedError = _error;
+      }
+      if (processedError !== null && processedError !== undefined) this.reportError(processedError);
     }
       //
     finally {
-      this.lastPersistedState = newState;
+      this.processAddedErrors();
       this.isPersisting = false;
+      this._persisting = null;
       this.finishedPersistingCallback?.();
 
       // If a new state became available while the present state was saving, save again.
@@ -284,9 +399,10 @@ export class ProcessPersistence<St> {
    * temporarily.
    *
    *
-   * When `persistAndPause` is called, this will not affect the current persistence process, if
-   * one is currently running. If no persistence process was running, it will immediately start a
-   * new persistence process (ignoring `throttle`).
+   * When `persistAndPause` is called while the persisted state is still being read, or while a
+   * persistence process is running, it waits for them to finish. Then, if the current state is
+   * not yet persisted, it immediately starts a new persistence process (ignoring `throttle`).
+   * The returned promise completes when the current state is persisted.
    *
    * Then, the Persistor will not start another persistence process, until method `resume` is
    * called.
@@ -300,10 +416,17 @@ export class ProcessPersistence<St> {
 
     this._cancelTimer();
 
-    if (this.isInit //
-      && !this.isPersisting //
-      && (this.lastPersistedState !== this.newestState)) {
+    // If the persisted state is still being read, wait until it finishes.
+    await this._ready;
 
+    // If the state is being persisted, wait until it finishes. Since the persistor
+    // is paused, no new persistence process will start after that.
+    while (this._persisting) {
+      await this._persisting.catch(() => {
+      });
+    }
+
+    if (this.isInit && (this.lastPersistedState !== this.newestState)) {
       const now = new Date();
       return this._persist(now, this.newestState as St); // TypeScript forced cast
     }

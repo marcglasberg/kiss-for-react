@@ -1,5 +1,7 @@
 import { ClassOrEnum, ESSerializer } from './Esserializer';
+import { getClassKey, isClass } from './Esserializer/general';
 import { Persistor } from './Persistor';
+import { StoreException } from './StoreException';
 
 /**
  * Use it like this:
@@ -30,6 +32,23 @@ import { Persistor } from './Persistor';
  *     [State, TodoList, TodoItem, Filter] // All state classes the app uses.
  *   );
  * ```
+ *
+ * Classes are saved by their class name. Production builds usually minify class names
+ * (`TodoItem` becomes `e`), which would make different classes collide, and change the saved
+ * names from one app version to the next. To prevent this, either turn off class name
+ * minification in your bundler (see kissforreact.org), or give each state class a stable
+ * name with a static `typeName`:
+ *
+ * ```ts
+ * class TodoItem {
+ *   static readonly typeName = 'TodoItem';
+ *   ...
+ * }
+ * ```
+ *
+ * A `typeName` is not inherited: subclasses need their own. The `ClassPersistor` throws a
+ * `StoreException` when it's created, if it finds class names are minified and some class has
+ * no `typeName`, or if two classes are saved under the same name.
  */
 export class ClassPersistor<St> extends Persistor<St> {
 
@@ -67,6 +86,49 @@ export class ClassPersistor<St> extends Persistor<St> {
     public classesToSerialize: Array<ClassOrEnum>
   ) {
     super();
+    this.checkClassNames();
+  }
+
+  /**
+   * Returns true if the bundler is minifying class names. Since the bundler minifies this library
+   * together with the app, we know class names are minified if this class lost its own name.
+   */
+  protected classNamesAreMinified(): boolean {
+    return ClassPersistor.name !== 'ClassPersistor';
+  }
+
+  private checkClassNames() {
+    const minified = this.classNamesAreMinified();
+    const classByKey = new Map<string, any>();
+
+    for (const c of this.classesToSerialize) {
+      if (typeof c !== 'function' || !isClass(c)) continue; // Enums.
+
+      const hasTypeName = Object.prototype.hasOwnProperty.call(c, 'typeName');
+      const key = getClassKey(c);
+
+      if (hasTypeName) {
+        if (typeof key !== 'string' || key.length === 0)
+          throw new StoreException(
+            `The static typeName of class "${c.name}" must be a non-empty string.`);
+      }
+      //
+      else if (minified || /^[a-z]/.test(key ?? ''))
+        throw new StoreException(
+          `Class names are being minified (found class "${key}"), so the ClassPersistor can't ` +
+          `save the state by class name. Either turn off class name minification in your ` +
+          `bundler (see "Class names and minification" in the persistor docs at kissforreact.org), ` +
+          `or add a static typeName to each state class, ` +
+          `like: static readonly typeName = 'TodoItem';`);
+
+      const previous = classByKey.get(key);
+      if (previous !== undefined && previous !== c)
+        throw new StoreException(
+          `Two different state classes are saved under the same name "${key}". ` +
+          `Give one of them a different static typeName.`);
+
+      classByKey.set(key, c);
+    }
   }
 
   /**

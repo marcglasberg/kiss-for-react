@@ -25,9 +25,9 @@ Bdd(feature)
   .and('The new state created by the dispatched action is persisted.')
   .run(async (_) => {
 
-    let persistor = new MyPersistor();
+    const persistor = new MyPersistor();
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1),
       logger: logger,
       persistor: persistor
@@ -66,7 +66,7 @@ Bdd(feature)
   .run(async (_) => {
 
     // There is some state already persisted when the store is created.
-    let persistor = new MyPersistor();
+    const persistor = new MyPersistor();
     persistor.savedState = new State(42);
 
     const store = new Store<State>({
@@ -107,9 +107,9 @@ Bdd(feature)
   .and('The new state created by the dispatched action is persisted.')
   .run(async (_) => {
 
-    let persistor = new MyPersistorSlow();
+    const persistor = new MyPersistorSlow();
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1),
       logger: logger,
       persistor: persistor
@@ -128,8 +128,8 @@ Bdd(feature)
     expect(store.state.count).toBe(1);
     expect(persistor.savedState?.count).toBe(undefined);
 
-    // Waiting more than 150 millis, the state is finally persisted.
-    await delayMillis(300);
+    // Reading (150 millis) plus saving (150 millis) takes 300 millis. We wait longer, to be safe.
+    await delayMillis(450);
     expect(store.state.count).toBe(1);
     expect(persistor.savedState?.count).toBe(1);
 
@@ -160,7 +160,7 @@ Bdd(feature)
   .run(async (_) => {
 
     // There is some state already persisted when the store is created.
-    let persistor = new MyPersistorSlow();
+    const persistor = new MyPersistorSlow();
     persistor.savedState = new State(42);
 
     const store = new Store<State>({
@@ -207,10 +207,10 @@ Bdd(feature)
   .then('The second state is only persisted when the first one finishes.')
   .run(async (_) => {
 
-    let persistor = new MyPersistorSlow();
+    const persistor = new MyPersistorSlow();
     persistor.savedState = new State(123);
 
-    let store = new Store<State>({
+    const store = new Store<State>({
       initialState: new State(1),
       logger: logger,
       persistor: persistor
@@ -246,6 +246,179 @@ Bdd(feature)
       'Persisting difference: 124 → 125.' + // Second only starts after the first ends.
       'Finished persisting difference: 124 → 125.'
     );
+  });
+
+Bdd(feature)
+  .scenario('A state change made while the persisted state is being read is persisted after the initial-state.')
+  .given('There is no persisted state when the store is created.')
+  .and('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
+  .when('The store is created.')
+  .and('An action changes the state before the persistor finished reading and saving the initial-state.')
+  .then('The new state is only persisted after the initial-state is saved.')
+  .and('The persisted state is the new state, not the initial-state.')
+  .run(async (_) => {
+
+    const persistor = new MyPersistorSlow();
+
+    const store = new Store<State>({
+      initialState: new State(1),
+      logger: logger,
+      persistor: persistor
+    });
+
+    // The persistor is still reading the state.
+    await delayMillis(10);
+    store.dispatch(new Increment());
+    expect(store.state.count).toBe(2);
+
+    // Wait for reading (150), saving the initial-state (150) and persisting (150).
+    await delayMillis(600);
+
+    expect(persistor.record).toBe('' +
+      'Creating persistor.' +
+      'Persistor reading state: undefined.' +
+      'Finished reading state: undefined.' +
+      'Persistor saving state: undefined.' +
+      'Finished saving state: undefined.' +
+      'Persisting difference: 1 → 2.' + // Only starts after the initial-state is saved.
+      'Finished persisting difference: 1 → 2.'
+    );
+    expect(store.state.count).toBe(2);
+    expect(persistor.savedState?.count).toBe(2);
+  });
+
+Bdd(feature)
+  .scenario('A state change made while the persisted state is being read does not overwrite the persisted state.')
+  .given('There is some state already persisted when the store is created.')
+  .and('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
+  .when('The store is created.')
+  .and('An action changes the state before the persistor finished reading the state.')
+  .then('The persisted state is read into the store.')
+  .and('The persisted state is not overwritten.')
+  .run(async (_) => {
+
+    const persistor = new MyPersistorSlow();
+    persistor.savedState = new State(42);
+
+    const store = new Store<State>({
+      initialState: new State(1),
+      logger: logger,
+      persistor: persistor
+    });
+
+    // The persistor is still reading the state.
+    await delayMillis(10);
+    store.dispatch(new Increment());
+    expect(store.state.count).toBe(2);
+
+    await delayMillis(600);
+
+    expect(persistor.record).toBe('' +
+      'Creating persistor.' +
+      'Persistor reading state: 42.' +
+      'Finished reading state: 42.'
+    );
+    expect(store.state.count).toBe(42);
+    expect(persistor.savedState?.count).toBe(42);
+  });
+
+Bdd(feature)
+  .scenario('persistAndPausePersistor can be awaited, and the current state is persisted when it returns.')
+  .given('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
+  .and('The store finished reading the persisted state.')
+  .and('The persistor has a long throttle, so a state change is waiting to be persisted.')
+  .when('We await persistAndPausePersistor.')
+  .then('When it returns, the current state is persisted.')
+  .and('Later state changes are not persisted, until the persistor is resumed.')
+  .run(async (_) => {
+
+    const persistor = new MyPersistorSlow(new State(42), '', 1000);
+    const store = new Store<State>({ initialState: new State(1), logger: logger, persistor: persistor });
+    await delayMillis(300);
+    expect(store.state.count).toBe(42);
+
+    // Waits for the throttle (1000 millis) to persist.
+    store.dispatch(new Increment());
+    expect(persistor.savedState?.count).toBe(42);
+
+    await store.persistAndPausePersistor();
+    expect(persistor.savedState?.count).toBe(43);
+
+    // Paused.
+    store.dispatch(new Increment());
+    await delayMillis(300);
+    expect(persistor.savedState?.count).toBe(43);
+
+    // Resumed. The throttle still applies.
+    store.resumePersistor();
+    await delayMillis(1200);
+    expect(persistor.savedState?.count).toBe(44);
+  });
+
+Bdd(feature)
+  .scenario('persistAndPausePersistor called while a state is being persisted also persists the newest state.')
+  .given('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
+  .and('A state change is currently being persisted.')
+  .and('Another state change happened after that.')
+  .when('We await persistAndPausePersistor.')
+  .then('It waits for the current persistence to finish.')
+  .and('Then it persists the newest state, before returning.')
+  .run(async (_) => {
+
+    const persistor = new MyPersistorSlow(new State(42));
+    const store = new Store<State>({ initialState: new State(1), logger: logger, persistor: persistor });
+    await delayMillis(300);
+    persistor.record = '';
+
+    store.dispatch(new Increment()); // Starts persisting 43.
+    store.dispatch(new Increment()); // 44 waits.
+    await delayMillis(10);
+
+    await store.persistAndPausePersistor();
+
+    expect(persistor.record).toBe('' +
+      'Persisting difference: 42 → 43.' +
+      'Finished persisting difference: 42 → 43.' +
+      'Persisting difference: 43 → 44.' +
+      'Finished persisting difference: 43 → 44.'
+    );
+    expect(persistor.savedState?.count).toBe(44);
+  });
+
+Bdd(feature)
+  .scenario('persistAndPausePersistor called while the persisted state is being read waits for the reading to finish.')
+  .given('There is no persisted state when the store is created.')
+  .and('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
+  .when('An action changes the state while the persistor is reading the state.')
+  .and('We await persistAndPausePersistor, before the reading finishes.')
+  .then('The initial-state is saved first.')
+  .and('Then the new state is persisted, before persistAndPausePersistor returns.')
+  .and('The persistor stays paused.')
+  .run(async (_) => {
+
+    const persistor = new MyPersistorSlow();
+    const store = new Store<State>({ initialState: new State(1), logger: logger, persistor: persistor });
+
+    // The persistor is still reading the state.
+    await delayMillis(10);
+    store.dispatch(new Increment());
+    await store.persistAndPausePersistor();
+
+    expect(persistor.record).toBe('' +
+      'Creating persistor.' +
+      'Persistor reading state: undefined.' +
+      'Finished reading state: undefined.' +
+      'Persistor saving state: undefined.' +
+      'Finished saving state: undefined.' +
+      'Persisting difference: 1 → 2.' +
+      'Finished persisting difference: 1 → 2.'
+    );
+    expect(persistor.savedState?.count).toBe(2);
+
+    // Paused.
+    store.dispatch(new Increment());
+    await delayMillis(300);
+    expect(persistor.savedState?.count).toBe(2);
   });
 
 class State {
@@ -301,7 +474,8 @@ export class MyPersistorSlow extends Persistor<State> {
 
   constructor(
     public savedState: State | null = null,
-    public record = ''
+    public record = '',
+    public throttleMillis: number | null = null,
   ) {
     super();
     this.record += 'Creating persistor.';
@@ -339,6 +513,6 @@ export class MyPersistorSlow extends Persistor<State> {
   }
 
   get throttle(): number | null {
-    return null; // Throttle is off.
+    return this.throttleMillis; // Throttle is off by default.
   }
 }

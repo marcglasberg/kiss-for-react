@@ -1,5 +1,5 @@
 import { expect } from '@jest/globals';
-import { Bdd, Feature, FeatureFileReporter, reporter } from 'easy-bdd-tool-jest';
+import { Bdd, Feature, FeatureFileReporter, reporter, val } from 'easy-bdd-tool-jest';
 import { Store, KissAction, UserException } from '../src';
 import { delayMillis } from '../src/utils';
 
@@ -51,7 +51,7 @@ Bdd(feature)
 
     result = '';
 
-    let promise = store.dispatchAndWait(new IncrementAsync());
+    const promise = store.dispatchAndWait(new IncrementAsync());
     store.dispatch(new IncrementSync());
     await promise;
 
@@ -102,7 +102,7 @@ Bdd(feature)
 
     result = '';
 
-    let promise = store.dispatchAndWait(new IncrementAsyncWithError());
+    const promise = store.dispatchAndWait(new IncrementAsyncWithError());
     store.dispatch(new IncrementSyncWithError());
     await promise;
 
@@ -112,6 +112,46 @@ Bdd(feature)
       'action: "IncrementAsyncWithError()", prevState: State(1), newState: State(1), error: UserException: Error in before., dispatchCount: 4' +
       '|'
     );
+  });
+
+Bdd(feature)
+  .scenario('StateObserver is called when the action does not change the state.')
+  .given('Actions whose reducers do not change the state, in each of the possible ways.')
+  .when('Each action is dispatched.')
+  .then('The StateObserver is called once for each action, with no error.')
+  .and('The prevState and the newState are the same, unchanged, state.')
+  .example(val('Action', 'SyncReturnsNull'))
+  .example(val('Action', 'SyncReturnsSameState'))
+  .example(val('Action', 'SyncAbortsReduce'))
+  .example(val('Action', 'AsyncReturnsNull'))
+  .example(val('Action', 'AsyncFunctionReturnsNull'))
+  .example(val('Action', 'AsyncAbortsReduce'))
+  .run(async (ctx) => {
+
+    const calls: any[] = [];
+    const store = new Store<State>({
+      initialState: new State(1),
+      logger: logger,
+      stateObserver: (action, prevState, newState, error, dispatchCount) =>
+        calls.push({action, prevState, newState, error, dispatchCount}),
+    });
+    const initialState = store.state;
+
+    const actionTypes: Record<string, new () => KissAction<State>> = {
+      SyncReturnsNull, SyncReturnsSameState, SyncAbortsReduce,
+      AsyncReturnsNull, AsyncFunctionReturnsNull, AsyncAbortsReduce,
+    };
+    const action = new actionTypes[ctx.example.val('Action')]();
+
+    await store.dispatchAndWait(action);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].action).toBe(action);
+    expect(calls[0].prevState).toBe(initialState);
+    expect(calls[0].newState).toBe(initialState);
+    expect(calls[0].error).toBeNull();
+    expect(calls[0].dispatchCount).toBe(1);
+    expect(store.state).toBe(initialState);
   });
 
 class State {
@@ -161,3 +201,50 @@ class IncrementAsyncWithError extends KissAction<State> {
   }
 }
 
+
+class SyncReturnsNull extends KissAction<State> {
+  reduce() {
+    return null;
+  }
+}
+
+class SyncReturnsSameState extends KissAction<State> {
+  reduce() {
+    return this.state;
+  }
+}
+
+class SyncAbortsReduce extends KissAction<State> {
+  abortReduce() {
+    return true;
+  }
+
+  reduce() {
+    return new State(this.state.count + 1);
+  }
+}
+
+class AsyncReturnsNull extends KissAction<State> {
+  async reduce() {
+    await delayMillis(1);
+    return null;
+  }
+}
+
+class AsyncFunctionReturnsNull extends KissAction<State> {
+  async reduce() {
+    await delayMillis(1);
+    return (_: State) => null;
+  }
+}
+
+class AsyncAbortsReduce extends KissAction<State> {
+  abortReduce() {
+    return true;
+  }
+
+  async reduce() {
+    await delayMillis(1);
+    return (state: State) => new State(state.count + 1);
+  }
+}

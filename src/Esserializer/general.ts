@@ -18,6 +18,17 @@ function getValueFromToStringResult(result: string) {
   }
 }
 
+/**
+ * Returns the name a class is saved under: its own static `typeName`, if it has one,
+ * or else its class name. A `typeName` inherited from a parent class is ignored.
+ */
+function getClassKey(classObj: any): string {
+  if (Object.prototype.hasOwnProperty.call(classObj, 'typeName')) {
+    return classObj.typeName;
+  }
+  return classObj.name;
+}
+
 function isSupportedBuiltinClass(target: any): boolean {
   return [Date].indexOf(target) >= 0;
 }
@@ -30,7 +41,7 @@ function isClass(target: any): boolean {
   // Adopt solution from https://stackoverflow.com/a/46759625/707451
   try {
     Reflect.construct(String, [], target);
-  } catch (e) {
+  } catch {
     return false;
   }
   return true;
@@ -39,5 +50,6 @@ function isClass(target: any): boolean {
 export {
   getValueFromToStringResult,
   notObject,
-  isClass
+  isClass,
+  getClassKey
 };

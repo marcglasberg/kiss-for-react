@@ -8,7 +8,7 @@ export class RemoveTodoAction extends Action {
   }
 
   reduce() {
-    let newTodos = this.state.todoList.removeTodo(this.item);
+    const newTodos = this.state.todoList.removeTodo(this.item);
     return this.state.withTodos(newTodos);
   }
 }

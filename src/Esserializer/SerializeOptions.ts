@@ -3,7 +3,7 @@
 
 interface SerializeOptions {
   ignoreProperties?: Array<string>,
-  interceptProperties?: Record<string, Function>
+  interceptProperties?: Record<string, (value: any) => any>
 }
 
 export default SerializeOptions;

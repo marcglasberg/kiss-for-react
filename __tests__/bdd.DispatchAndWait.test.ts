@@ -51,10 +51,10 @@ Bdd(feature)
     expect(store.isWaiting(IncrementSync)).toBe(false);
     expect(store.state.count).toBe(1);
 
-    let actionSync = new IncrementSync();
+    const actionSync = new IncrementSync();
     expect(actionSync.status.isDispatched).toBe(false);
 
-    let promise1 = store.dispatchAndWait(actionSync);
+    const promise1 = store.dispatchAndWait(actionSync);
     expect(actionSync.status.isDispatched).toBe(true);
 
     expect(store.isWaiting(IncrementSync)).toBe(false);
@@ -72,10 +72,10 @@ Bdd(feature)
     expect(store.isWaiting(IncrementAsync)).toBe(false);
     expect(store.state.count).toBe(2);
 
-    let actionAsync = new IncrementAsync();
+    const actionAsync = new IncrementAsync();
     expect(actionAsync.status.isDispatched).toBe(false);
 
-    let promise2 = store.dispatchAndWait(actionAsync);
+    const promise2 = store.dispatchAndWait(actionAsync);
     expect(actionAsync.status.isDispatched).toBe(true);
 
     expect(store.isWaiting(IncrementAsync)).toBe(true); // True!
@@ -102,7 +102,7 @@ Bdd(feature)
 
     // SYNC ACTION
 
-    let actionSync = new IncrementSync();
+    const actionSync = new IncrementSync();
     let status: ActionStatus = actionSync.status;
 
     expect(status.isDispatched).toEqual(false);
@@ -126,7 +126,7 @@ Bdd(feature)
 
     // ASYNC ACTION
 
-    let actionAsync = new IncrementAsync();
+    const actionAsync = new IncrementAsync();
     status = actionAsync.status;
 
     expect(status.isDispatched).toEqual(false);
@@ -164,7 +164,7 @@ Bdd(feature)
 
     // SYNC ACTION
 
-    let actionSync = new IncrementSyncBeforeFails();
+    const actionSync = new IncrementSyncBeforeFails();
     let status: ActionStatus = actionSync.status;
 
     expect(status.isDispatched).toEqual(false);
@@ -186,7 +186,7 @@ Bdd(feature)
 
     // ASYNC ACTION
 
-    let actionAsync = new IncrementAsyncBeforeFails();
+    const actionAsync = new IncrementAsyncBeforeFails();
     status = actionAsync.status;
 
     expect(status.isDispatched).toEqual(false);
@@ -222,7 +222,7 @@ Bdd(feature)
 
     // SYNC ACTION
 
-    let actionSync = new IncrementSyncReduceFails();
+    const actionSync = new IncrementSyncReduceFails();
     let status: ActionStatus = actionSync.status;
 
     expect(status.isDispatched).toEqual(false);
@@ -244,7 +244,7 @@ Bdd(feature)
 
     // ASYNC ACTION
 
-    let actionAsync = new IncrementAsyncReduceFails();
+    const actionAsync = new IncrementAsyncReduceFails();
     status = actionAsync.status;
 
     expect(status.isDispatched).toEqual(false);
@@ -281,7 +281,7 @@ Bdd(feature)
 
     // SYNC ACTION
 
-    let actionSync = new IncrementSyncAfterFails();
+    const actionSync = new IncrementSyncAfterFails();
     let status: ActionStatus = actionSync.status;
 
     expect(status.isDispatched).toEqual(false);
@@ -303,7 +303,7 @@ Bdd(feature)
 
     // ASYNC ACTION
 
-    let actionAsync = new IncrementAsyncAfterFails();
+    const actionAsync = new IncrementAsyncAfterFails();
     status = actionAsync.status;
 
     expect(status.isDispatched).toEqual(false);

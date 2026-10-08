@@ -53,7 +53,7 @@ Bdd(feature)
 
     result = '';
 
-    let promise = store.dispatchAndWait(new IncrementAsync());
+    const promise = store.dispatchAndWait(new IncrementAsync());
     store.dispatch(new IncrementSync());
     await promise;
 

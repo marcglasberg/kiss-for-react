@@ -58,7 +58,7 @@ Bdd(feature)
     expect(store.isWaiting(IncrementSync)).toBe(false);
     expect(store.state.count).toBe(1);
 
-    let actionSync = new IncrementSync();
+    const actionSync = new IncrementSync();
     expect(actionSync.status.isDispatched).toBe(false);
 
     store.dispatch(actionSync);
@@ -75,7 +75,7 @@ Bdd(feature)
     expect(store.isWaiting(IncrementAsync)).toBe(false);
     expect(store.state.count).toBe(2);
 
-    let actionAsync = new IncrementAsync();
+    const actionAsync = new IncrementAsync();
     expect(actionAsync.status.isDispatched).toBe(false);
 
     store.dispatch(actionAsync);

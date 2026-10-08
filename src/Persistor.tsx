@@ -5,23 +5,23 @@ import { Store } from './Store';
  * Use it like this:
  *
  * ```ts
- * const persistor = new MyPersistor();
- *
- * let initialState = await persistor.readState();
- *
- * if (initialState === null) {
- *   initialState = AppState.initialState();
- *   await persistor.saveInitialState(initialState);
- * }
- *
  * const store = createStore<AppState>({
- *   initialState: initialState,
- *   persistor: persistor,
+ *   initialState: AppState.initialState(),
+ *   persistor: new MyPersistor(),
  * });
+ *
+ * await store.ready();
+ * store.dispatch(new InitAppAction());
  * ```
  *
- * IMPORTANT: When the store is created with a Persistor, it assumes
- * the provided initial state was already persisted. Ensure this is the case.
+ * Do NOT read the state yourself before creating the store. When the store is created,
+ * Kiss calls `readState` once. If there is a saved state, it replaces the initial state in the
+ * store. If there is none, Kiss calls `saveInitialState` with the initial state.
+ *
+ * Until the persisted state is loaded, the store state is the `initialState`, which your UI can
+ * use while loading. Changes made to the state before `store.ready()` resolves may be
+ * overwritten by the persisted state, so wait for it before dispatching the actions that
+ * start your app.
  */
 export abstract class Persistor<St> {
 
@@ -40,8 +40,24 @@ export abstract class Persistor<St> {
    *   while reading the state, `readState` should thrown an error, with an appropriate error
    *   message.
    *
-   * Note: If an error is thrown by `readState`, Kiss will log it with `Store.log()`.
+   * Note: If an error is thrown by `readState`, Kiss will log it with `Store.log()`, and give
+   * it to the store's `errorObserver` (with a `null` action). The saved state is then deleted,
+   * and the initial-state is saved instead.
    *
+   * If you prefer to fix the problem yourself, but still let the user know about it, you
+   * can report an error with `addError` instead of throwing. For example:
+   *
+   * ```ts
+   * async readState(): Promise<AppState | null> {
+   *   try {
+   *     return await this.read();
+   *   } catch (error) {
+   *     await this.deleteState();
+   *     this.addError(new UserException('Could not read your data, so it was reset.'));
+   *     return null;
+   *   }
+   * }
+   * ```
    */
   abstract readState(): Promise<St | null>;
 
@@ -63,6 +79,12 @@ export abstract class Persistor<St> {
    * parameter called `lastPersistedState`. It may be `null` if there is no persisted state
    * yet (first app run).
    *
+   * If this method throws an error, it will first be processed by `wrapError`, and then
+   * given to the store's `errorObserver` (with a `null` action). If the resulting error is a
+   * `UserException`, it is shown to the user. Also, `newState` will NOT be considered persisted,
+   * so the next call will receive the same `lastPersistedState`. Note the save is not retried
+   * by itself: it will be tried again the next time the state changes.
+   *
    * @param lastPersistedState The last state that was persisted. It may be null.
    * @param newState The new state to be persisted.
    */
@@ -74,8 +96,12 @@ export abstract class Persistor<St> {
   /**
    * Function `saveInitialState` should save the given `state` to the persistence,
    * replacing any previous state that was saved.
+   *
+   * The default implementation calls `persistDifference` with a `null` last persisted state.
    */
-  abstract saveInitialState(state: St): Promise<void>;
+  saveInitialState(state: St): Promise<void> {
+    return this.persistDifference(null, state);
+  }
 
   /**
    * The default throttle is 2 seconds (2000 milliseconds).
@@ -83,6 +109,52 @@ export abstract class Persistor<St> {
    */
   get throttle(): number | null {
     return 2000; // Default throttle is 2 seconds.
+  }
+
+  /**
+   * If any error is thrown by `persistDifference`, you have the chance to further process
+   * it by using `wrapError`. Usually this is used to wrap the error inside another that
+   * better describes the failure. For example, you could turn a storage error into a
+   * `UserException`, so that it's shown to the user:
+   *
+   * ```ts
+   * wrapError(error: any) {
+   *   return (error instanceof StorageError)
+   *     ? new UserException('Could not save your data.', { hardCause: error })
+   *     : error;
+   * }
+   * ```
+   *
+   * To ignore the error, return `null`. Note the state that failed to save is still NOT
+   * considered persisted.
+   *
+   * If instead of RETURNING an error you THROW an error inside `wrapError`, Kiss will use
+   * the thrown error instead of the original error. But it's recommended that you return it.
+   */
+  wrapError(error: any): any {
+    return error;
+  }
+
+  private readonly _errors: any[] = [];
+
+  /**
+   * Reports an error without throwing it. The error will be given to the store's
+   * `errorObserver` (with a `null` action), and if it's a `UserException`, it will be shown
+   * to the user. Errors added here don't go through `wrapError`.
+   *
+   * This is useful in `readState`, `deleteState` and `saveInitialState`, when you can fix
+   * the problem yourself, but still want to let the user know about it.
+   */
+  addError(error: any): void {
+    this._errors.push(error);
+  }
+
+  /**
+   * Returns the first error added with `addError`, and removes it.
+   * Returns `null` if there are no errors. Used by Kiss.
+   */
+  getAndRemoveFirstError(): any {
+    return (this._errors.length === 0) ? null : this._errors.shift();
   }
 }
 
@@ -97,10 +169,11 @@ export abstract class Persistor<St> {
  * });
  * ```
  */
-export class PersistorPrinterDecorator<St> implements Persistor<St> {
+export class PersistorPrinterDecorator<St> extends Persistor<St> {
   private _persistor: Persistor<St>;
 
   constructor(persistor: Persistor<St>) {
+    super();
     this._persistor = persistor;
   }
 
@@ -132,12 +205,24 @@ export class PersistorPrinterDecorator<St> implements Persistor<St> {
   get throttle(): number | null {
     return this._persistor.throttle;
   }
+
+  wrapError(error: any): any {
+    return this._persistor.wrapError(error);
+  }
+
+  addError(error: any): void {
+    this._persistor.addError(error);
+  }
+
+  getAndRemoveFirstError(): any {
+    return this._persistor.getAndRemoveFirstError();
+  }
 }
 
 /**
  * A dummy persistor.
  */
-export class PersistorDummy<St> implements Persistor<St | null> {
+export class PersistorDummy<St> extends Persistor<St | null> {
   async readState(): Promise<St | null> {
     return null;
   }

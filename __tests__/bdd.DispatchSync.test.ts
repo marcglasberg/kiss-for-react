@@ -30,9 +30,9 @@ Bdd(feature)
     store.dispatchSync(new IncrementSync());
 
     // Fails synchronously with a `StoreException`.
-    expect(() => store.dispatchSync(new IncrementAsyncBefore())).toThrowError(StoreException);
-    expect(() => store.dispatchSync(new IncrementAsyncReduce())).toThrowError(StoreException);
-    expect(() => store.dispatchSync(new IncrementAsyncBeforeReduce())).toThrowError(StoreException);
+    expect(() => store.dispatchSync(new IncrementAsyncBefore())).toThrow(StoreException);
+    expect(() => store.dispatchSync(new IncrementAsyncReduce())).toThrow(StoreException);
+    expect(() => store.dispatchSync(new IncrementAsyncBeforeReduce())).toThrow(StoreException);
   });
 
 class State {
@@ -41,21 +41,6 @@ class State {
 }
 
 class IncrementSync extends KissAction<State> {
-
-  reduce() {
-    return new State(this.state.count + 1);
-  }
-}
-
-class Increment extends KissAction<State> {
-
-  constructor(public ifAbort: boolean) {
-    super();
-  }
-
-  abortReduce(): boolean {
-    return this.ifAbort!;
-  }
 
   reduce() {
     return new State(this.state.count + 1);

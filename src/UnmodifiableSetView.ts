@@ -24,23 +24,23 @@ export class UnmodifiableSetView<T> implements Set<T> {
     return this._set.forEach(callbackfn, thisArg);
   }
 
-  [Symbol.iterator](): IterableIterator<T> {
+  [Symbol.iterator](): ReturnType<Set<T>[typeof Symbol.iterator]> {
     return this._set[Symbol.iterator]();
   }
 
-  entries(): IterableIterator<[T, T]> {
+  entries(): ReturnType<Set<T>['entries']> {
     return this._set.entries();
   }
 
-  values(): IterableIterator<T> {
+  values(): ReturnType<Set<T>['values']> {
     return this._set.values();
   }
 
-  keys(): IterableIterator<T> {
+  keys(): ReturnType<Set<T>['keys']> {
     return this._set.keys();
   }
 
-  add(value: T): this {
+  add(_value: T): this {
     throw new Error('Cannot modify the set. Create a copy in necessary.');
   }
 
@@ -48,7 +48,7 @@ export class UnmodifiableSetView<T> implements Set<T> {
     throw new Error('Cannot modify the set. Create a copy in necessary.');
   }
 
-  delete(value: T): boolean {
+  delete(_value: T): boolean {
     throw new Error('Cannot modify the set. Create a copy in necessary.');
   }
 

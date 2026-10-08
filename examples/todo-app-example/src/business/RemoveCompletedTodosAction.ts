@@ -29,7 +29,7 @@ export class RemoveCompletedTodosAction extends Action {
       }
 
       // For each completed item, wait for 100 milliseconds and remove it, one by one.
-      for (let todo of this.state.todoList) {
+      for (const todo of this.state.todoList) {
         if (todo.completed) {
           this.dispatch(new RemoveTodoAction(todo));
 

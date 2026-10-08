@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from 'react';
 import { UserException } from './UserException';
 import { StoreException } from './StoreException';
 import { Store, StoreContext, StoreContextType } from "./Store";
@@ -18,40 +18,8 @@ import { KissAction, ActionStatus } from './KissAction';
  * Prefer `useSelect` because it's shorter.
  */
 export function useSelect<St, T>(selector: (state: St) => T): T {
-
-  // This ref will persist for the full lifetime of the component.
-  let ref = useRef<RefState<St, T>>(undefined);
-
-  // The initial value is the value selected from the current state in the store.
-  let store: Store<St> = _useStoreFromContext<St>();
-  const [value, setValue] = useState(() => selector(store.state));
-
-  // Only once when the component mounts.
-  useEffect(() => {
-
-    // We save in the ref:
-    // - The selector
-    // - The currently selected value
-    // - The setValue function
-    //
-    // Whenever the state changes, the store will:
-    // 1. Retrieve all refs
-    // 2. Apply each selector to the current state to calculate the selected value.
-    // 3. And compare the selected value with the last selected value.
-    // 4. If it changed, it calls setValue.
-    ref.current = new RefState<St, T>([selector, value, setValue]);
-
-    // Save the new ref.
-    store._refStateHooks.add(ref);
-
-    return () => {
-      // When the component unmounts, delete the ref.
-      store._refStateHooks.delete(ref);
-    };
-
-  }, []);
-
-  return value;
+  const store: Store<St> = useStoreFromContext<St>();
+  return useSubscribedSelector(store._refStateHooks, RefState, selector, () => store.state);
 }
 
 /**
@@ -128,8 +96,8 @@ export function useAllState<St>(): St {
  * - `useDispatchSync` - Hook equivalent to `useStore().dispatchSync`
  */
 export function useStore(): StoreDispatchers<any> {
-  let store = _useStoreFromContext<any>();
-  return new StoreDispatchers(store as Store<any>);
+  const store = useStoreFromContext<any>();
+  return useMemo(() => new StoreDispatchers(store as Store<any>), [store]);
 }
 
 /**
@@ -161,8 +129,8 @@ export function useDispatcher(): (action: KissAction<any>) => void {
  * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
  */
 export function useDispatch(): (action: KissAction<any>) => void {
-  let store = _useStoreFromContext<any>();
-  return store.dispatch.bind(store);
+  const store = useStoreFromContext<any>();
+  return useMemo(() => store.dispatch.bind(store), [store]);
 }
 
 /**
@@ -184,8 +152,8 @@ export function useDispatch(): (action: KissAction<any>) => void {
  * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
  */
 export function useDispatchAndWait(): (action: KissAction<any>) => Promise<ActionStatus> {
-  let store = _useStoreFromContext<any>();
-  return store.dispatchAndWait.bind(store);
+  const store = useStoreFromContext<any>();
+  return useMemo(() => store.dispatchAndWait.bind(store), [store]);
 }
 
 /**
@@ -209,8 +177,8 @@ export function useDispatchAndWait(): (action: KissAction<any>) => Promise<Actio
  * - `dispatchAll` which dispatches all given actions in parallel.
  */
 export function useDispatchAndWaitAll(): (action: KissAction<any>[]) => Promise<KissAction<any>[]> {
-  let store = _useStoreFromContext<any>();
-  return store.dispatchAndWaitAll.bind(store);
+  const store = useStoreFromContext<any>();
+  return useMemo(() => store.dispatchAndWaitAll.bind(store), [store]);
 }
 
 /**
@@ -229,8 +197,8 @@ export function useDispatchAndWaitAll(): (action: KissAction<any>[]) => Promise<
  * - `dispatchSync` which dispatches sync actions, and throws if the action is async.
  */
 export function useDispatchAll(): (action: KissAction<any>[]) => KissAction<any>[] {
-  let store = _useStoreFromContext<any>();
-  return store.dispatchAll.bind(store);
+  const store = useStoreFromContext<any>();
+  return useMemo(() => store.dispatchAll.bind(store), [store]);
 }
 
 /**
@@ -250,8 +218,8 @@ export function useDispatchAll(): (action: KissAction<any>[]) => KissAction<any>
  * - `dispatchAll` which dispatches all given actions in parallel.
  */
 export function useDispatchSync(): (action: KissAction<any>) => void {
-  let store = _useStoreFromContext<any>();
-  return store.dispatchSync.bind(store);
+  const store = useStoreFromContext<any>();
+  return useMemo(() => store.dispatchSync.bind(store), [store]);
 }
 
 /**
@@ -268,7 +236,7 @@ export function useDispatchSync(): (action: KissAction<any>) => void {
  * ```
  */
 export function useIsWaiting(type: { new(...args: any[]): KissAction<any> }): boolean {
-  return _useStoreSelector<any, boolean>((store) => store.isWaiting(type));
+  return useStoreSelector<any, boolean>((store) => store.isWaiting(type));
 }
 
 /**
@@ -276,7 +244,7 @@ export function useIsWaiting(type: { new(...args: any[]): KissAction<any> }): bo
  * Note: This method uses the EXACT action type. Subtypes are not considered.
  */
 export function useIsFailed(type: { new(...args: any[]): KissAction<any> }): boolean {
-  return _useStoreSelector<any, boolean>((store) => store.isFailed(type));
+  return useStoreSelector<any, boolean>((store) => store.isFailed(type));
 }
 
 /**
@@ -284,7 +252,7 @@ export function useIsFailed(type: { new(...args: any[]): KissAction<any> }): boo
  * Note: This method uses the EXACT type in `type`. Subtypes are not considered.
  */
 export function useExceptionFor(type: { new(...args: any[]): KissAction<any> }): UserException | null {
-  return _useStoreSelector<any, UserException | null>((store) => store.exceptionFor(type));
+  return useStoreSelector<any, UserException | null>((store) => store.exceptionFor(type));
 }
 
 /**
@@ -303,50 +271,78 @@ export function useExceptionFor(type: { new(...args: any[]): KissAction<any> }):
  * ```
  */
 export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction<any> }) => void {
-  const store = _useStoreFromContext<any>();
-  return (type: { new(...args: any[]): KissAction<any> }) => {
+  const store = useStoreFromContext<any>();
+  return useMemo(() => (type: { new(...args: any[]): KissAction<any> }) => {
     store.clearExceptionFor(type);
-  };
+  }, [store]);
 }
 
-function _useStoreSelector<St, T>(selector: (store: Store<St>) => T): T {
+function useStoreSelector<St, T>(selector: (store: Store<St>) => T): T {
+  const store: Store<St> = useStoreFromContext<St>();
+  return useSubscribedSelector(store._refStoreHooks, RefStore, selector, () => store);
+}
+
+/**
+ * Selects a value and re-renders the component when it changes.
+ *
+ * The value is selected again on every render, using the selector passed in that render,
+ * so selectors that depend on props or local state always use the latest props.
+ * After each commit, the ref is updated with the latest selector and value, so that
+ * when the store changes, it checks with the latest selector.
+ *
+ * When it subscribes, it selects again from the current store, in case the state changed
+ * between the render and the subscription (for example, a child that dispatches on mount).
+ */
+function useSubscribedSelector<In, T, R>(
+  hooks: Set<React.RefObject<R | undefined>>,
+  RefClass: new (selectorAndValueAndSetValue: [(input: In) => T, T, React.Dispatch<React.SetStateAction<T>>]) => R,
+  selector: (input: In) => T,
+  getInput: () => In,
+): T {
 
   // This ref will persist for the full lifetime of the component.
-  let ref = useRef<RefStore<St, T>>(undefined);
+  const ref = useRef<R>(undefined);
 
-  // The initial value is the value selected from the current state in the store.
-  let store: Store<St> = _useStoreFromContext<St>();
-  const [value, setValue] = useState(() => selector(store));
+  // Re-renders the component. The store calls it when the selected value changes.
+  const [, forceRender] = useReducer((x: number) => x + 1, 0);
+
+  const value = selector(getInput());
+
+  // After every render, save in the ref the latest selector and the value it selected.
+  // Whenever the state changes, the store will:
+  // 1. Retrieve all refs
+  // 2. Apply each selector to calculate the selected value.
+  // 3. And compare the selected value with the last selected value.
+  // 4. If it changed, it calls setValue, which re-renders the component.
+  useLayoutEffect(() => {
+    ref.current = new RefClass([selector, value, forceRender as React.Dispatch<React.SetStateAction<T>>]);
+  });
 
   // Only once when the component mounts.
   useEffect(() => {
+    hooks.add(ref);
 
-    // We save in the ref:
-    // - The selector
-    // - The currently selected value
-    // - The setValue function
-    //
-    // Whenever the state changes, the store will:
-    // 1. Retrieve all refs
-    // 2. Apply each selector to the current state to calculate the selected value.
-    // 3. And compare the selected value with the last selected value.
-    // 4. If it changed, it calls setValue.
-    ref.current = new RefStore<St, T>([selector, value, setValue]);
-
-    // Save the new ref.
-    store._refStoreHooks.add(ref);
+    // Child effects run before parent effects, so the state may have changed since the render.
+    // If it did, re-render. If the selector throws, re-render too, so the error is thrown
+    // during render, where React can deal with it.
+    try {
+      const [latestSelector, renderedValue] = (ref.current as any).selectorAndValueAndSetValue;
+      if (latestSelector(getInput()) !== renderedValue) forceRender();
+    } catch {
+      forceRender();
+    }
 
     return () => {
       // When the component unmounts, delete the ref.
-      store._refStoreHooks.delete(ref);
+      hooks.delete(ref);
     };
-
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return value;
 }
 
-function _useStoreFromContext<St>(): Store<St> {
+function useStoreFromContext<St>(): Store<St> {
   const context = useContext<StoreContextType<St>>(StoreContext) as StoreContextType<St>;
   if (!context?.store) {
     throw new StoreException('useStore must be used within a StoreProvider');

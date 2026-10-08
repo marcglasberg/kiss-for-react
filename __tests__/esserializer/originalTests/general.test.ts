@@ -63,7 +63,7 @@ describe('Test isClass', () => {
 
   test('plain object is not class', () => {
 
-    let target = { name: 'Mike' };
+    const target = { name: 'Mike' };
 
     expect(isClass(target)).toBe(false);
   });

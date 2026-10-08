@@ -15,6 +15,7 @@ import {
   BUILTIN_CLASS_DATE,
   BUILTIN_CLASS_INTL_LOCALE,
   BUILTIN_CLASS_REGEXP,
+  BUILTIN_CLASS_MAP,
   BUILTIN_CLASS_SET,
   BUILTIN_CLASS_SHAREDARRAYBUFFER,
   BUILTIN_CLASS_STRING,
@@ -28,7 +29,7 @@ import {
   TIMESTAMP_FIELD,
   TO_STRING_FIELD
 } from './constant';
-import { notObject } from './general';
+import { getClassKey, notObject } from './general';
 
 function getSerializeValueWithClassName(target: any, options: SerializeOptions = {}): any {
   const serializeValueForBuiltinTypes = _getSerializeValueForBuiltinTypes(target);
@@ -66,24 +67,22 @@ function copySerializedProperties(source: any, dest: any) {
     if (typeof v === 'function') {
       continue;
     }
-    // @ts-ignore
     dest[k] = getSerializeValueWithClassName(source[k]);
   }
 }
 
 function appendClassInfoAndAssignDataForBuiltinType(target: any, serializedObj: any) {
-  let className: string = target.__proto__.constructor.name;
+  let className: string = getClassKey(target.__proto__.constructor);
   if (className === 'Object') {
-    className = target.constructor.name; // In case object's constructor is not in its prototype, such as Big in big.js
+    className = getClassKey(target.constructor); // In case object's constructor is not in its prototype, such as Big in big.js
   }
   if (className !== 'Object') {
-    // @ts-ignore
     serializedObj[CLASS_NAME_FIELD] = className;
 
     if (className === BUILTIN_CLASS_ARRAYBUFFER || className === BUILTIN_CLASS_SHAREDARRAYBUFFER) {
       serializedObj[ARRAY_FIELD] = _serializeArray(Array.from(new Uint8Array(target)));
     } else if (className === BUILTIN_CLASS_BOOLEAN) {
-      serializedObj[BOOLEAN_FIELD] = (target as Boolean).valueOf();
+      serializedObj[BOOLEAN_FIELD] = (target as boolean).valueOf();
     } else if (className === BUILTIN_CLASS_DATAVIEW) {
       serializedObj[ARRAY_FIELD] = _serializeArray(Array.from(new Uint8Array(target.buffer)));
     } else if (className === BUILTIN_CLASS_DATE) {
@@ -92,6 +91,9 @@ function appendClassInfoAndAssignDataForBuiltinType(target: any, serializedObj: 
       serializedObj[TO_STRING_FIELD] = target.toString();
     } else if (className === BUILTIN_CLASS_REGEXP) {
       serializedObj[TO_STRING_FIELD] = target.toString();
+    } else if (className === BUILTIN_CLASS_MAP) {
+      // Saved as an array of [key, value] pairs.
+      serializedObj[ARRAY_FIELD] = _serializeArray(Array.from(target));
     } else if (className === BUILTIN_CLASS_SET) {
       serializedObj[ARRAY_FIELD] = _serializeArray(Array.from(target));
     } else if (className === BUILTIN_CLASS_STRING) {

@@ -5,15 +5,15 @@ import { ESSerializer } from '../../../src/Esserializer';
 
 test('TodoList class', () => {
 
-  let todo1 = new TodoItem('First', false);
-  let todo2 = new TodoItem('Second', false);
-  let todo3 = new TodoItem('Third', true);
-  let todos = new TodoList([todo1, todo2, todo3]);
+  const todo1 = new TodoItem('First', false);
+  const todo2 = new TodoItem('Second', false);
+  const todo3 = new TodoItem('Third', true);
+  const todos = new TodoList([todo1, todo2, todo3]);
 
   ESSerializer.registerClasses([TodoList, TodoItem]);
 
-  let serialized = ESSerializer.serialize(todos);
-  let deserialized = ESSerializer.deserialize(serialized);
+  const serialized = ESSerializer.serialize(todos);
+  const deserialized = ESSerializer.deserialize(serialized);
 
   expect(serialized).toBe('{' +
     '"items":[' +
@@ -25,7 +25,7 @@ test('TodoList class', () => {
 
   expect(deserialized instanceof TodoList).toBeTruthy();
 
-  let todosDeserialized = deserialized as TodoList;
+  const todosDeserialized = deserialized as TodoList;
 
   expect(Array.isArray(todosDeserialized.items)).toBeTruthy();
 

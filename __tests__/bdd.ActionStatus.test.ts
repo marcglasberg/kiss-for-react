@@ -104,7 +104,7 @@ Bdd(feature)
       logger: logger
     });
 
-    let action
+    const action
       = new RecordActionSyncNoErrors(newState, beforeThrows, reduceThrows);
 
     expect(action.status.isDispatched).toBeFalsy();

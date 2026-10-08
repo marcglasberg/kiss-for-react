@@ -2,7 +2,7 @@
 // All credit goes to him. See: https://www.npmjs.com/package/esserializer
 
 import { ClassOrEnum } from '.';
-import { getValueFromToStringResult, isClass, notObject } from './general';
+import { getClassKey, getValueFromToStringResult, isClass, notObject } from './general';
 import {
   ARRAY_FIELD,
   BOOLEAN_FIELD,
@@ -30,6 +30,7 @@ import {
   BUILTIN_CLASS_RANGE_ERROR,
   BUILTIN_CLASS_REFERENCE_ERROR,
   BUILTIN_CLASS_REGEXP,
+  BUILTIN_CLASS_MAP,
   BUILTIN_CLASS_SET,
   BUILTIN_CLASS_SHAREDARRAYBUFFER,
   BUILTIN_CLASS_STRING,
@@ -152,20 +153,19 @@ function _deserializeBuiltinTypes(classNameInParsedObj: any, parsedObj: any, cla
     case BUILTIN_CLASS_INTL_DATETIMEFORMAT:
       return _deserializeIntlInstance(parsedObj, Intl.DateTimeFormat);
     case BUILTIN_CLASS_INTL_LISTFORMAT:
-      // @ts-ignore
       return _deserializeIntlInstance(parsedObj, Intl.ListFormat);
     case BUILTIN_CLASS_INTL_LOCALE:
-      // @ts-ignore
       return new Intl.Locale(parsedObj[TO_STRING_FIELD]);
     case BUILTIN_CLASS_INTL_NUMBERFORMAT:
       return _deserializeIntlInstance(parsedObj, Intl.NumberFormat);
     case BUILTIN_CLASS_INTL_PLURALRULES:
       return _deserializeIntlInstance(parsedObj, Intl.PluralRules);
     case BUILTIN_CLASS_INTL_RELATIVETIMEFORMAT:
-      // @ts-ignore
       return _deserializeIntlInstance(parsedObj, Intl.RelativeTimeFormat);
     case BUILTIN_CLASS_REGEXP:
       return deserializeRegExp(parsedObj);
+    case BUILTIN_CLASS_MAP:
+      return _deserializeMap(parsedObj, classMapping);
     case BUILTIN_CLASS_SET:
       return _deserializeSet(parsedObj, classMapping);
     case BUILTIN_CLASS_STRING:
@@ -248,6 +248,11 @@ function _deserializeSet(parsedObj: any, classMapping: any) {
   return new Set(_deserializeArray(parsedObj[ARRAY_FIELD], classMapping));
 }
 
+function _deserializeMap(parsedObj: any, classMapping: any) {
+  // Older versions saved a Map without its entries. Read it as an empty Map, instead of failing.
+  return new Map(_deserializeArray(parsedObj[ARRAY_FIELD] ?? [], classMapping));
+}
+
 function deserializeString(parsedObj: any) {
   // noinspection JSPrimitiveTypeWrapperUsage
   return new String(parsedObj[TO_STRING_FIELD]);
@@ -256,10 +261,8 @@ function deserializeString(parsedObj: any) {
 function deserializeError(parsedObj: any, ErrorClass: any) {
   let error;
   if (parsedObj.message) {
-    // @ts-ignore
     error = new ErrorClass(parsedObj.message);
   } else {
-    // @ts-ignore
     error = new ErrorClass();
   }
   delete error.stack;
@@ -320,7 +323,7 @@ function createDeserializedObj(classObj: any, allConstructorParameters: any) {
       deserializedObj = Object.create(objectConstructor.prototype);
       objectConstructor.call(deserializedObj, allConstructorParameters);
     }
-  } catch (e) {
+  } catch {
     deserializedObj = null;
   }
   return deserializedObj;
@@ -383,13 +386,12 @@ function getClassMappingFromClassArray(classes: Array<any> = []): object {
     if (!isClass(c)) {
       return;
     }
-    const className: string = c.name;
+    const className: string = getClassKey(c);
     const previousClass: any = (classMapping as any)[className];
     if (previousClass && previousClass !== c) {
       console.warn('WARNING: Found class definition with the same name: ' + className);
     }
-    // @ts-ignore
-    classMapping[className] = c;
+    (classMapping as any)[className] = c;
   });
 
   return classMapping;

@@ -6,5 +6,6 @@ module.exports = {
   },
   testRegex: '(/__tests__/.*|(\\.|/)(test|spec))\\.(jsx?|tsx?)$',
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
-  testPathIgnorePatterns: ['/node_modules/', '/fixtures/', '/fixture/', '/.*\\.fixture\\.ts$/'],
+  testPathIgnorePatterns: ['/node_modules/', '/fixtures/', '/fixture/', '/.*\\.fixture\\.ts$/', '<rootDir>/examples/'],
+  modulePathIgnorePatterns: ['<rootDir>/examples/', '<rootDir>/lib/'],
 };

@@ -25,7 +25,7 @@ Bdd(feature)
       initialState: new State(1), logger: logger,
     });
 
-    let actionSync = new IncrementSync();
+    const actionSync = new IncrementSync();
     store.dispatch(actionSync);
 
     expect(actionSync.result).toBe('' +
@@ -49,7 +49,7 @@ Bdd(feature)
       initialState: new State(1), logger: logger
     });
 
-    let actionAsync = new IncrementAsync();
+    const actionAsync = new IncrementAsync();
     await store.dispatchAndWait(actionAsync);
 
     expect(actionAsync.result).toBe('' +

@@ -21,16 +21,16 @@ describe('Test serialize', () => {
       live: true,
       son: classAInstance
     };
-    const serializedTextExpected = '{\"name\":\"Tiger\",\"age\":42,\"sad\":null,\"live\":true,\"son\":{\"_size\":0,\"_name\":\"SmallTiger\",\"age\":28,\"*type\":\"ClassA\"}}';
+    const serializedTextExpected = '{"name":"Tiger","age":42,"sad":null,"live":true,"son":{"_size":0,"_name":"SmallTiger","age":28,"*type":"ClassA"}}';
     expect(ESSerializer.serialize(objectToBeSerialized)).toStrictEqual(serializedTextExpected);
   });
 
   test('can serialize function style class definition', () => {
-    expect(ESSerializer.serialize(new Person(38))).toStrictEqual('{\"age\":38,\"*type\":\"Person\"}');
+    expect(ESSerializer.serialize(new Person(38))).toStrictEqual('{"age":38,"*type":"Person"}');
   });
 
   test('can serialize prototype function style class definition', () => {
-    expect(ESSerializer.serialize(new MyObject())).toStrictEqual('{\"property1\":\"First\",\"property2\":\"Second\",\"*type\":\"MyObject\"}');
+    expect(ESSerializer.serialize(new MyObject())).toStrictEqual('{"property1":"First","property2":"Second","*type":"MyObject"}');
   });
 
   test('can ignore properties during serialization', () => {
@@ -40,7 +40,7 @@ describe('Test serialize', () => {
       sad: null,
       live: true
     };
-    const serializedTextExpected = '{\"age\":42,\"sad\":null,\"live\":true}';
+    const serializedTextExpected = '{"age":42,"sad":null,"live":true}';
     expect(ESSerializer.serialize(objectToBeSerialized, {
       ignoreProperties: ['name']
     })).toStrictEqual(serializedTextExpected);
@@ -54,11 +54,10 @@ describe('Test serialize', () => {
       sad: null,
       live: true
     };
-    const serializedTextExpected = '{\"name\":\"Tiger\",\"age\":51,\"yearsLater\":9,\"sad\":null,\"live\":true}';
+    const serializedTextExpected = '{"name":"Tiger","age":51,"yearsLater":9,"sad":null,"live":true}';
     expect(ESSerializer.serialize(objectToBeSerialized, {
       interceptProperties: {
         age: function (value: any) {
-          // @ts-ignore
           return value + this.yearsLater; // The "this" here points to  objectToBeSerialized, "this" is not working in arrow function
         }
       }
@@ -91,7 +90,7 @@ describe('Test deserialize', () => {
   });
 
   test('can deserialize for prototype function style class definition', () => {
-    const serializedText = '{\"property1\":\"One\",\"property2\":\"Two\",\"*type\":\"MyObject\"}';
+    const serializedText = '{"property1":"One","property2":"Two","*type":"MyObject"}';
     expect(ESSerializer.deserialize(serializedText, [MyObject]).isInitialized()).toBe(true);
   });
 
@@ -170,9 +169,8 @@ describe('Test deserialize', () => {
   test('can serialize and deserialize ReferenceError object', () => {
     let error;
     try {
-      // @ts-ignore
-      // noinspection JSUnusedLocalSymbols
-      let a = undefinedVariable;
+      // @ts-expect-error -- Undeclared on purpose, to throw a ReferenceError.
+      void undefinedVariable;
     } catch (e) {
       error = e;
     }
@@ -187,7 +185,7 @@ describe('Test deserialize', () => {
   test('can serialize and deserialize SyntaxError object', () => {
     let error;
     try {
-      let value: string = 'foo bar';
+      const value: string = 'foo bar';
       eval(value);
     } catch (e) {
       error = e;
@@ -203,7 +201,7 @@ describe('Test deserialize', () => {
   test('can serialize and deserialize TypeError object', () => {
     let error;
     try {
-      // @ts-ignore
+      // @ts-expect-error -- Calls a method on null on purpose, to throw a TypeError.
       null.f();
     } catch (e) {
       error = e;
@@ -232,7 +230,6 @@ describe('Test deserialize', () => {
   });
 
   test('can serialize and deserialize AggregateError object', (done) => {
-    // @ts-ignore
     Promise.any([
       Promise.reject(new Error('find a bug')),
       Promise.reject(new TypeError('Invalid type'))
@@ -251,11 +248,9 @@ describe('Test deserialize', () => {
 
   test('can serialize and deserialize BigInt', () => {
     const objToSerialize = {
-      // @ts-ignore
       bi: 12345678987654321n
     };
     const serializedText = ESSerializer.serialize(objToSerialize);
-    // @ts-ignore
     expect(ESSerializer.deserialize(serializedText).bi).toBe(12345678987654321n);
   });
 
@@ -351,21 +346,17 @@ describe('Test deserialize', () => {
 
   test('can serialize and deserialize BigInt64Array', () => {
     const objToSerialize = {
-      // @ts-ignore
       a: new BigInt64Array([29n, 42n])
     };
     const serializedText = ESSerializer.serialize(objToSerialize);
-    // @ts-ignore
     expect(ESSerializer.deserialize(serializedText).a).toStrictEqual(new BigInt64Array([29n, 42n]));
   });
 
   test('can serialize and deserialize BigUint64Array', () => {
     const objToSerialize = {
-      // @ts-ignore
       a: new BigUint64Array([29n, 42n])
     };
     const serializedText = ESSerializer.serialize(objToSerialize);
-    // @ts-ignore
     expect(ESSerializer.deserialize(serializedText).a).toStrictEqual(new BigUint64Array([29n, 42n]));
   });
 
@@ -431,11 +422,9 @@ describe('Test deserialize', () => {
 
   test('can serialize and deserialize Intl.ListFormat', () => {
     const objToSerialize = {
-      // @ts-ignore
       ilf: new Intl.ListFormat('en-GB', {style: 'long', type: 'conjunction'})
     };
     const serializedText = ESSerializer.serialize(objToSerialize);
-    // @ts-ignore
     expect(ESSerializer.deserialize(serializedText).ilf).toStrictEqual(new Intl.ListFormat('en-GB', {
       style: 'long',
       type: 'conjunction'
@@ -463,21 +452,17 @@ describe('Test deserialize', () => {
 
   test('can serialize and deserialize Intl.RelativeTimeFormat', () => {
     const objToSerialize = {
-      // @ts-ignore
       irtf: new Intl.RelativeTimeFormat('zh', {style: 'narrow'})
     };
     const serializedText = ESSerializer.serialize(objToSerialize);
-    // @ts-ignore
     expect(ESSerializer.deserialize(serializedText).irtf).toStrictEqual(new Intl.RelativeTimeFormat('zh', {style: 'narrow'}));
   });
 
   test('can serialize and deserialize Intl.Locale', () => {
     const objToSerialize = {
-      // @ts-ignore
       il: new Intl.Locale('zh-CN', {hourCycle: 'h12'})
     };
     const serializedText = ESSerializer.serialize(objToSerialize);
-    // @ts-ignore
     expect(ESSerializer.deserialize(serializedText).il).toStrictEqual(new Intl.Locale('zh-CN', {hourCycle: 'h12'}));
   });
 });

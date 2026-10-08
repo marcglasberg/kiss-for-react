@@ -53,7 +53,7 @@ function TodoInput() {
     <div className='inputWrapper'>
 
       <TextField className='inputField'
-                 inputProps={{style: {paddingTop: 0, paddingBottom: 0, height: 55}}}
+                 slotProps={{htmlInput: {style: {paddingTop: 0, paddingBottom: 0, height: 55}}}}
                  error={isFailed}
                  helperText={isFailed ? errorText : ""}
                  value={inputText}
@@ -88,7 +88,7 @@ function NoTodosWarning() {
   const countActive = todoList.count(Filter.showActive);
 
   if (count === 0) {
-    let warningText = '';
+    let warningText: string;
     let additionalText = '';
 
     if (filter === Filter.showAll) {
