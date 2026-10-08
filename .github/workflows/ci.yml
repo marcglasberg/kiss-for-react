@@ -23,7 +23,7 @@ jobs:
       - run: npm ci
       - name: Use React ${{ matrix.react }}
         if: matrix.react == 18
-        run: npm install --no-save react@18 @types/react@18
+        run: npm install --no-save react@18 react-test-renderer@18 @types/react@18 @types/react-test-renderer@18
       - run: npx tsc --noEmit -p tsconfig.json
       - run: npm run lint
       - run: npm test

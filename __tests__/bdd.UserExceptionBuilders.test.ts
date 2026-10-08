@@ -33,7 +33,7 @@ Bdd(feature)
   .example(val('Builder', 'addCallbacks'))
   .run(async (ctx) => {
     // Given
-    let calls: string[] = [];
+    const calls: string[] = [];
     const original = new UserException('Message')
       .addCallbacks(() => calls.push('ok'), () => calls.push('cancel'))
       .addProps({ code: 42 });
