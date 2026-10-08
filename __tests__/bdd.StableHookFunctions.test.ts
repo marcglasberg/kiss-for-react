@@ -13,6 +13,7 @@ import {
   useDispatchAndWaitAll,
   useDispatcher,
   useDispatchSync,
+  useDispatchWhen,
   useSelect,
   useStore,
 } from '../src';
@@ -44,6 +45,7 @@ const hooks: Record<string, () => any> = {
   useDispatchAndWaitAll,
   useDispatchAll,
   useDispatchSync,
+  useDispatchWhen,
   useClearExceptionFor,
   useStore,
 };
@@ -73,6 +75,7 @@ Bdd(feature)
   .example(val('Hook', 'useDispatchAndWaitAll'))
   .example(val('Hook', 'useDispatchAll'))
   .example(val('Hook', 'useDispatchSync'))
+  .example(val('Hook', 'useDispatchWhen'))
   .example(val('Hook', 'useClearExceptionFor'))
   .example(val('Hook', 'useStore'))
   .run(async (ctx) => {

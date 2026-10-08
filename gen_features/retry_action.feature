@@ -1,10 +1,11 @@
 Feature: Retry action
 
-  Scenario: Action retries a few times and succeeds.
-    Given An action that retries up to 10 times.
+  Scenario: A SYNC action with retry fails, because only ASYNC actions can retry.
+    Given A SYNC action that retries up to 10 times.
     And The action fails with a user exception the first 4 times.
     When The action is dispatched.
-    Then It does change the state.
+    Then It is retried until its reducer succeeds.
+    But It does not change the state, and fails with a StoreException saying retry needs an ASYNC reducer.
 
   Scenario: Action retries a few times and succeeds.
     Given An action that retries up to 10 times.

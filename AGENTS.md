@@ -49,6 +49,10 @@ Guidelines:
 - When fixing a bug, first write BDDs that fail because of the bug, then fix it, then check they pass.
 - Run the tests with `npx jest` (or `npx jest __tests__/bdd.<Topic>.test.ts`).
 
+## No backward compatibility before version 2.0.0
+
+Until version 2.0.0, this package has no users to protect, so **it's not important to keep backward compatibility**.
+
 ## Git
 
 - **NEVER use `git stash`** (or anything else that changes or reverts the working tree, like

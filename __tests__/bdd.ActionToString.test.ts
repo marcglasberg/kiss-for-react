@@ -89,3 +89,55 @@ Bdd(feature)
     expect(new Increment(10).toString()).toContain('payload:10)');
     expect(new Increment({ a: 1 }).toString()).toContain('payload:{a:1})');
   });
+class NoFields extends KissAction<State> {
+  reduce() { return null; }
+}
+
+class WithFields extends KissAction<State> {
+  constructor(readonly amount: number, readonly label: string) { super(); }
+
+  reduce() { return null; }
+}
+
+class WithCheckInternet extends KissAction<State> {
+  checkInternet = {dialog: true};
+
+  reduce() { return null; }
+}
+
+class WithRetry extends KissAction<State> {
+  retry = {maxRetries: 3};
+
+  async reduce() { return null; }
+}
+
+Bdd(feature)
+  .scenario('An action without fields is described by its name only.')
+  .given('An action that declares no fields of its own.')
+  .when('The action is turned into a string.')
+  .then('Only the action name is printed, without any base class fields.')
+  .run(async (_) => {
+    const action = new NoFields();
+    expect(action.toString()).toBe('NoFields()');
+    expect(Object.keys(action)).not.toContain('checkInternet');
+    expect(Object.keys(action)).not.toContain('retry');
+  });
+
+Bdd(feature)
+  .scenario('An action with fields prints its own fields.')
+  .given('An action with fields "amount" and "label".')
+  .when('The action is turned into a string.')
+  .then('Its fields are printed, and the base class fields are not.')
+  .run(async (_) => {
+    expect(new WithFields(10, 'x').toString()).toBe('WithFields(amount:10, label:x)');
+  });
+
+Bdd(feature)
+  .scenario('The "checkInternet" and "retry" configurations are not printed.')
+  .given('An action that sets "checkInternet", and an action that sets "retry".')
+  .when('The actions are turned into strings.')
+  .then('The configurations are not printed.')
+  .run(async (_) => {
+    expect(new WithCheckInternet().toString()).toBe('WithCheckInternet()');
+    expect(new WithRetry().toString()).toBe('WithRetry()');
+  });

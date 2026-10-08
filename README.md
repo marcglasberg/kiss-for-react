@@ -137,13 +137,16 @@ await store.dispatchAndWait(new Increment());
 
 // Dispatch multiple actions and wait for them to finish
 await store.dispatchAndWaitAll([new Increment(), new LoadText()]);
+
+// Dispatch an action when the state meets a condition
+store.dispatchWhen(new LoadText(), (state) => state.count >= 3, { timeoutMillis: 0 });
 ```
 
 &nbsp;
 
 ## Components can dispatch actions
 
-The hooks to dispatch actions are `useDispatch` , `useDispatchAll` etc.
+The hooks to dispatch actions are `useDispatch`, `useDispatchAll`, `useDispatchWhen` etc.
 
 ```tsx
 function MyComponent() { 
@@ -218,6 +221,17 @@ class LoadText extends Action {
   }
 ```
 
+Errors are processed by the store (`wrapError`, `after`, `errorObserver`, etc). A `UserException`
+is swallowed after being shown to the user. Other errors are thrown back to the code that
+dispatched the action (unless an `errorObserver` returns `false`):
+
+| Action | Error         | `try { dispatch() } catch`    | `try { await dispatchAndWait() } catch` |
+|--------|---------------|-------------------------------|-----------------------------------------|
+| Sync   | Other errors  | Caught                        | Caught                                  |
+| Sync   | UserException | Swallowed                     | Swallowed                               |
+| Async  | Other errors  | Not caught: unhandled rejection | Caught                                |
+| Async  | UserException | Swallowed                     | Swallowed                               |
+
 &nbsp;
 
 ## Components can react to actions
@@ -289,7 +303,8 @@ class SellStockForPrice extends Action {
   
     // Wait until the stock price is higher than the limit price
     await this.waitCondition(
-      (state) => state.stocks.getPrice(this.stock) >= this.price
+      (state) => state.stocks.getPrice(this.stock) >= this.price,
+      { timeoutMillis: 0 }, // No timeout.
     );
     
     // Only then, post the sell order to the backend

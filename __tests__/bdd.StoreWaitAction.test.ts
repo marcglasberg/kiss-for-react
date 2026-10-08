@@ -13,37 +13,37 @@ test('waitCondition', async () => {
   // Returns a promise that resolves when the state is in the given condition.
   // Since the state is already in the condition, the promise resolves immediately.
   let store = new Store<State>({initialState: new State(1), logger: logger});
-  await store.waitCondition((state: State) => state.count === 1);
+  await store.waitCondition((state: State) => state.count === 1, {timeoutMillis: 1000});
 
   // The state is NEVER in the condition, but the timeout will end it.
   await expect(
-    store.waitCondition((state: State) => state.count === 2, 10)
+    store.waitCondition((state: State) => state.count === 2, {timeoutMillis: 10})
   )
     .rejects.toThrow(TimeoutException);
 
   // An ASYNC action will put the state in the condition, after a while.
   store = new Store<State>({initialState: new State(1), logger: logger});
   store.dispatch(new IncrementActionAsync());
-  await store.waitCondition((state: State) => state.count === 2);
+  await store.waitCondition((state: State) => state.count === 2, {timeoutMillis: 1000});
 
   // A SYNC action will put the state in the condition, before the condition is created.
   store = new Store<State>({initialState: new State(1), logger: logger});
   store.dispatch(new IncrementAction());
   expect(store.state.count).toBe(2);
-  await store.waitCondition((state: State) => state.count === 2);
+  await store.waitCondition((state: State) => state.count === 2, {timeoutMillis: 1000});
 
   // A Promise will dispatch a SYNC action that puts the state in the condition.
   store = new Store<State>({initialState: new State(1), logger: logger});
   Promise.resolve().then(() => store.dispatch(new IncrementAction()));
   expect(store.state.count).toBe(1);
-  await store.waitCondition((state: State) => state.count === 2);
+  await store.waitCondition((state: State) => state.count === 2, {timeoutMillis: 1000});
   expect(store.state.count).toBe(2);
 
   // A Promise will dispatch a SYNC action that puts the state in the condition, after a while.
   store = new Store<State>({initialState: new State(1), logger: logger});
   new Promise(resolve => setTimeout(resolve, 50)).then(() => store.dispatch(new IncrementAction()));
   expect(store.state.count).toBe(1);
-  await store.waitCondition((state: State) => state.count === 2);
+  await store.waitCondition((state: State) => state.count === 2, {timeoutMillis: 1000});
   expect(store.state.count).toBe(2);
 });
 

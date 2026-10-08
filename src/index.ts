@@ -24,6 +24,7 @@ import {
   useDispatchAndWaitAll,
   useDispatcher,
   useDispatchSync,
+  useDispatchWhen,
   useExceptionFor,
   useIsFailed,
   useIsWaiting,
@@ -31,7 +32,7 @@ import {
   useSelector,
   useStore,
 } from './Hooks';
-import { StoreException } from './StoreException';
+import { StoreException, TimeoutException } from './StoreException';
 import { UserException } from './UserException';
 
 export {
@@ -43,8 +44,9 @@ export {
   ActionStatus, ReduxReducer, SyncReducer, AsyncReducer, AsyncReducerResult,
   Store, createStore, useStore, useAllState, useSelect, useSelector, StoreProvider, ShowUserException,
   useIsWaiting, useIsFailed, useExceptionFor, useClearExceptionFor,
-  useDispatch, useDispatchAll, useDispatchAndWait, useDispatchAndWaitAll, useDispatchSync, useDispatcher,
+  useDispatch, useDispatchAll, useDispatchAndWait, useDispatchAndWaitAll, useDispatchSync, useDispatchWhen, useDispatcher,
   StoreException,
+  TimeoutException,
   UserException,
   OptimisticUpdate, Retry, RetryOptions,
 };

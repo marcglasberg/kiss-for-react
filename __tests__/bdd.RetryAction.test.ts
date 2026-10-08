@@ -13,11 +13,12 @@ test('Test fixture', async () => {
 });
 
 Bdd(feature)
-  .scenario('Action retries a few times and succeeds.')
-  .given('An action that retries up to 10 times.')
+  .scenario('A SYNC action with retry fails, because only ASYNC actions can retry.')
+  .given('A SYNC action that retries up to 10 times.')
   .and('The action fails with a user exception the first 4 times.')
   .when('The action is dispatched.')
-  .then('It does change the state.')
+  .then('It is retried until its reducer succeeds.')
+  .but('It does not change the state, and fails with a StoreException saying retry needs an ASYNC reducer.')
   .run(async (_) => {
 
     let errorInErrorObserver: any;
@@ -34,13 +35,14 @@ Bdd(feature)
     const action = new SyncActionThatRetriesAndSucceeds();
     await store.dispatchAndWait(action);
     expect(action.attempts).toBe(5);
-    expect(action.log).toBe('012345');
+    expect(action.trace).toBe('012345');
 
     // Should fail because the action is SYNC.
     // Only ASYNC actions can retry.
     expect(store.state.count).toBe(1);
     expect(action.status.isCompletedOk).toBe(false);
     expect(action.status.originalError).toBeInstanceOf(StoreException);
+    expect(action.status.originalError.message).toContain('uses retry, but its reducer is SYNC');
 
     // Waits for the exception to be caught by the errorObserver.
     await delayMillis(1);
@@ -63,7 +65,7 @@ Bdd(feature)
     const action = new AsyncActionThatRetriesAndSucceeds();
     await store.dispatchAndWait(action);
     expect(action.attempts).toBe(5);
-    expect(action.log).toBe('012345');
+    expect(action.trace).toBe('012345');
     expect(store.state.count).toBe(2);
     expect(action.status.isCompletedOk).toBe(true);
   });
@@ -86,7 +88,7 @@ Bdd(feature)
     expect(action.status.isCompletedOk).toBe(true);
     expect(store.state.count).toBe(2);
     expect(action.attempts).toBe(7);
-    expect(action.log).toBe('01234567');
+    expect(action.trace).toBe('01234567');
   });
 
 Bdd(feature)
@@ -105,7 +107,7 @@ Bdd(feature)
     await store.dispatchAndWait(action);
     expect(store.state.count).toBe(1);
     expect(action.attempts).toBe(4);
-    expect(action.log).toBe('0123');
+    expect(action.trace).toBe('0123');
     expect(action.status.isCompletedFailed).toBe(true);
   });
 
@@ -124,7 +126,7 @@ Bdd(feature)
     const action = new ActionThatRetriesButSucceedsTheFirstTry();
     await store.dispatchAndWait(action);
     expect(action.attempts).toBe(0);
-    expect(action.log).toBe('0');
+    expect(action.trace).toBe('0');
     expect(store.state.count).toBe(2);
     expect(action.status.isCompletedOk).toBe(true);
 
@@ -146,7 +148,7 @@ class State {
 
 class SyncActionThatRetriesAndSucceeds extends KissAction<State> {
 
-  log: string = '';
+  trace: string = '';
 
   retry = {
     initialDelay: 10,
@@ -154,7 +156,7 @@ class SyncActionThatRetriesAndSucceeds extends KissAction<State> {
   }
 
   reduce() {
-    this.log += this.attempts.toString();
+    this.trace += this.attempts.toString();
     if (this.attempts <= 4) throw new UserException(`Failed: ${this.attempts}`);
     return new State(this.state.count + 1);
   }
@@ -162,7 +164,7 @@ class SyncActionThatRetriesAndSucceeds extends KissAction<State> {
 
 class AsyncActionThatRetriesAndSucceeds extends KissAction<State> {
 
-  log: string = '';
+  trace: string = '';
 
   retry = {
     initialDelay: 10,
@@ -170,19 +172,19 @@ class AsyncActionThatRetriesAndSucceeds extends KissAction<State> {
   }
 
   async reduce() {
-    this.log += this.attempts.toString();
+    this.trace += this.attempts.toString();
     if (this.attempts <= 4) throw new UserException(`Failed: ${this.attempts}`);
     return (state: State) => new State(state.count + 1);
   }
 }
 
 class ActionThatRetriesAndFails extends KissAction<State> {
-  log: string = '';
+  trace: string = '';
 
   retry = {initialDelay: 10}
 
   async reduce() {
-    this.log += this.attempts.toString();
+    this.trace += this.attempts.toString();
     if (this.attempts <= 4) throw new UserException(`Failed: ${this.attempts}`);
     return () => new State(this.state.count + 1);
   }
@@ -190,7 +192,7 @@ class ActionThatRetriesAndFails extends KissAction<State> {
 
 class ActionThatRetriesButSucceedsTheFirstTry extends KissAction<State> {
 
-  log: string = '';
+  trace: string = '';
 
   retry = {
     initialDelay: 10,
@@ -198,14 +200,14 @@ class ActionThatRetriesButSucceedsTheFirstTry extends KissAction<State> {
   }
 
   async reduce() {
-    this.log += this.attempts.toString();
+    this.trace += this.attempts.toString();
     return () => new State(this.state.count + 1);
   }
 }
 
 class ActionThatRetriesUnlimitedAndFails extends KissAction<State> {
 
-  log: string = '';
+  trace: string = '';
 
   retry = {
     initialDelay: 10,
@@ -213,7 +215,7 @@ class ActionThatRetriesUnlimitedAndFails extends KissAction<State> {
   }
 
   async reduce() {
-    this.log += this.attempts.toString();
+    this.trace += this.attempts.toString();
     if (this.attempts <= 6) throw new UserException(`Failed: ${this.attempts}`);
     return () => new State(this.state.count + 1);
   }

@@ -12,6 +12,7 @@ Feature: Hooks return stable functions
       | useDispatchAndWaitAll |
       | useDispatchAll        |
       | useDispatchSync       |
+      | useDispatchWhen       |
       | useClearExceptionFor  |
       | useStore              |
 

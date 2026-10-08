@@ -33,3 +33,18 @@ Feature: Action toString
     Given An action with a number field.
     When The action is turned into a string.
     Then The field is shown as JSON.
+
+  Scenario: An action without fields is described by its name only.
+    Given An action that declares no fields of its own.
+    When The action is turned into a string.
+    Then Only the action name is printed, without any base class fields.
+
+  Scenario: An action with fields prints its own fields.
+    Given An action with fields "amount" and "label".
+    When The action is turned into a string.
+    Then Its fields are printed, and the base class fields are not.
+
+  Scenario: The "checkInternet" and "retry" configurations are not printed.
+    Given An action that sets "checkInternet", and an action that sets "retry".
+    When The actions are turned into strings.
+    Then The configurations are not printed.

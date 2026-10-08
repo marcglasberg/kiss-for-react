@@ -204,10 +204,11 @@ export abstract class KissAction<St> {
    * By default, the `hasInternet()` method uses `navigator.onLine` in web environments 
    * and returns true for other environments.
    */
-  checkInternet?: CheckInternetOptions;
+  declare checkInternet?: CheckInternetOptions;
 
   private _store: Store<St> | null = null;
   private _resolve: ((value: ActionStatus) => void) | null = null;
+  private _reject: ((error: any) => void) | null = null;
   private _status = new ActionStatus();
   private _initialState: St | null = null;
   private _log: { key: string, value: any }[] = [];
@@ -241,7 +242,7 @@ export abstract class KissAction<St> {
    * }
    * ```
    */
-  get getLog() {
+  getLog(): { key: string; value: any }[] {
     return this._log;
   }
 
@@ -270,6 +271,39 @@ export abstract class KissAction<St> {
    */
   protected dispatch(action: KissAction<St>): void {
     this.store.dispatch(action);
+  }
+
+  /**
+   * Waits until the store state meets a certain condition, and then dispatches an action.
+   * If the condition is already true, the action is dispatched right away.
+   *
+   * ```ts
+   * this.dispatchWhen(new BuyStock('IBM'), (state) => state.stocks.getPrice('IBM') >= 100, { timeoutMillis: 0 });
+   * ```
+   *
+   * Timeout: You must always give a `timeoutMillis`, since there is no default. If the condition
+   * is not met in `timeoutMillis` milliseconds, the action is NOT dispatched, and the condition
+   * stops being checked. In this case, `onTimeout` is called if you provided it. Otherwise, the
+   * timeout is logged with `Store.log()`. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
+   * (or -1), but note that while it waits, the condition runs on every state change.
+   *
+   * ```ts
+   * this.dispatchWhen(
+   *   new BuyStock('IBM'),
+   *   (state) => state.stocks.getPrice('IBM') >= 100,
+   *   { timeoutMillis: 60 * 1000, onTimeout: () => console.log('IBM never reached 100.') },
+   * );
+   * ```
+   */
+  protected dispatchWhen(
+    action: KissAction<St>,
+    condition: (state: St) => boolean,
+    options: {
+      timeoutMillis: number,
+      onTimeout?: () => void
+    }
+  ): void {
+    this.store.dispatchWhen(action, condition, options);
   }
 
   /**
@@ -543,12 +577,14 @@ export abstract class KissAction<St> {
    *   }
    *   ```
    *
-   * - Keep in mind that all actions using the `retry` mixin will become asynchronous, even
-   *   if the original action was synchronous.
+   * - Retry only works with ASYNC reducers, that return `Promise<(state: St) => St>`.
+   *   A SYNC reducer is a pure function of the state, so if it fails once it will fail
+   *   again, and retrying it makes no sense. Dispatching an action with retry and a SYNC
+   *   reducer fails with a `StoreException`, even if the reducer itself succeeds.
    *
    * - If necessary, you can know the current "attempt number" by using `this.attempts`.
    */
-  retry?: Retry;
+  declare retry?: Retry;
 
   _retry: RetryOptions = {
     on: false,
@@ -569,27 +605,51 @@ export abstract class KissAction<St> {
    * Returns a promise which will resolve when the given state `condition` is true.
    * If the condition is already true when the method is called, the promise resolves immediately.
    *
-   * You may also provide a `timeoutMillis`, which by default is 10 minutes. If you want, you
-   * can modify `TimeoutException.defaultTimeoutMillis` to change the default timeout.
-   * To disable the timeout, make it 0 or -1.
+   * Timeout: You must always give a `timeoutMillis`, since there is no default. If the condition
+   * is not met in `timeoutMillis` milliseconds, the promise rejects with a `TimeoutException`,
+   * and the condition stops being checked. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
+   * (or -1):
+   *
+   * ```ts
+   * await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 }); // 1 second.
+   * await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 0 }); // No timeout.
+   * ```
+   *
+   * To handle the timeout, you can catch the `TimeoutException`:
+   *
+   * ```ts
+   * try { await store.waitCondition(condition, { timeoutMillis: 5000 }); }
+   * catch (error) { if (error instanceof TimeoutException) { ... } else throw error; }
+   * ```
+   *
+   * Or, you can pass an `onTimeout` callback. If the timeout expires, `onTimeout` is called,
+   * and the promise resolves with `null` instead of rejecting. If `onTimeout` throws, the
+   * promise rejects with that error:
+   *
+   * ```ts
+   * await store.waitCondition(condition, { timeoutMillis: 5000, onTimeout: () => { ... } });
+   * ```
    *
    * This method is useful in tests, and it returns the action which changed
    * the store state into the condition, in case you need it:
    *
    * ```typescript
-   * let action = await store.waitCondition((state) => state.name == "Bill");
+   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    *
-   * This method is also eventually useful in production code, in which case you
-   * should avoid waiting for conditions that may take a very long time to complete,
-   * as checking the condition is an overhead to every state change.
+   * This method is also eventually useful in production code, but note that while it waits,
+   * the condition runs on EVERY state change. A few short-lived waits are fine. But many waits,
+   * or waits that may never complete (especially with no timeout), add a cost to every state
+   * change, for as long as the store lives, since there is no way to cancel a wait. In
+   * production, it's often better to put the logic in an action, or to react to the selected
+   * state in your components.
    *
    * Examples:
    *
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name, 'John')
    * dispatch(new ChangeNameAction("Bill"));
-   * let action = await store.waitCondition((state) => state.name == "Bill");
+   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name, 'Bill');
    *
@@ -648,9 +708,15 @@ export abstract class KissAction<St> {
    */
   waitCondition(
     condition: (state: St) => boolean,
-    timeoutMillis: number | null = null
+    {
+      timeoutMillis,
+      onTimeout,
+    }: {
+      timeoutMillis: number,
+      onTimeout?: () => void
+    }
   ): Promise<KissAction<St> | null> {
-    return this.store.waitCondition(condition, timeoutMillis);
+    return this.store.waitCondition(condition, {timeoutMillis, onTimeout});
   }
 
   /**
@@ -677,9 +743,14 @@ export abstract class KissAction<St> {
    * Note: The condition is only checked when some action is dispatched or finishes dispatching.
    * It's not checked every time action statuses change.
    *
-   * You may also provide a `timeoutMillis`, which by default is 10 minutes.
-   * To disable the timeout, make it 0 or -1.
-   * If you want, you can modify `TimeoutException.defaultTimeoutMillis` to change the default timeout.
+   * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
+   * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
+   * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
+   * it globally with `TimeoutException.defaultTimeoutMillis`.
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
+   * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
+   * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
    * Examples:
    *
@@ -687,7 +758,7 @@ export abstract class KissAction<St> {
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
    * dispatch(new ChangeNameAction("Bill"));
-   * let action = await store.waitCondition((state) => state.name == "Bill");
+   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
    *
@@ -763,19 +834,22 @@ export abstract class KissAction<St> {
       // immediately and throw no error.
       completeImmediately = false,
       //
-      // The maximum time to wait for the condition to be met. The default is 10 minutes.
+      // The maximum time to wait for the condition to be met. The default is 3 seconds.
       // To disable the timeout, make it 0 or -1.
       timeoutMillis = null,
+      onTimeout,
     }: {
       completeImmediately?: boolean,
-      timeoutMillis?: number | null
+      timeoutMillis?: number | null,
+      onTimeout?: () => void
     } = {})
     : Promise<{ actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null }> {
 
     return this.store.waitActionCondition(
       condition, {
       completeImmediately: completeImmediately,
-      timeoutMillis: timeoutMillis
+      timeoutMillis: timeoutMillis,
+      onTimeout: onTimeout,
     });
   }
 
@@ -795,9 +869,14 @@ export abstract class KissAction<St> {
    * production, as it's very easy to create a deadlock. However, waiting for specific actions to
    * finish is safe in production, as long as you're waiting for actions you just dispatched.
    *
-   * You may also provide a [timeoutMillis], which by default is 10 minutes.
-   * To disable the timeout, make it 0 or -1.
-   * If you want, you can modify `TimeoutException.defaultTimeoutMillis` to change the default timeout.
+   * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
+   * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
+   * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
+   * it globally with `TimeoutException.defaultTimeoutMillis`.
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
+   * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
+   * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
    * Examples:
    *
@@ -805,7 +884,7 @@ export abstract class KissAction<St> {
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
    * dispatch(new ChangeNameAction("Bill"));
-   * let action = await store.waitCondition((state) => state.name == "Bill");
+   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
    *
@@ -871,16 +950,19 @@ export abstract class KissAction<St> {
     actions: KissAction<St>[] | null,
     {
       completeImmediately = false,
-      timeoutMillis = null
+      timeoutMillis = null,
+      onTimeout,
     }: {
       completeImmediately?: boolean,
-      timeoutMillis?: number | null
+      timeoutMillis?: number | null,
+      onTimeout?: () => void
     } = {}): Promise<{ actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null }> {
 
     return this.store.waitAllActions(
       actions, {
       completeImmediately: completeImmediately,
-      timeoutMillis: timeoutMillis
+      timeoutMillis: timeoutMillis,
+      onTimeout: onTimeout,
     });
   }
 
@@ -903,9 +985,14 @@ export abstract class KissAction<St> {
    *   expect(action.status.originalError, isA<UserException>());
    *   ```
    *
-   * You may also provide a `timeoutMillis`, which by default is 10 minutes.
-   * To disable the timeout, make it 0 or -1.
-   * If you want, you can modify `TimeoutException.defaultTimeoutMillis` to change the default timeout.
+   * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
+   * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
+   * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
+   * it globally with `TimeoutException.defaultTimeoutMillis`.
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
+   * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
+   * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
    * Examples:
    *
@@ -913,7 +1000,7 @@ export abstract class KissAction<St> {
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
    * dispatch(new ChangeNameAction("Bill"));
-   * let action = await store.waitCondition((state) => state.name == "Bill");
+   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
    *
@@ -979,15 +1066,18 @@ export abstract class KissAction<St> {
     actionType: { new(...args: any[]): KissAction<St> },
     {
       completeImmediately = false,
-      timeoutMillis = null
+      timeoutMillis = null,
+      onTimeout,
     }: {
       completeImmediately?: boolean,
-      timeoutMillis?: number | null
+      timeoutMillis?: number | null,
+      onTimeout?: () => void
     } = {}): Promise<KissAction<St> | null> {
     return this.store.waitActionType(
       actionType, {
       completeImmediately: completeImmediately,
-      timeoutMillis: timeoutMillis
+      timeoutMillis: timeoutMillis,
+      onTimeout: onTimeout,
     });
   }
 
@@ -1004,9 +1094,14 @@ export abstract class KissAction<St> {
    * - If any action of the given types is in progress, the promise completes only when
    *   no action of the given types is in progress anymore.
    *
-   * You may also provide a `timeoutMillis`, which by default is 10 minutes.
-   * To disable the timeout, make it 0 or -1.
-   * If you want, you can modify `TimeoutException.defaultTimeoutMillis` to change the default timeout.
+   * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
+   * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
+   * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
+   * it globally with `TimeoutException.defaultTimeoutMillis`.
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
+   * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
+   * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
    * Examples:
    *
@@ -1014,7 +1109,7 @@ export abstract class KissAction<St> {
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
    * dispatch(new ChangeNameAction("Bill"));
-   * let action = await store.waitCondition((state) => state.name == "Bill");
+   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
    *
@@ -1080,15 +1175,18 @@ export abstract class KissAction<St> {
     actionTypes: { new(...args: any[]): KissAction<any> }[],
     {
       completeImmediately = false,
-      timeoutMillis = null
+      timeoutMillis = null,
+      onTimeout,
     }: {
       completeImmediately?: boolean,
-      timeoutMillis?: number | null
+      timeoutMillis?: number | null,
+      onTimeout?: () => void
     } = {}): Promise<void> {
     return this.store.waitAllActionTypes(
       actionTypes, {
       completeImmediately: completeImmediately,
-      timeoutMillis: timeoutMillis
+      timeoutMillis: timeoutMillis,
+      onTimeout: onTimeout,
     });
   }
 
@@ -1112,9 +1210,14 @@ export abstract class KissAction<St> {
    * expect(action.status.originalError).toBeInstanceOf(UserException>);
    * ```
    *
-   * You may also provide a `timeoutMillis`, which by default is 10 minutes.
-   * To disable the timeout, make it 0 or -1.
-   * If you want, you can modify `TimeoutException.defaultTimeoutMillis` to change the default timeout.
+   * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
+   * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
+   * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
+   * it globally with `TimeoutException.defaultTimeoutMillis`.
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
+   * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
+   * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
    * Examples:
    *
@@ -1122,7 +1225,7 @@ export abstract class KissAction<St> {
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
    * dispatch(new ChangeNameAction("Bill"));
-   * let action = await store.waitCondition((state) => state.name == "Bill");
+   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
    *
@@ -1184,18 +1287,29 @@ export abstract class KissAction<St> {
    *
    * You should only use this method in tests.
    */
+  waitAnyActionTypeFinishes(
+    actionTypes: { new(...args: any[]): KissAction<St> }[],
+    options: { timeoutMillis?: number | null, onTimeout: () => void }
+  ): Promise<KissAction<St> | null>;
+  waitAnyActionTypeFinishes(
+    actionTypes: { new(...args: any[]): KissAction<St> }[],
+    options?: { timeoutMillis?: number | null }
+  ): Promise<KissAction<St>>;
   async waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
     {
-      timeoutMillis = null
+      timeoutMillis = null,
+      onTimeout,
     }: {
       completeImmediately?: boolean,
-      timeoutMillis?: number | null
-    } = {}): Promise<KissAction<St>> {
+      timeoutMillis?: number | null,
+      onTimeout?: () => void
+    } = {}): Promise<KissAction<St> | null> {
     return this.store.waitAnyActionTypeFinishes(
       actionTypes, {
-      timeoutMillis: timeoutMillis
-    });
+        timeoutMillis: timeoutMillis,
+        onTimeout: onTimeout,
+      } as { timeoutMillis?: number | null, onTimeout: () => void });
   }
 
   /**
@@ -1256,17 +1370,28 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    */
   _createPromise(): Promise<ActionStatus> {
-    return new Promise<ActionStatus>((resolve, _reject) => {
+    return new Promise<ActionStatus>((resolve, reject) => {
       this._resolve = resolve;
+      this._reject = reject;
     });
   }
 
   /**
    * For Kiss internal use only.
    */
-  _resolvePromise(): void {
-    // Resolves the promise created by `dispatchAndWait()`, and returns the action status.
-    this._resolve?.(this.status);
+  _resolvePromise(failure: { error: any } | null = null): void {
+    // Settles the promise created by `dispatchAndWait()`. It rejects with the error, if the
+    // action failed with an error that was not swallowed. Otherwise, it resolves with the status.
+    if (failure !== null) this._reject?.(failure.error);
+    else this._resolve?.(this.status);
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Returns true if the action was dispatched with `dispatchAndWait()`.
+   */
+  _isAwaited(): boolean {
+    return this._resolve !== null;
   }
 
   /**
@@ -1277,7 +1402,7 @@ export abstract class KissAction<St> {
     // Initialize an array to hold key-value pairs as strings
     const keyValuePairs: string[] = [];
     for (const key of Object.keys(this)) {
-      if (!key.startsWith('_') && (key != 'nonReentrant') && (key != 'retry') && (key != 'wrapReduce')) { // Continue to exclude base class/internal fields
+      if (!key.startsWith('_') && (key != 'nonReentrant') && (key != 'retry') && (key != 'checkInternet') && (key != 'wrapReduce')) { // Continue to exclude base class/internal fields
         // For each property, push "key:value" string to the array
         // Note: This simple line assumes that `value` can be meaningfully represented as a string.
         // You might need a more complex handling for objects, arrays, etc.

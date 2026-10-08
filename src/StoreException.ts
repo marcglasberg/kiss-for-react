@@ -18,11 +18,22 @@ export class StoreException extends Error {
 export class TimeoutException extends Error {
 
   /**
-   * The global default timeout for the wait functions (like `waitCondition` etc.) is 10 minutes.
-   * This value is not final and can be modified.
-   * To disable the timeout, modify this to a large value, like 300000000000 (almost 10 years).
+   * The default timeout of the wait functions that are meant for tests only, like
+   * `waitActionCondition`, `waitAllActions`, `waitActionType`, `waitAllActionTypes` and
+   * `waitAnyActionTypeFinishes`. It's 3 seconds, which is shorter than the default test timeout
+   * of Jest and Vitest (5 seconds). This way, a wait that never completes fails the test with
+   * a clear `TimeoutException`, instead of the test runner's generic timeout error.
+   *
+   * You can change it globally, for example to 10 seconds, if your tests are slower:
+   *
+   * ```ts
+   * TimeoutException.defaultTimeoutMillis = 10_000;
+   * ```
+   *
+   * Note `waitCondition` and `dispatchWhen` have no default, since you may also use them in
+   * production. You must always give them a `timeoutMillis`.
    */
-  public static defaultTimeoutMillis = 60 * 1000 * 10;
+  public static defaultTimeoutMillis = 3000;
 
   constructor(message?: string) {
     super(message);
@@ -31,7 +42,7 @@ export class TimeoutException extends Error {
 
     // Maintains proper stack trace for where our error was thrown (only available on V8).
     if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, StoreException);
+      Error.captureStackTrace(this, TimeoutException);
     }
   }
 }

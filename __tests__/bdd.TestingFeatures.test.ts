@@ -56,7 +56,7 @@ Bdd(feature)
 
     // However, we now wait for the state to become 42, no matter how many async processes
     // are dispatched after the action finishes, or how long it takes to get there.
-    await store.waitCondition((state: State) => state.count === 42);
+    await store.waitCondition((state: State) => state.count === 42, {timeoutMillis: 1000});
 
     expect(store.state.count).toBe(42);
   });
@@ -78,7 +78,7 @@ Bdd(feature)
     });
 
     // We set up an action that reset the state to zero to dispatch as soon as the state is 42.
-    store.dispatchWhen(new ResetSync(), (state: State) => state.count === 42);
+    store.dispatchWhen(new ResetSync(), (state: State) => state.count === 42, {timeoutMillis: 1000});
 
     // Dispatch and wait doesn't wait for async processes that are dispatched after the action finishes.
     await store.dispatchAndWait(new StartAddingAsync());
@@ -86,7 +86,7 @@ Bdd(feature)
     store.dispatch(new IncrementAsync());
 
     // Wait for the state to become 42.
-    const action = await store.waitCondition((state: State) => state.count === 42);
+    const action = await store.waitCondition((state: State) => state.count === 42, {timeoutMillis: 1000});
     expect(action).toBeInstanceOf(Add20Async);
 
     // But it immediately became 0, because the ResetSync action was dispatched.
@@ -113,7 +113,7 @@ Bdd(feature)
     store.record.start();
 
     // We set up an action that reset the state to zero to dispatch as soon as the state is 42.
-    store.dispatchWhen(new ResetSync(), (state: State) => state.count === 42);
+    store.dispatchWhen(new ResetSync(), (state: State) => state.count === 42, {timeoutMillis: 1000});
 
     // Dispatch and wait doesn't wait for async processes that are dispatched after the action finishes.
     await store.dispatchAndWait(new StartAddingAsync());
@@ -121,7 +121,7 @@ Bdd(feature)
     store.dispatch(new IncrementAsync());
 
     // Wait for the state to become 42.
-    await store.waitCondition((state: State) => state.count === 42);
+    await store.waitCondition((state: State) => state.count === 42, {timeoutMillis: 1000});
 
     // Stop recording.
     store.record.stop();

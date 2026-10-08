@@ -143,7 +143,7 @@ Bdd(feature)
     render(store, List);
 
     let released = false;
-    store.waitCondition((s) => s.items.length === 1).then(() => released = true);
+    store.waitCondition((s) => s.items.length === 1, {timeoutMillis: 1000}).then(() => released = true);
 
     act(() => store.dispatch(new RemoveLast()));
     await delayMillis(20);
