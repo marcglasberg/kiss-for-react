@@ -19,7 +19,7 @@ import { KissAction, ActionStatus } from './KissAction';
  */
 export function useSelect<St, T>(selector: (state: St) => T): T {
   const store: Store<St> = useStoreFromContext<St>();
-  return useSubscribedSelector(store._refStateHooks, RefState, selector, () => store.state);
+  return useSubscribedSelector(store._refStateHooks, RefState, selector, () => store.state, true);
 }
 
 /**
@@ -37,6 +37,64 @@ export function useSelect<St, T>(selector: (state: St) => T): T {
  */
 export function useSelector<St, T>(selector: (state: St) => T): T {
   return useSelect(selector);
+}
+
+/**
+ * Returns an object (or array) with some parts of the store state:
+ *
+ * ```ts
+ * const user = useObject((state: State) => ({ name: state.user.name, age: state.user.age }));
+ * return <div>{user.name} is {user.age} years old</div>;
+ * ```
+ *
+ * The component will rebuild only when the `name` or the `age` changes, ignoring the
+ * change in other parts of the state.
+ *
+ * Note: With `useSelect`, the same selector would rebuild the component for ALL state changes,
+ * since it creates a new object each time. Instead, `useObject` compares the new object with
+ * the previous one, value by value (with `Object.is`). If they have the same values, it
+ * returns the previous object, and the component doesn't rebuild. This also works if the
+ * selector returns an array: `useObject((state: State) => [state.name, state.age])`.
+ *
+ * Note the values themselves are compared by identity. So, the selector should return parts
+ * of the state, and not create new objects or arrays for its values.
+ */
+export function useObject<St, T>(selector: (state: St) => T): T {
+  // The last object returned. While the selector returns objects with the same values, we keep
+  // returning this same object, so that `useSelect` sees no change.
+  const lastRef = useRef<{ value: T } | null>(null);
+
+  return useSelect((state: St) => {
+    const value = selector(state);
+    const last = lastRef.current;
+    if (last !== null && _shallowEqual(last.value, value)) return last.value;
+    lastRef.current = {value};
+    return value;
+  });
+}
+
+// Returns true if `a` and `b` are the same, or are both arrays (or both plain objects) with the
+// same values (compared with `Object.is`).
+function _shallowEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++)
+      if (!Object.is(a[i], b[i])) return false;
+    return true;
+  }
+
+  if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const key of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (!Object.is((a as any)[key], (b as any)[key])) return false;
+  }
+  return true;
 }
 
 /**
@@ -80,8 +138,8 @@ export function useAllState<St>(): St {
  * store.dispatch(new MyAction());
  * await store.dispatchAndWait(new MyAction());
  * store.dispatchSync(new MyAction());
- * await waitCondition((state) => state.user.name === "Bill", { timeoutMillis: 1000 });
- * await waitAllActionTypes(['BuyAction', 'SellAction']);
+ * await store.waitCondition((state) => state.user.name === "Bill", { timeoutMillis: 1000 });
+ * await store.waitAllActionTypes([BuyAction, SellAction]);
  * ```
  *
  * IMPORTANT:
@@ -300,7 +358,7 @@ function _depsAreEqual(a: unknown, b: unknown): boolean {
  * Usage:
  * ```ts
  * const dispatchAndWait = useDispatchAndWait();
- * await dispatchAndWait(new MyAction())`.
+ * await dispatchAndWait(new MyAction());
  * ```
  *
  * See also:
@@ -428,7 +486,7 @@ export function useDispatchSync(): (action: KissAction<any>) => void {
  *
  * ```ts
  * const isWaiting = useIsWaiting(MyAction);
- * if (isWaiting) { // Show a spinner }
+ * if (isWaiting) { ... } // Show a spinner
  * ```
  */
 export function useIsWaiting(type: abstract new (...args: any[]) => KissAction<any>): boolean {
@@ -523,12 +581,18 @@ function useStoreSelector<St, T>(selector: (store: Store<St>) => T): T {
  *
  * When it subscribes, it selects again from the current store, in case the state changed
  * between the render and the subscription (for example, a child that dispatches on mount).
+ *
+ * If `isInputImmutable` is true (the input is the state), it only selects again after the
+ * render if the input changed since the render. Otherwise, a selector that creates a new object
+ * each time (like `(state) => ({ a: state.a })`) would be different every time, and the
+ * component would re-render forever.
  */
 function useSubscribedSelector<In, T, R>(
   hooks: Set<React.RefObject<R | undefined>>,
   RefClass: new (selectorAndValueAndSetValue: [(input: In) => T, T, React.Dispatch<React.SetStateAction<T>>]) => R,
   selector: (input: In) => T,
   getInput: () => In,
+  isInputImmutable = false,
 ): T {
 
   // This ref will persist for the full lifetime of the component.
@@ -537,7 +601,11 @@ function useSubscribedSelector<In, T, R>(
   // Re-renders the component. The store calls it when the selected value changes.
   const [, forceRender] = useReducer((x: number) => x + 1, 0);
 
-  const value = selector(getInput());
+  const input = getInput();
+  const value = selector(input);
+
+  // The input used in the last committed render.
+  const renderedInputRef = useRef<In>(input);
 
   // After every render, save in the ref the latest selector and the value it selected.
   // Whenever the state changes, the store will:
@@ -550,6 +618,8 @@ function useSubscribedSelector<In, T, R>(
   // If the selector throws, re-render too, so the error is thrown during render,
   // where React can deal with it.
   const rerenderIfChanged = () => {
+    // If the input is the same, the selector would select the same value it selected in the render.
+    if (isInputImmutable && getInput() === renderedInputRef.current) return;
     try {
       const [latestSelector, renderedValue] = (ref.current as any).selectorAndValueAndSetValue;
       if (latestSelector(getInput()) !== renderedValue) forceRender();
@@ -560,6 +630,7 @@ function useSubscribedSelector<In, T, R>(
 
   useLayoutEffect(() => {
     ref.current = new RefClass([selector, value, forceRender as React.Dispatch<React.SetStateAction<T>>]);
+    renderedInputRef.current = input;
 
     // On later commits (already subscribed), the new selector may have missed a change.
     if (hooks.has(ref)) rerenderIfChanged();
@@ -698,12 +769,11 @@ class StoreDispatchers<St> {
    * await store.waitCondition(condition, { timeoutMillis: 5000, onTimeout: () => { ... } });
    * ```
    *
-   * This method is useful in tests, and it returns the action which changed
-   * the store state into the condition, in case you need it:
+   * It returns the action which changed the store state into the condition, in case you need it:
    *
-   * ```typescript
+   * ```ts
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
-   * expect(action instanceof ChangeNameAction).toBe(true);
+   * ```
    *
    * This method is also eventually useful in production code, but note that while it waits,
    * the condition runs on EVERY state change. A few short-lived waits are fine. But many waits,
@@ -712,67 +782,32 @@ class StoreDispatchers<St> {
    * production, it's often better to put the logic in an action, or to react to the selected
    * state in your components.
    *
-   * Examples:
+   * Example, in a component:
    *
-   * // Dispatches an actions that changes the state, then await for the state change:
-   * expect(store.state.name, 'John')
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(store.state.name, 'Bill');
+   * ```tsx
+   * function BuyButton() {
+   *   const store = useStore();
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await waitAllActions([]);
-   * expect(state.stocks, ['IBM', 'TSLA']);
+   *   async function buy() {
+   *     store.dispatch(new BuyStock('IBM'));
+   *     await store.waitCondition((state) => state.portfolio.includes('IBM'), { timeoutMillis: 5000 });
+   *     showMessage('IBM is now in your portfolio.');
+   *   }
    *
-   * // Dispatches two actions in PARALLEL and wait for their TYPES:
-   * expect(store.state.portfolio, ['TSLA']);
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new SellAction('TSLA'));
-   * await store.waitAllActionTypes([BuyAction, SellAction]);
-   * expect(store.state.portfolio, ['IBM']);
+   *   return <button onClick={buy}>Buy IBM</button>;
+   * }
+   * ```
    *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await store.waitAllActions([]);
-   * expect(store.state.portfolio.includes('IBM', 'TSLA')).toBe(false);
-   *
-   * // Dispatches two actions in PARALLEL and wait for them:
-   * let action1 = new BuyAction('IBM');
-   * let action2 = new SellAction('TSLA');
-   * dispatch(action1);
-   * dispatch(action2);
-   * await store.waitAllActions([action1, action2]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches two actions in SERIES and wait for them:
-   * await dispatchAndWait(new BuyAction('IBM'));
-   * await dispatchAndWait(new SellAction('TSLA'));
-   * expect(store.state.portfolio.includes('IBM', 'TSLA')).toBe(false);
-   *
-   * // Dispatches an action and waits until no action of its type is in progress.
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitActionType(ChangeNameAction);
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
-   * expect(store.state.name, 'Bill');
-   *
-   * // Wait until some action of the given types is dispatched.
-   * dispatch(new ProcessStocksAction());
-   * let action = store.waitAnyActionTypeFinishes([BuyAction, SellAction]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
+   * Note `useStore()` doesn't give you the state. To read the state in a component, use
+   * `useSelect`. In tests, use the store itself (see `Store.waitCondition`).
    *
    * See also:
-   * `waitCondition` - Waits until the state is in a given condition.
-   * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
-   * `waitActionType` - Waits until an action of a given type is NOT in progress.
-   * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
-   * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
+   * - `waitCondition` - Waits until the state is in a given condition.
+   * - `waitActionCondition` - Waits until the actions in progress meet a given condition.
+   * - `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * - `waitActionType` - Waits until an action of a given type is NOT in progress.
+   * - `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
+   * - `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
    */
   waitCondition(
     condition: (state: St) => boolean,
@@ -820,73 +855,34 @@ class StoreDispatchers<St> {
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
-   * Examples:
+   * Example, in a component:
    *
-   * ```ts
-   * // Dispatches an actions that changes the state, then await for the state change:
-   * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(store.state.name).toBe('Bill');
+   * ```tsx
+   * function RefreshButton() {
+   *   const store = useStore();
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await waitAllActions();
-   * expect(state.stocks).toEqual(['IBM', 'TSLA']);
+   *   async function refresh() {
+   *     store.dispatch(new RefreshPrices());
    *
-   * // Dispatches two actions in PARALLEL and wait for their TYPES:
-   * expect(store.state.portfolio).toEqual(['TSLA']);
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new SellAction('TSLA'));
-   * await store.waitAllActionTypes([BuyAction, SellAction]);
-   * expect(store.state.portfolio).toEqual(['IBM']);
+   *     // Waits until no RefreshPrices action is in progress.
+   *     await store.waitActionCondition(
+   *       (actions) => ![...actions].some((action) => action instanceof RefreshPrices),
+   *       { timeoutMillis: 5000 });
    *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await store.waitAllActions();
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(true);
+   *     showMessage('Prices refreshed.');
+   *   }
    *
-   * // Dispatches two actions in PARALLEL and wait for them:
-   * let action1 = new BuyAction('IBM');
-   * let action2 = new SellAction('TSLA');
-   * dispatch(action1);
-   * dispatch(action2);
-   * await store.waitAllActions([action1, action2]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches two actions in SERIES and wait for them:
-   * await dispatchAndWait(new BuyAction('IBM'));
-   * await dispatchAndWait(new SellAction('TSLA'));
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches an action and waits until no action of its type is in progress.
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitActionType(ChangeNameAction);
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
-   * expect(store.state.name).toBe('Bill');
-   *
-   * // Wait until some action of the given types is dispatched.
-   * dispatch(new ProcessStocksAction());
-   * let action = await store.waitAnyActionTypeFinishes([BuyAction, SellAction]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   *  ```
+   *   return <button onClick={refresh}>Refresh</button>;
+   * }
+   * ```
    *
    * See also:
-   * `waitCondition` - Waits until the state is in a given condition.
-   * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
-   * `waitActionType` - Waits until an action of a given type is NOT in progress.
-   * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
-   * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
-   *
-   * You should only use this method in tests.
+   * - `waitCondition` - Waits until the state is in a given condition.
+   * - `waitActionCondition` - Waits until the actions in progress meet a given condition.
+   * - `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * - `waitActionType` - Waits until an action of a given type is NOT in progress.
+   * - `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
+   * - `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
    */
   async waitActionCondition(
     //
@@ -946,73 +942,32 @@ class StoreDispatchers<St> {
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
-   * Examples:
+   * Example, in a component:
    *
-   * ```ts
-   * // Dispatches an actions that changes the state, then await for the state change:
-   * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(store.state.name).toBe('Bill');
+   * ```tsx
+   * function BuyBothButton() {
+   *   const store = useStore();
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await waitAllActions();
-   * expect(state.stocks).toEqual(['IBM', 'TSLA']);
+   *   async function buyBoth() {
+   *     const buyIBM = new BuyStock('IBM');
+   *     const buyTSLA = new BuyStock('TSLA');
+   *     store.dispatch(buyIBM);
+   *     store.dispatch(buyTSLA);
+   *     await store.waitAllActions([buyIBM, buyTSLA]);
+   *     showMessage('Done.');
+   *   }
    *
-   * // Dispatches two actions in PARALLEL and wait for their TYPES:
-   * expect(store.state.portfolio).toEqual(['TSLA']);
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new SellAction('TSLA'));
-   * await store.waitAllActionTypes([BuyAction, SellAction]);
-   * expect(store.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await store.waitAllActions();
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(true);
-   *
-   * // Dispatches two actions in PARALLEL and wait for them:
-   * let action1 = new BuyAction('IBM');
-   * let action2 = new SellAction('TSLA');
-   * dispatch(action1);
-   * dispatch(action2);
-   * await store.waitAllActions([action1, action2]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches two actions in SERIES and wait for them:
-   * await dispatchAndWait(new BuyAction('IBM'));
-   * await dispatchAndWait(new SellAction('TSLA'));
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches an action and waits until no action of its type is in progress.
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitActionType(ChangeNameAction);
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
-   * expect(store.state.name).toBe('Bill');
-   *
-   * // Wait until some action of the given types is dispatched.
-   * dispatch(new ProcessStocksAction());
-   * let action = await store.waitAnyActionTypeFinishes([BuyAction, SellAction]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   *  ```
+   *   return <button onClick={buyBoth}>Buy IBM and TSLA</button>;
+   * }
+   * ```
    *
    * See also:
-   * `waitCondition` - Waits until the state is in a given condition.
-   * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
-   * `waitActionType` - Waits until an action of a given type is NOT in progress.
-   * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
-   * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
-   *
-   * You should only use this method in tests.
+   * - `waitCondition` - Waits until the state is in a given condition.
+   * - `waitActionCondition` - Waits until the actions in progress meet a given condition.
+   * - `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * - `waitActionType` - Waits until an action of a given type is NOT in progress.
+   * - `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
+   * - `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
    */
   waitAllActions(
     actions: KissAction<St>[] | null,
@@ -1048,8 +1003,8 @@ class StoreDispatchers<St> {
    * - If an action of the given type is in progress, the promise completes when the action
    *   finishes, and returns the action. You can use the returned action to check its `status`:
    *
-   *   ```dart
-   *   var action = await store.waitActionType(MyAction);
+   *   ```ts
+   *   let action = await store.waitActionType(MyAction);
    *   expect(action.status.originalError).toBeInstanceOf(UserException);
    *   ```
    *
@@ -1062,73 +1017,16 @@ class StoreDispatchers<St> {
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
-   * Examples:
-   *
-   * ```ts
-   * // Dispatches an actions that changes the state, then await for the state change:
-   * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(store.state.name).toBe('Bill');
-   *
-   * // Dispatches actions and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await waitAllActions();
-   * expect(state.stocks).toEqual(['IBM', 'TSLA']);
-   *
-   * // Dispatches two actions in PARALLEL and wait for their TYPES:
-   * expect(store.state.portfolio).toEqual(['TSLA']);
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new SellAction('TSLA'));
-   * await store.waitAllActionTypes([BuyAction, SellAction]);
-   * expect(store.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await store.waitAllActions();
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(true);
-   *
-   * // Dispatches two actions in PARALLEL and wait for them:
-   * let action1 = new BuyAction('IBM');
-   * let action2 = new SellAction('TSLA');
-   * dispatch(action1);
-   * dispatch(action2);
-   * await store.waitAllActions([action1, action2]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches two actions in SERIES and wait for them:
-   * await dispatchAndWait(new BuyAction('IBM'));
-   * await dispatchAndWait(new SellAction('TSLA'));
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches an action and waits until no action of its type is in progress.
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitActionType(ChangeNameAction);
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
-   * expect(store.state.name).toBe('Bill');
-   *
-   * // Wait until some action of the given types is dispatched.
-   * dispatch(new ProcessStocksAction());
-   * let action = await store.waitAnyActionTypeFinishes([BuyAction, SellAction]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   *  ```
+   * You should only use this method in tests. In tests you usually have the store itself,
+   * so see the same method in `Store`, which has more examples.
    *
    * See also:
-   * `waitCondition` - Waits until the state is in a given condition.
-   * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
-   * `waitActionType` - Waits until an action of a given type is NOT in progress.
-   * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
-   * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
-   *
-   * You should only use this method in tests.
+   * - `waitCondition` - Waits until the state is in a given condition.
+   * - `waitActionCondition` - Waits until the actions in progress meet a given condition.
+   * - `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * - `waitActionType` - Waits until an action of a given type is NOT in progress.
+   * - `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
+   * - `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
    */
   async waitActionType(
     actionType: { new(...args: any[]): KissAction<St> },
@@ -1171,73 +1069,16 @@ class StoreDispatchers<St> {
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
-   * Examples:
-   *
-   * ```ts
-   * // Dispatches an actions that changes the state, then await for the state change:
-   * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(store.state.name).toBe('Bill');
-   *
-   * // Dispatches actions and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await waitAllActions();
-   * expect(state.stocks).toEqual(['IBM', 'TSLA']);
-   *
-   * // Dispatches two actions in PARALLEL and wait for their TYPES:
-   * expect(store.state.portfolio).toEqual(['TSLA']);
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new SellAction('TSLA'));
-   * await store.waitAllActionTypes([BuyAction, SellAction]);
-   * expect(store.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await store.waitAllActions();
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(true);
-   *
-   * // Dispatches two actions in PARALLEL and wait for them:
-   * let action1 = new BuyAction('IBM');
-   * let action2 = new SellAction('TSLA');
-   * dispatch(action1);
-   * dispatch(action2);
-   * await store.waitAllActions([action1, action2]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches two actions in SERIES and wait for them:
-   * await dispatchAndWait(new BuyAction('IBM'));
-   * await dispatchAndWait(new SellAction('TSLA'));
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches an action and waits until no action of its type is in progress.
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitActionType(ChangeNameAction);
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
-   * expect(store.state.name).toBe('Bill');
-   *
-   * // Wait until some action of the given types is dispatched.
-   * dispatch(new ProcessStocksAction());
-   * let action = await store.waitAnyActionTypeFinishes([BuyAction, SellAction]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   *  ```
+   * You should only use this method in tests. In tests you usually have the store itself,
+   * so see the same method in `Store`, which has more examples.
    *
    * See also:
-   * `waitCondition` - Waits until the state is in a given condition.
-   * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
-   * `waitActionType` - Waits until an action of a given type is NOT in progress.
-   * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
-   * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
-   *
-   * You should only use this method in tests.
+   * - `waitCondition` - Waits until the state is in a given condition.
+   * - `waitActionCondition` - Waits until the actions in progress meet a given condition.
+   * - `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * - `waitActionType` - Waits until an action of a given type is NOT in progress.
+   * - `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
+   * - `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
    */
   async waitAllActionTypes(
     actionTypes: { new(...args: any[]): KissAction<any> }[],
@@ -1272,8 +1113,8 @@ class StoreDispatchers<St> {
    * method. For example, suppose action `StartAction` starts a process that takes some time
    * to run and then dispatches an action called `MyFinalAction`. You can then write:
    *
-   * ```dart
-   * dispatch(StartAction());
+   * ```ts
+   * store.dispatch(new StartAction());
    * let action = await store.waitAnyActionTypeFinishes([MyFinalAction]);
    * expect(action.status.originalError).toBeInstanceOf(UserException);
    * ```
@@ -1287,73 +1128,16 @@ class StoreDispatchers<St> {
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
    *
-   * Examples:
-   *
-   * ```ts
-   * // Dispatches an actions that changes the state, then await for the state change:
-   * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(store.state.name).toBe('Bill');
-   *
-   * // Dispatches actions and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await waitAllActions();
-   * expect(state.stocks).toEqual(['IBM', 'TSLA']);
-   *
-   * // Dispatches two actions in PARALLEL and wait for their TYPES:
-   * expect(store.state.portfolio).toEqual(['TSLA']);
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new SellAction('TSLA'));
-   * await store.waitAllActionTypes([BuyAction, SellAction]);
-   * expect(store.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * dispatch(new BuyAction('IBM'));
-   * dispatch(new BuyAction('TSLA'));
-   * await store.waitAllActions();
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(true);
-   *
-   * // Dispatches two actions in PARALLEL and wait for them:
-   * let action1 = new BuyAction('IBM');
-   * let action2 = new SellAction('TSLA');
-   * dispatch(action1);
-   * dispatch(action2);
-   * await store.waitAllActions([action1, action2]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches two actions in SERIES and wait for them:
-   * await dispatchAndWait(new BuyAction('IBM'));
-   * await dispatchAndWait(new SellAction('TSLA'));
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   * expect(store.state.portfolio.includes('TSLA')).toBe(false);
-   *
-   * // Dispatches an action and waits until no action of its type is in progress.
-   * dispatch(new ChangeNameAction('Bill'));
-   * let action = await store.waitActionType(ChangeNameAction);
-   * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
-   * expect(store.state.name).toBe('Bill');
-   *
-   * // Wait until some action of the given types is dispatched.
-   * dispatch(new ProcessStocksAction());
-   * let action = await store.waitAnyActionTypeFinishes([BuyAction, SellAction]);
-   * expect(store.state.portfolio.includes('IBM')).toBe(true);
-   *  ```
+   * You should only use this method in tests. In tests you usually have the store itself,
+   * so see the same method in `Store`, which has more examples.
    *
    * See also:
-   * `waitCondition` - Waits until the state is in a given condition.
-   * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
-   * `waitActionType` - Waits until an action of a given type is NOT in progress.
-   * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
-   * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
-   *
-   * You should only use this method in tests.
+   * - `waitCondition` - Waits until the state is in a given condition.
+   * - `waitActionCondition` - Waits until the actions in progress meet a given condition.
+   * - `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * - `waitActionType` - Waits until an action of a given type is NOT in progress.
+   * - `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
+   * - `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
    */
   waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],

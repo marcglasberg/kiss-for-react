@@ -2,32 +2,31 @@
 // All credit goes to him. See: https://www.npmjs.com/package/esserializer
 
 import { ClassOrEnum } from '.';
-import { getClassKey, getValueFromToStringResult, isClass, notObject } from './general';
 import {
-  BUILTIN_ARRAYBUFFER,
-  BUILTIN_BOOLEAN,
-  BUILTIN_DATAVIEW,
-  BUILTIN_DATE,
-  BUILTIN_INTL_LOCALE,
-  BUILTIN_MAP,
-  BUILTIN_REGEXP,
-  BUILTIN_SET,
-  BUILTIN_SHAREDARRAYBUFFER,
-  BUILTIN_STRING,
-  ERROR_CLASSES,
-  ESSERIALIZER_NULL,
-  hasName,
-  INTL_CLASSES,
-  TYPE_BIG_INT,
+  escapeKey,
+  getClassKey,
+  getValueFromToStringResult,
+  isClass,
+  notObject,
+  setOwnProperty,
+  unescapeKey,
+} from './general';
+import {
+  BUILTIN_PREFIX,
+  TYPE_BIGINT,
   TYPE_FIELD,
-  TYPE_NOT_FINITE,
+  TYPE_HOLE,
+  TYPE_NUMBER,
   TYPE_UNDEFINED,
-  TYPED_ARRAY_CLASSES,
-  VALUE_FIELD
+  VALUE_FIELD,
 } from './constant';
+import { findInheritedBuiltinType, getBuiltinTypeBySavedType } from './builtins';
 import DeserializeOptions from './DeserializationOptions';
 
-/** Maps the name a class is saved under (see `getClassKey`) to the class itself. */
+/**
+ * Maps the name a class is saved under (see `getClassKey`) to the class itself.
+ * Read it with `hasOwnProperty`, so that names like `toString` don't find inherited functions.
+ */
 type ClassMapping = Record<string, any>;
 
 const REGEXP_BEGIN_WITH_CLASS = /^\s*class\s+/;
@@ -67,131 +66,78 @@ function deserializeFromParsedObjWithClassMapping(
     return parsedObj;
   }
 
+  const deserializeNested = (value: any) => deserializeFromParsedObjWithClassMapping(value, classMapping);
+
   if (Array.isArray(parsedObj)) {
-    return _deserializeArray(parsedObj, classMapping);
+    return _deserializeArray(parsedObj, deserializeNested);
   }
 
-  const className: string | undefined = parsedObj[TYPE_FIELD];
-  const builtinValue = _deserializeBuiltinType(className, parsedObj, classMapping);
-  if (builtinValue !== ESSERIALIZER_NULL) {
-    return builtinValue;
+  const type: string | undefined = parsedObj[TYPE_FIELD];
+
+  // A plain object.
+  if (type === undefined) {
+    return _copyDeserializedValues({}, parsedObj, classMapping, options);
   }
 
-  const classObj = className ? classMapping[className] : undefined;
-  if (className && !classObj) {
-    throw new Error(`Class "${className}" not found during deserialization. You must register it with: "ESSerializer.registerClass(${className});"`);
+  // A built-in type.
+  if (type.startsWith(BUILTIN_PREFIX)) {
+    const value = parsedObj[VALUE_FIELD];
+    switch (type) {
+      case TYPE_UNDEFINED:
+        return undefined;
+      case TYPE_NUMBER:
+        return getValueFromToStringResult(value);
+      case TYPE_BIGINT:
+        return BigInt(value);
+    }
+    const builtinType = getBuiltinTypeBySavedType(type);
+    if (!builtinType) {
+      throw new Error(`Unknown built-in type "${type}" found during deserialization.`);
+    }
+    const instance = builtinType.decode(value, deserializeNested);
+    return _copyDeserializedValues(instance, parsedObj, classMapping, options);
   }
 
-  const constructorParameters = (options.fieldsForConstructorParameters ?? []).map(
+  // A user class.
+  const classObj = Object.prototype.hasOwnProperty.call(classMapping, type) ? classMapping[type] : undefined;
+  if (!classObj) {
+    throw new Error(`Class "${type}" not found during deserialization. You must register it with: "ESSerializer.registerClass(${type});"`);
+  }
+
+  const constructorParameters = (options.fieldsForConstructorParameters ?? []).map((field) => {
+    const savedKey = escapeKey(field);
     // Pass `{}` for missing fields, instead of undefined.
-    (field) => (field in parsedObj ? parsedObj[field] : {}));
+    return savedKey in parsedObj ? parsedObj[savedKey] : {};
+  });
 
   const instance = _createInstance(classObj, constructorParameters);
+
+  // A user class that extends a built-in class also has the built-in data, like the entries of a Map.
+  if (VALUE_FIELD in parsedObj) {
+    findInheritedBuiltinType(instance)?.fill?.(instance, parsedObj[VALUE_FIELD], deserializeNested);
+  }
+
   return _copyDeserializedValues(instance, parsedObj, classMapping, options);
 }
 
-function _deserializeArray(parsedArray: any[], classMapping: ClassMapping): any[] {
-  return parsedArray.map((item) => deserializeFromParsedObjWithClassMapping(item, classMapping));
+/** Deserializes the items of an array. Holes saved as `{"*type": "@hole"}` are kept as holes. */
+function _deserializeArray(parsedArray: any[], deserializeNested: (value: any) => any): any[] {
+  const result = new Array(parsedArray.length);
+  parsedArray.forEach((item, index) => {
+    if (item?.[TYPE_FIELD] !== TYPE_HOLE) {
+      result[index] = deserializeNested(item);
+    }
+  });
+  return result;
 }
 
 /**
- * Rebuilds built-in values (typed arrays, Dates, Maps, Errors, etc.) and special primitives.
- * Returns `ESSERIALIZER_NULL` if `typeName` is not a built-in type.
- */
-function _deserializeBuiltinType(typeName: string | undefined, parsedObj: any, classMapping: ClassMapping): any {
-  if (typeName === undefined) {
-    return ESSERIALIZER_NULL;
-  }
-
-  const value = parsedObj[VALUE_FIELD];
-
-  switch (typeName) {
-    // Special primitives.
-    case TYPE_UNDEFINED:
-      return undefined;
-    case TYPE_NOT_FINITE:
-      return getValueFromToStringResult(value);
-    case TYPE_BIG_INT:
-      return BigInt(value);
-
-    // Binary data.
-    case BUILTIN_ARRAYBUFFER:
-      return new Uint8Array(value).buffer;
-    case BUILTIN_SHAREDARRAYBUFFER:
-      return _deserializeSharedArrayBuffer(value);
-    case BUILTIN_DATAVIEW:
-      return new DataView(new Uint8Array(value).buffer);
-
-    // Wrapper objects.
-    case BUILTIN_BOOLEAN:
-      // noinspection JSPrimitiveTypeWrapperUsage
-      return new Boolean(value);
-    case BUILTIN_STRING:
-      // noinspection JSPrimitiveTypeWrapperUsage
-      return new String(value);
-
-    // Other built-in classes.
-    case BUILTIN_DATE:
-      // An invalid date is saved with a null timestamp.
-      return typeof value === 'number' ? new Date(value) : null;
-    case BUILTIN_REGEXP:
-      return new RegExp(value.source, value.flags);
-    case BUILTIN_MAP:
-      return new Map(_deserializeArray(value, classMapping));
-    case BUILTIN_SET:
-      return new Set(_deserializeArray(value, classMapping));
-    case BUILTIN_INTL_LOCALE:
-      return new Intl.Locale(value);
-  }
-
-  if (hasName(TYPED_ARRAY_CLASSES, typeName)) {
-    // Items may be non-finite numbers or BigInts, so they are deserialized too.
-    return new TYPED_ARRAY_CLASSES[typeName](_deserializeArray(value, classMapping));
-  }
-  if (hasName(INTL_CLASSES, typeName)) {
-    const { locale, ...options } = value;
-    return new INTL_CLASSES[typeName](locale, options);
-  }
-  if (hasName(ERROR_CLASSES, typeName)) {
-    return _deserializeError(parsedObj, ERROR_CLASSES[typeName], classMapping);
-  }
-  return ESSERIALIZER_NULL;
-}
-
-function _deserializeSharedArrayBuffer(bytes: number[]): SharedArrayBuffer {
-  const buffer = new SharedArrayBuffer(bytes.length);
-  new Uint8Array(buffer).set(bytes);
-  return buffer;
-}
-
-function _deserializeError(parsedObj: any, ErrorClass: any, classMapping: ClassMapping) {
-  const error = parsedObj.message ? new ErrorClass(parsedObj.message) : new ErrorClass();
-
-  // Use the saved stack, not the one of this new error.
-  delete error.stack;
-  if (parsedObj.stack) {
-    error.stack = parsedObj.stack;
-  }
-  if (parsedObj.name) {
-    error.name = parsedObj.name;
-  }
-  if (ErrorClass === AggregateError) {
-    error.errors = deserializeFromParsedObjWithClassMapping(parsedObj.errors, classMapping);
-  }
-  return error;
-}
-
-/**
- * Creates an instance of `classObj` (or a plain object, if there's no class), to receive the
+ * Creates an instance of `classObj`, to receive the
  * saved values. Constructor parameters not given in `constructorParameters` are filled with
  * fallback values. If the constructor throws for all of them, the instance is created without
  * calling the constructor.
  */
 function _createInstance(classObj: any, constructorParameters: any[]): object {
-  if (!classObj) {
-    return {};
-  }
-
   const isEs6Class = REGEXP_BEGIN_WITH_CLASS.test(classObj.toString());
   const missingParameterCount = Math.max(classObj.length - constructorParameters.length, 0);
 
@@ -241,14 +187,19 @@ function _tryToConstruct(classObj: any, isEs6Class: boolean, parameters: any[]):
 function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: ClassMapping, options: DeserializeOptions) {
   const { ignoreProperties, rawProperties } = options;
 
-  for (const key in parsedObj) {
-    if (key === TYPE_FIELD || ignoreProperties?.includes(key)) {
+  for (const savedKey in parsedObj) {
+    if (savedKey === TYPE_FIELD || savedKey === VALUE_FIELD) {
       continue;
     }
 
-    const value = parsedObj[key];
+    const key = unescapeKey(savedKey);
+    if (ignoreProperties?.includes(key)) {
+      continue;
+    }
+
+    const value = parsedObj[savedKey];
     if (rawProperties?.includes(key)) {
-      instance[key] = JSON.stringify(value);
+      setOwnProperty(instance, key, JSON.stringify(value));
       continue;
     }
 
@@ -265,18 +216,19 @@ function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: Cl
       }
     }
 
-    instance[key] = deserializeFromParsedObjWithClassMapping(value, classMapping);
+    setOwnProperty(instance, key, deserializeFromParsedObjWithClassMapping(value, classMapping));
   }
   return instance;
 }
 
 /** Copies the fields of `source` into `target`, except the ones that `target` has as read-only. */
 function _copyWritableFields(target: any, source: any, classMapping: ClassMapping) {
-  for (const field in source) {
+  for (const savedKey in source) {
+    const field = unescapeKey(savedKey);
     const descriptor = Object.getOwnPropertyDescriptor(target, field);
     const isReadOnly = descriptor && descriptor.writable !== true && typeof descriptor.set !== 'function';
     if (!isReadOnly) {
-      target[field] = deserializeFromParsedObjWithClassMapping(source[field], classMapping);
+      setOwnProperty(target, field, deserializeFromParsedObjWithClassMapping(source[savedKey], classMapping));
     }
   }
 }

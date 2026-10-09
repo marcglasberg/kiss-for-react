@@ -47,7 +47,7 @@ const complexParsedObj = {
 const parsedObjWithDateFieldValue = {
   id: 1,
   date: {
-    '*type': 'Date',
+    '*type': '@Date',
     '*value': 1613723040000
   }
 };
@@ -55,7 +55,7 @@ const parsedObjWithDateFieldValue = {
 const parsedObjWithInvalidDateFieldValue = {
   id: 1,
   date: {
-    '*type': 'Date',
+    '*type': '@Date',
     '*value': 'invalid timestamp'
   }
 };
@@ -100,19 +100,21 @@ describe('Test getParentClassName', () => {
 
 describe('Test deserializeFromParsedObjWithClassMapping', () => {
   const deserializedValueForBooleanObject = deserializeFromParsedObjWithClassMapping({
-    '*type': 'Boolean',
+    '*type': '@Boolean',
     '*value': false
   }, {});
   const deserializedValueForErrorObject = deserializeFromParsedObjWithClassMapping({
-    '*type': 'Error',
-    name: 'UnexpectedError',
-    message: 'a nightmare'
+    '*type': '@Error',
+    '*value': {
+      name: 'UnexpectedError',
+      message: 'a nightmare'
+    }
   }, {});
   const deserializedValueForNotFinite = deserializeFromParsedObjWithClassMapping({
-    '*type': 'NF',
+    '*type': '@number',
     '*value': 'Infinity'
   }, {});
-  const deserializedValueForUndefined = deserializeFromParsedObjWithClassMapping({ '*type': 'UD' }, {});
+  const deserializedValueForUndefined = deserializeFromParsedObjWithClassMapping({ '*type': '@undefined' }, {});
   const deserializedValueForNoneObject = deserializeFromParsedObjWithClassMapping(42, classMapping);
   const deserializedValueForSimpleObject = deserializeFromParsedObjWithClassMapping(simpleParsedObj, classMapping);
   const deserializedValueForComplexObject = deserializeFromParsedObjWithClassMapping(complexParsedObj, classMapping);
@@ -176,9 +178,10 @@ describe('Test deserializeFromParsedObj', () => {
     expect(deserializedValueForObjWithDateFieldValue.date).toStrictEqual(new Date('2021-02-19T08:24:00Z'));
   });
 
-  test('will deserialize object with invalid Date field as null', () => {
+  test('will deserialize object with invalid Date field as an invalid Date', () => {
     const deserializedValueForObjWithDateFieldValue = deserializeFromParsedObj(parsedObjWithInvalidDateFieldValue, [], {});
-    expect(deserializedValueForObjWithDateFieldValue.date).toBe(null);
+    expect(deserializedValueForObjWithDateFieldValue.date).toBeInstanceOf(Date);
+    expect(deserializedValueForObjWithDateFieldValue.date.getTime()).toBeNaN();
   });
 
   test('support instanceof operator', () => {

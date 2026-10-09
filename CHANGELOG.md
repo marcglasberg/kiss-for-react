@@ -21,6 +21,10 @@
   });
   ```
 
+* New hook `useObject()`, to select an object (or array) with some parts of the state. The
+  component re-renders only when one of its values changes:
+  `useObject((state: State) => ({ name: state.name, age: state.age }))`.
+
 * New hook `useIsStoreReady()`: returns `false` while the store is loading the persisted
   state, and `true` after. Use it to show a loading state, and to disable the buttons that
   dispatch actions, while the store is not ready.

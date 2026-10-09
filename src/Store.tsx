@@ -32,7 +32,7 @@ interface ConstructorParams<St> {
    * `next` will do nothing. Otherwise, it will call `showUserException` again. Example:
    *
    * ```ts
-   * const showUserException: UserExceptionDialog =
+   * const showUserException: ShowUserException =
    *   (exception, count, next) => {
    *     Alert.alert(
    *       exception.title || exception.message,
@@ -66,7 +66,7 @@ interface ConstructorParams<St> {
    * ```ts
    * const store = new Store<State>({
    *   initialState: new State(),
-   *   logger: (obj: any) => process.stdout.write(obj + '\n');
+   *   logger: (obj) => process.stdout.write(obj + '\n'),
    * });
    * ```
    *
@@ -77,7 +77,7 @@ interface ConstructorParams<St> {
    *
    * const store = new Store<State>({
    *   initialState: new State(),
-   *   logger: (obj: any) => Logger.log(obj);
+   *   logger: (obj) => Logger.log(obj),
    * });
    * ```
    *
@@ -188,7 +188,7 @@ interface ConstructorParams<St> {
    * It's also a good place to add METRICS to your application. For example:
    *
    * ```ts
-   * function stateObserver(action, prevState, newState, error, dispatchCount) {
+   * function stateObserver(action: KissAction<State>, prevState: State, newState: State, error: any, dispatchCount: number) {
    *   saveMetrics(action, newState, error);
    * }
    * ```
@@ -202,7 +202,7 @@ interface ConstructorParams<St> {
    *   async reduce() {
    *     let user = await loadUser();
    *     this.log('User', user.id); // Here!
-   *     return (state) => state.copy(user: user);
+   *     return (state: State) => state.copy({ user });
    *   }
    * }
    *
@@ -233,7 +233,7 @@ interface ConstructorParams<St> {
    * and you want to throw all errors during development and tests, this is how you can do it:
    *
    * ```
-   * errorObserver: (error, action) {
+   * errorObserver: (error, action) => {
    *
    *    // In development, we throw the error so that we can see it in the emulator/console.
    *    if (inDevelopment() || inTests() || (error instanceof UserException)) return true;
@@ -381,7 +381,7 @@ export class Store<St> {
    * ```ts
    * const store = new Store<State>({
    *   initialState: new State(),
-   *   logger: (obj: any) => process.stdout.write(obj + '\n');
+   *   logger: (obj) => process.stdout.write(obj + '\n'),
    * });
    * ```
    *
@@ -392,7 +392,7 @@ export class Store<St> {
    *
    * const store = new Store<State>({
    *   initialState: new State(),
-   *   logger: (obj: any) => Logger.log(obj);
+   *   logger: (obj) => Logger.log(obj),
    * });
    * ```
    *
@@ -404,7 +404,7 @@ export class Store<St> {
    * ```ts
    * const store = new Store<State>({
    *   initialState: new State(),
-   *   logger: null;
+   *   logger: null,
    * });
    * ```
    *
@@ -498,7 +498,7 @@ export class Store<St> {
    *
    * Note: Throwing an `UserException` can show a modal dialog to the user, and also show the error
    * as a message in the UI. If you don't want to show the dialog you can use the `noDialog`
-   * getter in the error message: `throw UserException('Invalid input').noDialog`.
+   * getter in the error message: `throw new UserException('Invalid input').noDialog`.
    */
   private readonly _failedActions: Map<new (...args: any[]) => KissAction<St>, KissAction<St>>;
 
@@ -573,14 +573,14 @@ export class Store<St> {
    * store.mocks.add(IncrementAction, null);
    *
    * // Removes the mock for Increment.
-   * store.mocks.remove(Increment);
+   * store.mocks.remove(IncrementAction);
    *
    * // Removes all mocks.
    * store.mocks.clear();
    *
    * // When an AddAction is dispatched, the value will be subtracted instead.
    * store.mocks.add(AddAction, (action) => new AddAction(-action.value));
-   * ```ts
+   * ```
    */
   public mocks: Mocks<St> = new Mocks<St>();
 
@@ -826,7 +826,7 @@ export class Store<St> {
    * let action2 = new SellAction('TSLA');
    * store.dispatch(action1);
    * store.dispatch(action2);
-   * await store.waitAllActions([action1, action2], true);
+   * await store.waitAllActions([action1, action2], { completeImmediately: true });
    * let actions = [action1, action2];
    * ```
    *
@@ -1631,7 +1631,7 @@ export class Store<St> {
    * An example using React Native:
    *
    * ```ts
-   * const showUserException = (exception: UserException, next: () => void) => {
+   * const showUserException = (exception: UserException, count: number, next: () => void) => {
    *     Alert.alert(
    *       exception.title || exception.message,
    *       exception.title ? exception.message : '',
@@ -1721,8 +1721,8 @@ export class Store<St> {
    * Note an action is ASYNC if it returns a promise from its `before` OR its `reduce` methods.
    *
    * ```ts
-   * dispatch(MyAction());
-   * if (store.isWaiting(MyAction)) { // Show a spinner }   *
+   * store.dispatch(new MyAction());
+   * if (store.isWaiting(MyAction)) { ... } // Show a spinner
    * ```
    */
   isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T): boolean {
@@ -1967,11 +1967,13 @@ export class Store<St> {
    *
    * Examples:
    *
+   * ```ts
    * // Dispatch actions and wait for the state change:
    * expect(store.state.user.isLoggedIn).toBe(false);
    * dispatch(new LogInUser("Mary"));
    * await store.waitCondition((state) => state.user.isLoggedIn, { timeoutMillis: 1000 });
-   * expect(store.state.user.name, "Mary");
+   * expect(store.state.user.name).toBe("Mary");
+   * ```
    *
    * If the condition throws, the returned promise rejects with that error, and the wait ends.
    * The action whose state change ran the condition is not affected: it still completes
@@ -2180,7 +2182,7 @@ export class Store<St> {
    * expect(state.stocks).toEqual(['TSLA']);
    * dispatch(new BuyAction('IBM'));
    * dispatch(new SellAction('TSLA'));
-   * await waitAllActions([]);
+   * await store.waitAllActions([]);
    * expect(state.stocks).toEqual(['IBM']);
    *
    * // Dispatch two actions in PARALLEL and wait for them to finish:
@@ -2196,8 +2198,8 @@ export class Store<St> {
    * // by using with `dispatchAndWaitAll` to wait for them:
    * expect(state.stocks).toEqual(['TSLA']);
    * await dispatchAndWaitAll([
-   *   new SellAction('IBM'),
-   *   new BuyAction('TSLA')
+   *   new BuyAction('IBM'),
+   *   new SellAction('TSLA')
    * ]);
    * expect(state.stocks).toEqual(['IBM']);
    *
@@ -2273,8 +2275,8 @@ export class Store<St> {
    * - If an action of the given type is in progress, the promise completes when the action
    *   finishes, and returns the action. You can use the returned action to check its `status`:
    *
-   *   ```dart
-   *   var action = await store.waitActionType(MyAction);
+   *   ```ts
+   *   let action = await store.waitActionType(MyAction);
    *   expect(action.status.originalError).toBeInstanceOf(UserException);
    *   ```
    *
@@ -2433,8 +2435,8 @@ export class Store<St> {
    * method. For example, suppose action `StartAction` starts a process that takes some time
    * to run and then dispatches an action called `MyFinalAction`. You can then write:
    *
-   * ```dart
-   * dispatch(StartAction());
+   * ```ts
+   * dispatch(new StartAction());
    * let action = await store.waitAnyActionTypeFinishes([MyFinalAction]);
    * expect(action.status.originalError).toBeInstanceOf(UserException);
    * ```

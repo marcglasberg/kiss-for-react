@@ -285,8 +285,8 @@ describe('built-in values', () => {
   });
 
   test('the data of built-in values is saved in the *value field', () => {
-    expect(JSON.parse(ESSerializer.serialize(new Date(5)))).toEqual({ '*type': 'Date', '*value': 5 });
-    expect(JSON.parse(ESSerializer.serialize(new Set([1])))).toEqual({ '*type': 'Set', '*value': [1] });
-    expect(JSON.parse(ESSerializer.serialize(10n))).toEqual({ '*type': 'BI', '*value': '10' });
+    expect(JSON.parse(ESSerializer.serialize(new Date(5)))).toEqual({ '*type': '@Date', '*value': 5 });
+    expect(JSON.parse(ESSerializer.serialize(new Set([1])))).toEqual({ '*type': '@Set', '*value': [1] });
+    expect(JSON.parse(ESSerializer.serialize(10n))).toEqual({ '*type': '@bigint', '*value': '10' });
   });
 });

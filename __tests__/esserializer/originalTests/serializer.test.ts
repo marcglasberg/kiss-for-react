@@ -6,7 +6,7 @@ import { getSerializeValueWithClassName } from '../../../src/Esserializer/serial
 
 describe('Test getSerializeValueWithClassName', () => {
   test('return special object for undefined', () => {
-    expect(getSerializeValueWithClassName(undefined)).toStrictEqual({ '*type': 'UD' });
+    expect(getSerializeValueWithClassName(undefined)).toStrictEqual({ '*type': '@undefined' });
   });
 
   test('return target as it is when it\'s not an object', () => {
@@ -46,7 +46,7 @@ describe('Test getSerializeValueWithClassName', () => {
       name: 'Tiger',
       age: 42,
       sad: null,
-      hate: { '*type': 'UD' },
+      hate: { '*type': '@undefined' },
       live: true,
       son: {
         _name: 'SmallTiger',
@@ -79,7 +79,7 @@ describe('Test getSerializeValueWithClassName', () => {
     expect(getSerializeValueWithClassName(objWithDate)).toStrictEqual({
       id: 1,
       date: {
-        '*type': 'Date',
+        '*type': '@Date',
         '*value': 1613723040000
       }
     });
@@ -90,7 +90,7 @@ describe('Test getSerializeValueWithClassName', () => {
     const objWithBoolean = { b: new Boolean(true) };
     expect(getSerializeValueWithClassName(objWithBoolean)).toStrictEqual({
       b: {
-        '*type': 'Boolean',
+        '*type': '@Boolean',
         '*value': true
       }
     });
@@ -105,9 +105,11 @@ describe('Test getSerializeValueWithClassName', () => {
     };
     expect(getSerializeValueWithClassName(objWithError)).toStrictEqual({
       e: {
-        '*type': 'Error',
-        message: 'some error',
-        name: 'UnexpectedError'
+        '*type': '@Error',
+        '*value': {
+          message: 'some error',
+          name: 'UnexpectedError'
+        }
       }
     });
   });

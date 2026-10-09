@@ -1,13 +1,15 @@
 // The Esserializer code was copied and adapted from the original copyrighted work, MIT licensed, by cshao.
 // All credit goes to him. See: https://www.npmjs.com/package/esserializer
 
+import { KEY_ESCAPE } from './constant';
+
 /** Returns true for primitives (including `null`), and for functions. */
 function notObject(target: any): boolean {
   return target === null || typeof target !== 'object';
 }
 
 /**
- * Converts the text form of a non-finite number back into the number.
+ * Converts the text form of a number JSON can't represent back into the number.
  * Returns `null` for any other text.
  */
 function getValueFromToStringResult(text: string): number | null {
@@ -18,6 +20,8 @@ function getValueFromToStringResult(text: string): number | null {
       return -Infinity;
     case 'NaN':
       return NaN;
+    case '-0':
+      return -0;
     default:
       return null;
   }
@@ -53,9 +57,46 @@ function isClass(target: any): boolean {
   }
 }
 
+/** Returns true if `fn` is implemented by the JavaScript engine, not by user code. */
+function isNativeFunction(fn: object): boolean {
+  return /\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(fn));
+}
+
+/** Escapes a user key, so that it's not confused with the metadata fields. */
+function escapeKey(key: string): string {
+  return key.startsWith(KEY_ESCAPE) ? KEY_ESCAPE + key : key;
+}
+
+/** Reverses `escapeKey`. */
+function unescapeKey(savedKey: string): string {
+  return savedKey.startsWith(KEY_ESCAPE) ? savedKey.substring(KEY_ESCAPE.length) : savedKey;
+}
+
+/**
+ * Sets an own property. Unlike `obj[key] = value`, this also works for the key `__proto__`,
+ * which would otherwise change the prototype of `obj`, instead of creating a property.
+ */
+function setOwnProperty(obj: any, key: string, value: any) {
+  if (key === '__proto__') {
+    Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+  } else {
+    obj[key] = value;
+  }
+}
+
+/** Sets a non-enumerable own property, like the `message` of an error. */
+function setHiddenProperty(obj: any, key: string, value: any) {
+  Object.defineProperty(obj, key, { value, writable: true, enumerable: false, configurable: true });
+}
+
 export {
   getValueFromToStringResult,
   notObject,
   isClass,
-  getClassKey
+  isNativeFunction,
+  getClassKey,
+  escapeKey,
+  unescapeKey,
+  setOwnProperty,
+  setHiddenProperty,
 };

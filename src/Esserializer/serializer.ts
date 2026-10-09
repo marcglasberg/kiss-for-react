@@ -3,29 +3,16 @@
 
 import SerializeOptions from './SerializeOptions';
 import {
-  BUILTIN_ARRAYBUFFER,
-  BUILTIN_BOOLEAN,
-  BUILTIN_DATAVIEW,
-  BUILTIN_DATE,
-  BUILTIN_INTL_LOCALE,
-  BUILTIN_MAP,
-  BUILTIN_REGEXP,
-  BUILTIN_SET,
-  BUILTIN_SHAREDARRAYBUFFER,
-  BUILTIN_STRING,
-  CLASSNAMES_WHOSE_ENUMERABLE_PROPERTIES_SHOULD_BE_IGNORED,
-  ERROR_CLASSES,
-  ESSERIALIZER_NULL,
-  hasName,
-  INTL_CLASSES,
-  TYPE_BIG_INT,
+  BUILTIN_PREFIX,
+  TYPE_BIGINT,
   TYPE_FIELD,
-  TYPE_NOT_FINITE,
+  TYPE_HOLE,
+  TYPE_NUMBER,
   TYPE_UNDEFINED,
-  TYPED_ARRAY_CLASSES,
-  VALUE_FIELD
+  VALUE_FIELD,
 } from './constant';
-import { getClassKey, notObject } from './general';
+import { escapeKey, getClassKey, isNativeFunction, setOwnProperty } from './general';
+import { findInheritedBuiltinType, getBuiltinTypeByConstructor } from './builtins';
 
 /**
  * Converts `target` into a plain JSON-compatible value. Objects get a `*type` field with
@@ -33,166 +20,176 @@ import { getClassKey, notObject } from './general';
  *
  * The `options` apply only to the top-level object, not to nested ones.
  * The `target` itself is never changed.
+ *
+ * Throws for values that can't be deserialized back: functions and symbols (except as
+ * object properties, which are skipped), circular references, and built-in classes that
+ * are not supported (like `WeakMap` or `Promise`).
  */
 function getSerializeValueWithClassName(target: any, options: SerializeOptions = {}): any {
-  const primitiveValue = _serializePrimitive(target);
-  if (primitiveValue !== ESSERIALIZER_NULL) {
-    return primitiveValue;
-  }
-
-  if (Array.isArray(target)) {
-    return _serializeArray(target);
-  }
-
-  const serializedObj: Record<string, any> = {};
-  if (!_shouldIgnoreEnumerableProperties(target)) {
-    _copySerializedProperties(target, serializedObj, options);
-  }
-
-  _appendClassInfoAndBuiltinData(target, serializedObj);
-  return serializedObj;
+  return new Serializer().serialize(target, options);
 }
 
-/**
- * Copies the serialized enumerable properties of `source` into `dest`, skipping functions.
- * Properties in `options.ignoreProperties` are skipped, and properties in
- * `options.interceptProperties` are replaced by the result of their interceptor.
- */
-function _copySerializedProperties(source: any, dest: Record<string, any>, options: SerializeOptions) {
-  const ignored = options.ignoreProperties;
-  const interceptors = options.interceptProperties;
+class Serializer {
 
-  for (const key in source) {
-    if (ignored?.includes(key)) {
-      continue;
+  /** The objects being serialized, from the top-level one down to the current one. */
+  private readonly ancestors = new Set<object>();
+
+  /** Serializes a value. Arrow function, so that it can be passed around as a callback. */
+  readonly serializeNested = (target: any): any => this.serialize(target);
+
+  serialize(target: any, options: SerializeOptions = {}): any {
+    if (typeof target !== 'object' || target === null) {
+      return _serializePrimitive(target);
     }
 
-    let value = source[key];
-    if (interceptors && Object.prototype.hasOwnProperty.call(interceptors, key)) {
-      value = interceptors[key].call(source, value);
-    }
-    if (typeof value === 'function') {
-      continue;
+    if (this.ancestors.has(target)) {
+      throw new Error('Cannot serialize a circular reference.');
     }
 
-    dest[key] = getSerializeValueWithClassName(value);
+    this.ancestors.add(target);
+    try {
+      return Array.isArray(target) && Object.getPrototypeOf(target) === Array.prototype
+        ? this._serializeArray(target)
+        : this._serializeObject(target, options);
+    } finally {
+      this.ancestors.delete(target);
+    }
   }
 
-  // Interceptors may also add properties the object doesn't have.
-  if (interceptors) {
-    for (const key in interceptors) {
-      if (key in dest || key in source || ignored?.includes(key)) {
+  /** Saves holes of sparse arrays as `{"*type": "@hole"}`, as JSON would turn them into null. */
+  private _serializeArray(arr: readonly any[]): any[] {
+    const result = new Array(arr.length);
+    for (let index = 0; index < arr.length; index++) {
+      result[index] = index in arr ? this.serialize(arr[index]) : { [TYPE_FIELD]: TYPE_HOLE };
+    }
+    return result;
+  }
+
+  private _serializeObject(target: object, options: SerializeOptions): Record<string, any> {
+    const constructor = _getConstructor(target);
+
+    // A plain object.
+    if (constructor === undefined || constructor === Object) {
+      return this._serializeProperties(target, options);
+    }
+
+    // A built-in class.
+    const builtinType = getBuiltinTypeByConstructor(constructor);
+    if (builtinType) {
+      const serializedObj = builtinType.hasItemProperties
+        ? {}
+        : this._serializeProperties(target, options, builtinType.keysSavedInValue);
+      serializedObj[TYPE_FIELD] = BUILTIN_PREFIX + builtinType.name;
+      serializedObj[VALUE_FIELD] = builtinType.encode(target, this.serializeNested);
+      return serializedObj;
+    }
+
+    if (isNativeFunction(constructor)) {
+      throw new Error(`Cannot serialize a ${constructor.name}: this class is not supported.`);
+    }
+
+    // A user class.
+    const className = getClassKey(constructor);
+    if (className.startsWith(BUILTIN_PREFIX)) {
+      throw new Error(`Cannot serialize class "${className}": class names can't start with "${BUILTIN_PREFIX}".`);
+    }
+
+    // A user class that extends a built-in class also saves the built-in data, like the entries of a Map.
+    const inheritedType = findInheritedBuiltinType(target);
+    if (inheritedType && !inheritedType.fill) {
+      throw new Error(`Cannot serialize class "${className}": subclasses of ${inheritedType.name} are not supported.`);
+    }
+
+    const serializedObj = this._serializeProperties(target, options, inheritedType?.keysSavedInValue);
+    serializedObj[TYPE_FIELD] = className;
+    if (inheritedType) {
+      serializedObj[VALUE_FIELD] = inheritedType.encode(target, this.serializeNested);
+    }
+
+    return serializedObj;
+  }
+
+  /**
+   * Serializes the enumerable properties of `source`, skipping functions and symbols.
+   * Properties in `options.ignoreProperties` are skipped, and properties in
+   * `options.interceptProperties` are replaced by the result of their interceptor.
+   * The `keysSavedInValue` are skipped, as they are saved in `*value`.
+   */
+  private _serializeProperties(
+    source: any,
+    options: SerializeOptions,
+    keysSavedInValue: readonly string[] = []
+  ): Record<string, any> {
+    const ignored = options.ignoreProperties;
+    const interceptors = options.interceptProperties;
+    const serializedObj: Record<string, any> = {};
+
+    const copy = (key: string, value: any) => {
+      if (typeof value !== 'function' && typeof value !== 'symbol') {
+        setOwnProperty(serializedObj, escapeKey(key), this.serialize(value));
+      }
+    };
+
+    // The items of an array subclass are saved apart, in `*value`.
+    const isArray = Array.isArray(source);
+
+    for (const key in source) {
+      if (ignored?.includes(key) || keysSavedInValue.includes(key) || (isArray && _isArrayIndex(key))) {
         continue;
       }
-      dest[key] = getSerializeValueWithClassName(interceptors[key].call(source, undefined));
+      const hasInterceptor = interceptors !== undefined && Object.prototype.hasOwnProperty.call(interceptors, key);
+      copy(key, hasInterceptor ? interceptors[key].call(source, source[key]) : source[key]);
     }
+
+    // Interceptors may also add properties the object doesn't have.
+    if (interceptors) {
+      for (const key in interceptors) {
+        if (!(key in source) && !ignored?.includes(key)) {
+          copy(key, interceptors[key].call(source, undefined));
+        }
+      }
+    }
+
+    return serializedObj;
   }
 }
 
 /**
- * Adds the `*type` field to `serializedObj` (unless `target` is a plain object), and,
- * for built-in classes, the data needed to rebuild them.
+ * Returns the class of `target`, or undefined if it has no prototype.
+ * Usually it's the constructor of the prototype, but when that is `Object`, it's the
+ * `constructor` property of the object itself, as in Big from big.js.
  */
-function _appendClassInfoAndBuiltinData(target: any, serializedObj: Record<string, any>) {
-  let className: string = getClassKey(Object.getPrototypeOf(target).constructor);
-  if (className === 'Object') {
-    // In case the constructor is not in the prototype, such as Big in big.js.
-    className = getClassKey(target.constructor);
+function _getConstructor(target: any): any {
+  const proto = Object.getPrototypeOf(target);
+  if (proto === null) {
+    return undefined;
   }
-  if (className === 'Object') {
-    return;
-  }
-
-  serializedObj[TYPE_FIELD] = className;
-
-  if (hasName(ERROR_CLASSES, className)) {
-    _appendErrorData(target, serializedObj);
-    return;
-  }
-
-  const value = _getBuiltinValue(target, className);
-  if (value !== ESSERIALIZER_NULL) {
-    serializedObj[VALUE_FIELD] = value;
-  }
+  const constructor = proto.constructor;
+  return constructor === Object ? target.constructor : constructor;
 }
 
-/**
- * Returns the data needed to rebuild a built-in value, or `ESSERIALIZER_NULL` if `className`
- * is not a built-in class saved this way.
- */
-function _getBuiltinValue(target: any, className: string): any {
-  switch (className) {
-    case BUILTIN_ARRAYBUFFER:
-    case BUILTIN_SHAREDARRAYBUFFER:
-      return Array.from(new Uint8Array(target));
-    case BUILTIN_DATAVIEW:
-      return Array.from(new Uint8Array(target.buffer, target.byteOffset, target.byteLength));
-    case BUILTIN_BOOLEAN:
-      return target.valueOf();
-    case BUILTIN_STRING:
-    case BUILTIN_INTL_LOCALE:
-      return target.toString();
-    case BUILTIN_DATE:
-      return target.getTime(); // NaN for an invalid date, which JSON saves as null.
-    case BUILTIN_REGEXP:
-      return { source: target.source, flags: target.flags };
-    case BUILTIN_MAP: // Saved as an array of [key, value] pairs.
-    case BUILTIN_SET:
-      return _serializeArray(Array.from(target));
-  }
-  if (hasName(TYPED_ARRAY_CLASSES, className)) {
-    // Items may be non-finite numbers or BigInts, so they are serialized too.
-    return _serializeArray(Array.from(target));
-  }
-  if (hasName(INTL_CLASSES, className)) {
-    return target.resolvedOptions();
-  }
-  return ESSERIALIZER_NULL;
+function _isArrayIndex(key: string): boolean {
+  return /^(0|[1-9]\d*)$/.test(key);
 }
 
-/** Errors keep their name, message and stack (and the inner errors of an `AggregateError`). */
-function _appendErrorData(error: any, serializedObj: Record<string, any>) {
-  if (error.name !== 'Error') {
-    serializedObj.name = error.name;
+/** Serializes primitives. Values JSON can't represent become objects with a special `*type`. */
+function _serializePrimitive(target: any): any {
+  switch (typeof target) {
+    case 'undefined':
+      return { [TYPE_FIELD]: TYPE_UNDEFINED };
+    case 'number':
+      if (!Number.isFinite(target) || Object.is(target, -0)) {
+        return { [TYPE_FIELD]: TYPE_NUMBER, [VALUE_FIELD]: Object.is(target, -0) ? '-0' : target.toString() };
+      }
+      return target;
+    case 'bigint':
+      return { [TYPE_FIELD]: TYPE_BIGINT, [VALUE_FIELD]: target.toString() };
+    case 'function':
+    case 'symbol':
+      throw new Error(`Cannot serialize a ${typeof target}.`);
+    default:
+      return target; // string, boolean or null.
   }
-  if (error.message) {
-    serializedObj.message = error.message;
-  }
-  if (error.stack) {
-    serializedObj.stack = error.stack;
-  }
-  if (error instanceof AggregateError) {
-    serializedObj.errors = getSerializeValueWithClassName(error.errors);
-  }
-}
-
-/**
- * Serializes primitive values. Values JSON can't represent (undefined, Infinity, -Infinity,
- * NaN, and BigInt) become objects with a special `*type`. Returns `ESSERIALIZER_NULL` for objects.
- */
-function _serializePrimitive(target: any) {
-  if (target === undefined) {
-    return { [TYPE_FIELD]: TYPE_UNDEFINED };
-  }
-  if (typeof target === 'number' && !Number.isFinite(target)) {
-    return { [TYPE_FIELD]: TYPE_NOT_FINITE, [VALUE_FIELD]: target.toString() };
-  }
-  if (typeof target === 'bigint') {
-    return { [TYPE_FIELD]: TYPE_BIG_INT, [VALUE_FIELD]: target.toString() };
-  }
-  if (notObject(target)) {
-    return target;
-  }
-  return ESSERIALIZER_NULL;
-}
-
-function _serializeArray(arr: readonly any[]): any[] {
-  return arr.map((item) => getSerializeValueWithClassName(item));
-}
-
-function _shouldIgnoreEnumerableProperties(target: any): boolean {
-  const className: string = Object.getPrototypeOf(target).constructor.name;
-  return CLASSNAMES_WHOSE_ENUMERABLE_PROPERTIES_SHOULD_BE_IGNORED.has(className);
 }
 
 export {

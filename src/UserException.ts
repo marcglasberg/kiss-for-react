@@ -17,7 +17,7 @@
  * You can also define a hardCause for the exception:
  * ```ts
  * // Throws an exception with the given message.
- * throw new UserException('The item already exists', {hardCause: someError}});
+ * throw new UserException('The item already exists', {hardCause: someError});
  * ```
  *
  * The user exception is immutable. But you can use some methods to create a modified copy:
@@ -141,7 +141,7 @@ export class UserException extends Error {
    * Usage:
    *
    * ```ts
-   * throw new UserException('The item already exists').withCause(someError);
+   * throw new UserException('The item already exists').withHardCause(someError);
    * ```
    */
   withHardCause(hardCause: any): UserException {
