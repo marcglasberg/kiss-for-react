@@ -108,6 +108,163 @@ Bdd(feature)
   });
 
 Bdd(feature)
+  .scenario('Dispatching a non-reentrant action that is still running throws.')
+  .given('A non-reentrant ASYNC action that was dispatched, and is still running.')
+  .when('The same action instance is dispatched again with dispatch, dispatchSync or dispatchAndWait.')
+  .then('The second dispatch throws a StoreException right away.')
+  .and('The action runs only once.')
+  .example(val('Method', 'dispatch'))
+  .example(val('Method', 'dispatchSync'))
+  .example(val('Method', 'dispatchAndWait'))
+  .run(async (ctx) => {
+    const method = ctx.example.val('Method') as string;
+
+    class NonReentrantIncrement extends AsyncIncrement {
+      nonReentrant = true;
+    }
+
+    // Given
+    const {store} = createStore();
+    const action = new NonReentrantIncrement();
+    store.dispatch(action);
+
+    // When / Then
+    expect(() => dispatchWith(store, method, action))
+      .toThrow('The action was already dispatched. Please, create a new action each time.');
+
+    await store.waitAllActions([]);
+    expect(store.state.count).toBe(1);
+  });
+
+Bdd(feature)
+  .scenario('Dispatching an action that already finished throws, even if it would now abort its dispatch.')
+  .given('An action that aborts its dispatch after it runs once.')
+  .and('The action was dispatched and finished.')
+  .when('The same action instance is dispatched again with dispatch, dispatchSync or dispatchAndWait.')
+  .then('The dispatch throws a StoreException, instead of being silently aborted.')
+  .example(val('Method', 'dispatch'))
+  .example(val('Method', 'dispatchSync'))
+  .example(val('Method', 'dispatchAndWait'))
+  .run(async (ctx) => {
+    const method = ctx.example.val('Method') as string;
+
+    let ran = false;
+
+    class IncrementOnce extends SyncIncrement {
+      abortDispatch() {
+        return ran;
+      }
+
+      reduce() {
+        ran = true;
+        return super.reduce();
+      }
+    }
+
+    // Given
+    const {store} = createStore();
+    const action = new IncrementOnce();
+    store.dispatch(action);
+    expect(store.state.count).toBe(1);
+
+    // When / Then
+    expect(() => dispatchWith(store, method, action)).toThrow(StoreException);
+    expect(store.state.count).toBe(1);
+  });
+
+Bdd(feature)
+  .scenario('Dispatching an action that already finished throws, even if the store is shut down.')
+  .given('An action that was dispatched and finished.')
+  .and('The store was shut down.')
+  .when('The same action instance is dispatched again with dispatch, dispatchSync or dispatchAndWait.')
+  .then('The dispatch throws a StoreException, instead of being silently ignored.')
+  .example(val('Method', 'dispatch'))
+  .example(val('Method', 'dispatchSync'))
+  .example(val('Method', 'dispatchAndWait'))
+  .run(async (ctx) => {
+    const method = ctx.example.val('Method') as string;
+
+    // Given
+    const {store} = createStore();
+    const action = new SyncIncrement();
+    store.dispatch(action);
+    store.setShutDown(true);
+
+    // When / Then
+    expect(() => dispatchWith(store, method, action)).toThrow(StoreException);
+    expect(store.state.count).toBe(1);
+  });
+
+Bdd(feature)
+  .scenario('Dispatching an action that already finished throws, even if it is now mocked.')
+  .given('An action that was dispatched and finished.')
+  .and('The action is now mocked {Mock}.')
+  .when('The same action instance is dispatched again with dispatch, dispatchSync or dispatchAndWait.')
+  .then('The dispatch throws a StoreException.')
+  .example(val('Mock', 'as null'), val('Method', 'dispatch'))
+  .example(val('Mock', 'as null'), val('Method', 'dispatchSync'))
+  .example(val('Mock', 'as null'), val('Method', 'dispatchAndWait'))
+  .example(val('Mock', 'by a new action'), val('Method', 'dispatch'))
+  .example(val('Mock', 'by a new action'), val('Method', 'dispatchSync'))
+  .example(val('Mock', 'by a new action'), val('Method', 'dispatchAndWait'))
+  .run(async (ctx) => {
+    const mock = ctx.example.val('Mock') as string;
+    const method = ctx.example.val('Method') as string;
+
+    // Given
+    const {store} = createStore();
+    const action = new SyncIncrement();
+    store.dispatch(action);
+    store.mocks.add(SyncIncrement, mock === 'as null' ? null : () => new SyncIncrement());
+
+    // When / Then
+    expect(() => dispatchWith(store, method, action)).toThrow(StoreException);
+    expect(store.state.count).toBe(1);
+  });
+
+Bdd(feature)
+  .scenario('Dispatching an action whose mock was already dispatched throws.')
+  .given('An action that is mocked by another action, which was already dispatched.')
+  .when('The action is dispatched with dispatch, dispatchSync or dispatchAndWait.')
+  .then('The dispatch throws a StoreException.')
+  .example(val('Method', 'dispatch'))
+  .example(val('Method', 'dispatchSync'))
+  .example(val('Method', 'dispatchAndWait'))
+  .run(async (ctx) => {
+    const method = ctx.example.val('Method') as string;
+
+    // Given
+    const {store} = createStore();
+    const mockAction = new SyncIncrement();
+    store.dispatch(mockAction);
+    store.mocks.add(AsyncIncrement, () => mockAction);
+
+    // When / Then
+    expect(() => dispatchWith(store, method, new AsyncIncrement())).toThrow(StoreException);
+    expect(store.state.count).toBe(1);
+  });
+
+Bdd(feature)
+  .scenario('A mocked action can be dispatched again, since only its mock was dispatched.')
+  .given('An action that is mocked by a new action each time.')
+  .when('The same action instance is dispatched twice.')
+  .then('Both dispatches run the mock, and neither throws.')
+  .run(async (_) => {
+    // Given
+    const {store} = createStore();
+    store.mocks.add(AsyncIncrement, () => new SyncIncrement());
+    const action = new AsyncIncrement();
+
+    // When
+    store.dispatch(action);
+    store.dispatch(action);
+
+    // Then
+    expect(store.state.count).toBe(2);
+    expect(action.status.isDispatched).toBe(false);
+  });
+
+Bdd(feature)
   .scenario('The already-dispatched error is not processed like an action failure.')
   .given('A store with an errorObserver and a globalWrapError.')
   .and('An action that was already dispatched.')

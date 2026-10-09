@@ -6,8 +6,6 @@ reporter(new FeatureFileReporter());
 
 const feature = new Feature('Retry delays');
 
-jest.setTimeout(10000);
-
 Bdd(feature)
   .scenario('Retries wait for the default delays between attempts.')
   .given('An action with retry turned on, using the default retry options.')
@@ -19,7 +17,7 @@ Bdd(feature)
   .run(async (_) => {
     const store = new Store<State>({ initialState: new State(1) });
     const action = new ActionThatAlwaysFails({});
-    await store.dispatchAndWait(action);
+    await dispatchWithFakeTimers(store, action);
 
     expect(action.status.isCompletedFailed).toBe(true);
     expectGaps(action.gaps(), [350, 700, 1400]);
@@ -41,7 +39,7 @@ Bdd(feature)
       multiplier: r.val('multiplier'),
       maxRetries: r.val('maxRetries'),
     });
-    await store.dispatchAndWait(action);
+    await dispatchWithFakeTimers(store, action);
 
     expect(action.attempts).toBe(4);
     expectGaps(action.gaps(), [50, 150, 450]);
@@ -64,7 +62,7 @@ Bdd(feature)
       maxRetries: r.val('maxRetries'),
       maxDelay: r.val('maxDelay'),
     });
-    await store.dispatchAndWait(action);
+    await dispatchWithFakeTimers(store, action);
 
     expect(action.attempts).toBe(5);
     expectGaps(action.gaps(), [100, 200, 250, 250]);
@@ -118,7 +116,7 @@ Bdd(feature)
       multiplier: r.val('multiplier'),
       maxRetries: r.val('maxRetries'),
     });
-    await store.dispatchAndWait(action);
+    await dispatchWithFakeTimers(store, action);
 
     expectGaps(action.gaps(), [100, 100, 100]);
   });
@@ -173,13 +171,85 @@ Bdd(feature)
     expect(action.status.originalError).toBeInstanceOf(UserException);
   });
 
-/** Each measured gap must be at least the expected delay (minus timer jitter), but not much longer. */
-function expectGaps(gaps: number[], expected: number[]) {
-  expect(gaps.length).toBe(expected.length);
-  gaps.forEach((gap, i) => {
-    expect(gap).toBeGreaterThanOrEqual(expected[i] - 5);
-    expect(gap).toBeLessThan(expected[i] + 150);
+Bdd(feature)
+  .scenario('The retry delay only starts after the failed reducer finishes.')
+  .given('An action with retry options "initialDelay: 350" and "maxRetries: 1".')
+  .and('Its reducer takes 1000 millis to fail.')
+  .when('The action is dispatched.')
+  .then('The second attempt starts 1350 millis after the first one started.')
+  .run(async (_) => {
+    const store = new Store<State>({ initialState: new State(1) });
+    const action = new ActionThatAlwaysFails({ initialDelay: 350, maxRetries: 1 }, 1000);
+    await dispatchWithFakeTimers(store, action);
+
+    expectGaps(action.gaps(), [1350]);
   });
+
+Bdd(feature)
+  .scenario('While it waits to retry, the action is still in progress.')
+  .given('An action with retry options "initialDelay: 100", "multiplier: 2" and "maxRetries: 2".')
+  .and('The action always fails.')
+  .when('The action is dispatched.')
+  .then('It runs again only when each delay ends.')
+  .and('While it waits, the action is in progress, and has not failed yet.')
+  .and('After the last attempt, the action is not in progress anymore, and has failed.')
+  .run(async (_) => {
+    jest.useFakeTimers();
+    try {
+      const store = new Store<State>({ initialState: new State(1) });
+      store.isFailed(ActionThatAlwaysFails); // So that the store keeps track of this failed action.
+      const action = new ActionThatAlwaysFails({ initialDelay: 100, multiplier: 2, maxRetries: 2 });
+      const promise = store.dispatchAndWait(action);
+
+      // The first attempt runs right away.
+      await jest.advanceTimersByTimeAsync(0);
+      expect(action.times.length).toBe(1);
+      expect(store.isWaiting(ActionThatAlwaysFails)).toBe(true);
+      expect(store.isFailed(ActionThatAlwaysFails)).toBe(false);
+
+      // The second attempt runs after 100 millis.
+      await jest.advanceTimersByTimeAsync(99);
+      expect(action.times.length).toBe(1);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(action.times.length).toBe(2);
+      expect(store.isWaiting(ActionThatAlwaysFails)).toBe(true);
+
+      // The third (and last) attempt runs 200 millis after that.
+      await jest.advanceTimersByTimeAsync(199);
+      expect(action.times.length).toBe(2);
+      expect(store.isWaiting(ActionThatAlwaysFails)).toBe(true);
+      expect(action.status.isCompleted).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(action.times.length).toBe(3);
+
+      await promise;
+      expect(store.isWaiting(ActionThatAlwaysFails)).toBe(false);
+      expect(store.isFailed(ActionThatAlwaysFails)).toBe(true);
+      expect(action.status.isCompletedFailed).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+/**
+ * Dispatches the action with fake timers, and runs all timers until the action finishes.
+ * Since `Date.now()` is also faked, the measured gaps between attempts are exact, and the test
+ * doesn't actually wait for the delays.
+ */
+async function dispatchWithFakeTimers(store: Store<State>, action: KissAction<State>) {
+  jest.useFakeTimers();
+  try {
+    const promise = store.dispatchAndWait(action);
+    await jest.runAllTimersAsync();
+    await promise;
+  } finally {
+    jest.useRealTimers();
+  }
+}
+
+/** The measured gaps between attempts must be exactly the expected retry delays. */
+function expectGaps(gaps: number[], expected: number[]) {
+  expect(gaps).toEqual(expected);
 }
 
 class State {
@@ -189,7 +259,8 @@ class State {
 class ActionThatAlwaysFails extends KissAction<State> {
   times: number[] = [];
 
-  constructor(retry: Retry) {
+  /** The reducer takes `reduceMillis` to fail. */
+  constructor(retry: Retry, readonly reduceMillis: number = 0) {
     super();
     this.retry = retry;
   }
@@ -200,6 +271,7 @@ class ActionThatAlwaysFails extends KissAction<State> {
 
   async reduce(): Promise<(state: State) => State> {
     this.times.push(Date.now());
+    if (this.reduceMillis > 0) await new Promise(resolve => setTimeout(resolve, this.reduceMillis));
     throw new UserException('Failed');
   }
 }

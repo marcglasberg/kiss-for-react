@@ -1,6 +1,6 @@
 import { expect } from '@jest/globals';
 import { Bdd, Feature, FeatureFileReporter, reporter } from 'easy-bdd-tool-jest';
-import { KissAction, Store, UserException } from '../src';
+import { KissAction, Store, StoreException, UserException } from '../src';
 
 reporter(new FeatureFileReporter());
 
@@ -127,4 +127,75 @@ Bdd(feature)
     await store.dispatchAndWait(action);
     expect(action.wrapReduce).toBe(MyAction.prototype.wrapReduce);
     expect(store.state.n).toBe(1);
+  });
+
+Bdd(feature)
+  .scenario('When a custom wrapReduce throws synchronously, the action fails with its error.')
+  .given('An ASYNC action with retry on.')
+  .and('The action has a custom wrapReduce that throws an error synchronously, without calling the reducer.')
+  .when('The action is dispatched.')
+  .then('The action fails with the error thrown by wrapReduce.')
+  .and('It is not retried, since the reducer is ASYNC, and never ran.')
+  .run(async (_) => {
+    const store = new Store<St>({ initialState: { n: 0 } });
+    const error = new UserException('wrapReduce failed');
+    let wrapCalls = 0;
+    let reduceCalls = 0;
+
+    class WrapThrows extends KissAction<St> {
+      retry = { on: true, initialDelay: 0 };
+
+      wrapReduce() {
+        return () => {
+          wrapCalls++;
+          throw error;
+        };
+      }
+
+      async reduce() {
+        reduceCalls++;
+        return (s: St) => ({ n: s.n + 1 });
+      }
+    }
+
+    const action = new WrapThrows();
+    await store.dispatchAndWait(action);
+    expect(action.status.originalError).toBe(error);
+    expect(wrapCalls).toBe(1);
+    expect(reduceCalls).toBe(0);
+    expect(store.state.n).toBe(0);
+  });
+
+Bdd(feature)
+  .scenario('A SYNC reducer with retry fails, even when a custom wrapReduce calls it asynchronously.')
+  .given('A SYNC action with retry on, whose reducer always fails.')
+  .and('The action has a custom wrapReduce that waits a little, and only then calls the reducer.')
+  .when('The action is dispatched.')
+  .then('The reducer runs only once.')
+  .and('It fails with a StoreException saying retry needs an ASYNC reducer.')
+  .run(async (_) => {
+    const store = new Store<St>({ initialState: { n: 0 }, errorObserver: () => false });
+    let reduceCalls = 0;
+
+    class WrapCallsSyncReducerLater extends KissAction<St> {
+      retry = { on: true, initialDelay: 0 };
+
+      wrapReduce(reduce: () => any) {
+        return async () => {
+          await Promise.resolve();
+          return reduce();
+        };
+      }
+
+      reduce(): St {
+        reduceCalls++;
+        throw new UserException('Failed');
+      }
+    }
+
+    const action = new WrapCallsSyncReducerLater();
+    await store.dispatchAndWait(action);
+    expect(reduceCalls).toBe(1);
+    expect(action.status.originalError).toBeInstanceOf(StoreException);
+    expect(action.status.originalError.message).toContain('uses retry, but its reducer is SYNC');
   });

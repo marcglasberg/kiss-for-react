@@ -1,0 +1,57 @@
+{
+  "name": "eslint-plugin-kiss-for-react",
+  "version": "1.0.0",
+  "description": "ESLint rules for Kiss state management (kiss-for-react). Finds mistakes that compile fine but are wrong, with quick fixes.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "files": [
+    "lib/**/*",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('lib', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p ./tsconfig.json",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcglasberg/kiss-for-react.git",
+    "directory": "eslint-plugin"
+  },
+  "keywords": [
+    "eslint",
+    "eslintplugin",
+    "eslint-plugin",
+    "kiss-for-react",
+    "react",
+    "state management"
+  ],
+  "author": "Marcelo Glasberg",
+  "license": "MIT",
+  "homepage": "https://github.com/marcglasberg/kiss-for-react/tree/main/eslint-plugin#readme",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "dependencies": {
+    "@typescript-eslint/utils": "^8.0.0"
+  },
+  "peerDependencies": {
+    "eslint": "^9.0.0 || ^10.0.0",
+    "typescript": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  }
+}

@@ -46,3 +46,21 @@ See:
 
 * [https://blog.npmjs.org/post/165769683050/publishing-what-you-mean-to-publish.html](https://blog.npmjs.org/post/165769683050/publishing-what-you-mean-to-publish.html)
 * [https://snyk.io/pt-BR/blog/best-practices-create-modern-npm-package/](https://snyk.io/pt-BR/blog/best-practices-create-modern-npm-package/)
+
+# To build and publish the ESLint plugin
+
+The plugin `eslint-plugin-kiss-for-react` is in the `eslint-plugin` directory. It's a separate
+npm package, with its own version, and doesn't need its own `npm install` (it uses the
+`node_modules` of the repository root).
+
+1. Run its tests from the repository root: `npx jest eslint-plugin`.
+
+2. Update the version in `eslint-plugin\package.json`, in `eslint-plugin\src\index.ts`
+   (`meta.version`), and in `eslint-plugin\CHANGELOG.md`.
+
+3. In directory `kiss-for-react\eslint-plugin\`, run in the terminal:
+
+   ```bash
+   npm run build
+   npm publish
+   ```

@@ -9,15 +9,16 @@
 
 Kiss is a state management package for React, launched in May 2025. While new to React, it's a **mature solution**, having been available for Flutter for years under the name [Async Redux](https://pub.dev/packages/async_redux) (top 8% of packages), battle-tested in hundreds of real-world applications.
 
-## Documentation
+## Documentation & AI
 
-The Kiss docs are published
-at **[https://kissforreact.org](https://kissforreact.org)**
+### Complete docs → **[https://kissforreact.org](https://kissforreact.org)**
 
 * [Getting Started](https://kissforreact.org/react/intro)
 * [Tutorial: A simple Todo List app](https://kissforreact.org/react/tutorial/setting-up-the-store)
 * [The Basics](https://kissforreact.org/react/basics/store-and-state)
 * [Complete AI Documentation](https://kissforreact.org/kiss-state-management-docs.md): A single file containing all Kiss documentation, optimized for AI agents. Just copy the link and paste it into any AI.
+
+### Linter and Quick fixes → [eslint-plugin-kiss-for-react](https://www.npmjs.com/package/eslint-plugin-kiss-for-react)
 
 ## How does it compare?
 
@@ -346,6 +347,21 @@ class LoadText extends Action {
 }
 ```
 
+By default, it checks the action class. To let actions of the same class run in parallel
+when they have different parameters, override `nonReentrantKeyParams()`:
+
+```tsx
+class SaveItem extends Action {
+  nonReentrant = true;
+  constructor(readonly itemId: string) { super(); }
+  nonReentrantKeyParams() { return this.itemId; }
+  ...
+}
+```
+
+Now `SaveItem('A')` and `SaveItem('B')` can run in parallel, but two `SaveItem('A')` cannot.
+To make different action classes share the same key, override `computeNonReentrantKey()`.
+
 ### Retry
 
 To retry an action a few times with exponential backoff if it fails,
@@ -355,7 +371,7 @@ add the `retry` property to your action class.
 class LoadText extends Action {   
   retry = {on: true}
          
-  reduce() { ... }
+  async reduce() { ... }
 }
 ```
 
@@ -371,7 +387,7 @@ class LoadText extends Action {
     maxDelay: 5000,    // Maximum delay between retries, in milliseconds
   }
    
-  reduce() { ... }
+  async reduce() { ... }
 }
 ```
 
@@ -427,17 +443,22 @@ class LoadPrices extends Action {
 }
 ```
 
-### OptimisticUpdate (soon)
+### OptimisticCommand
 
-To provide instant feedback when an action saves data to the server, you can use an optimistic update.
-This feature changes the state immediately, before the server confirms that the update succeeded.
-If the server update fails, the state is changed back. You can also show a notification to the user.
+To provide instant feedback when an action sends a command to the server (like adding a todo,
+or sending a message), extend `OptimisticCommand`. It changes the state immediately, before the server
+confirms that the command succeeded. If the command fails, the state is changed back, and the
+error is shown to the user. It can also reload the value from the server.
 
 ```tsx
-class SaveName extends Action {    
-  optimisticUpdate = { ... } 
-   
-  async reduce() { ... } 
+class AddTodo extends OptimisticCommand<State, Todo[]> {
+  constructor(readonly todo: Todo) { super(); }
+
+  optimisticValue() { return [...this.state.todos, this.todo]; }
+  getValueFromState(state: State) { return state.todos; }
+  applyValueToState(state: State, todos: Todo[]) { return state.copy({ todos }); }
+  sendCommandToServer() { return api.addTodo(this.todo); }
+  reloadFromServer() { return api.loadTodos(); }
 }
 ```
 

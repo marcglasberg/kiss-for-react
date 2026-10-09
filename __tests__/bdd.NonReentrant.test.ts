@@ -1,6 +1,6 @@
 import { expect, test } from '@jest/globals';
 import { Bdd, Feature, FeatureFileReporter, reporter } from 'easy-bdd-tool-jest';
-import { KissAction, Store } from '../src';
+import { KissAction, OptimisticCommand, Store, UserException } from '../src';
 import { delayMillis } from "../src/utils";
 
 reporter(new FeatureFileReporter());
@@ -192,6 +192,240 @@ Bdd(feature)
     const status = await store.dispatchAndWait(new NonReentrantAsyncActionCallsItselfWithDispatchAndWait());
     expect(status.isCompletedOk).toBe(true);
     expect(store.state.count).toBe(2);
+  });
+
+/** A promise that the test resolves or rejects when it wants. */
+class Deferred<T = any> {
+  resolve!: (value: T) => void;
+  reject!: (error: any) => void;
+  readonly promise = new Promise<T>((resolve, reject) => {
+    this.resolve = resolve;
+    this.reject = reject;
+  });
+}
+
+/** A non-reentrant action that waits for the given promise, and logs when it runs. */
+class Save extends KissAction<State> {
+  nonReentrant = true;
+
+  constructor(readonly events: string[], readonly name: string, readonly wait: Promise<any>) {
+    super();
+  }
+
+  async reduce() {
+    this.events.push(this.name);
+    await this.wait;
+    return null;
+  }
+}
+
+class SaveWithExtras extends Save {
+}
+
+Bdd(feature)
+  .scenario('A non-reentrant action is not aborted by a running action of a subclass.')
+  .given('A non-reentrant action, and a subclass of it.')
+  .when('The subclass action is dispatched.')
+  .and('The superclass action is dispatched while the subclass action is running.')
+  .then('Both actions run.')
+  .run(async (_) => {
+    const log: string[] = [];
+    const server = new Deferred();
+    const store = new Store<State>({ initialState: new State(1), logger: logger });
+
+    store.dispatch(new SaveWithExtras(log, 'sub', server.promise));
+    store.dispatch(new Save(log, 'base', server.promise));
+    expect(log).toEqual(['sub', 'base']);
+
+    server.resolve(undefined);
+    await store.waitAllActions([]);
+  });
+
+Bdd(feature)
+  .scenario('A non-reentrant action is not aborted by a running action of its superclass.')
+  .given('A non-reentrant action, and a subclass of it.')
+  .when('The superclass action is dispatched.')
+  .and('The subclass action is dispatched while the superclass action is running.')
+  .then('Both actions run.')
+  .run(async (_) => {
+    const log: string[] = [];
+    const server = new Deferred();
+    const store = new Store<State>({ initialState: new State(1), logger: logger });
+
+    store.dispatch(new Save(log, 'base', server.promise));
+    store.dispatch(new SaveWithExtras(log, 'sub', server.promise));
+    expect(log).toEqual(['base', 'sub']);
+
+    server.resolve(undefined);
+    await store.waitAllActions([]);
+  });
+
+Bdd(feature)
+  .scenario('Non-reentrant actions with different key params run at the same time.')
+  .given('A non-reentrant action that uses the item id as its non-reentrant key params.')
+  .when('The action is dispatched for item A, and again for item A, and for item B, while the first one is running.')
+  .then('The second action for item A is aborted.')
+  .and('The action for item B runs.')
+  .run(async (_) => {
+    const log: string[] = [];
+    const server = new Deferred();
+
+    class SaveItem extends Save {
+      constructor(readonly itemId: string) {
+        super(log, itemId, server.promise);
+      }
+
+      nonReentrantKeyParams() {
+        return this.itemId;
+      }
+    }
+
+    const store = new Store<State>({ initialState: new State(1), logger: logger });
+
+    store.dispatch(new SaveItem('A'));
+    store.dispatch(new SaveItem('A'));
+    store.dispatch(new SaveItem('B'));
+    expect(log).toEqual(['A', 'B']);
+
+    server.resolve(undefined);
+    await store.waitAllActions([]);
+  });
+
+Bdd(feature)
+  .scenario('Key params that are arrays or plain objects are compared by their contents.')
+  .given('A non-reentrant action that uses an array as its non-reentrant key params.')
+  .when('The action is dispatched twice, with different arrays with the same contents.')
+  .and('Then dispatched with an array with different contents.')
+  .then('The second action is aborted.')
+  .and('The third action runs.')
+  .run(async (_) => {
+    const log: string[] = [];
+    const server = new Deferred();
+
+    class SaveItem extends Save {
+      constructor(readonly key: string[]) {
+        super(log, key.join(), server.promise);
+      }
+
+      nonReentrantKeyParams() {
+        return this.key;
+      }
+    }
+
+    const store = new Store<State>({ initialState: new State(1), logger: logger });
+
+    store.dispatch(new SaveItem(['A', 'B']));
+    store.dispatch(new SaveItem(['A', 'B']));
+    store.dispatch(new SaveItem(['A', 'C']));
+    expect(log).toEqual(['A,B', 'A,C']);
+
+    server.resolve(undefined);
+    await store.waitAllActions([]);
+  });
+
+Bdd(feature)
+  .scenario('Different non-reentrant actions with the same key block each other.')
+  .given('Two different non-reentrant actions, that compute the same non-reentrant key for the same user.')
+  .when('The first action is dispatched for a user.')
+  .and('The second action is dispatched for the same user, and then for another user, while the first one is running.')
+  .then('The second action for the same user is aborted.')
+  .and('The second action for the other user runs.')
+  .run(async (_) => {
+    const log: string[] = [];
+    const server = new Deferred();
+
+    class SaveUser extends Save {
+      constructor(readonly userId: string) {
+        super(log, 'save ' + userId, server.promise);
+      }
+
+      computeNonReentrantKey() {
+        return this.userId;
+      }
+    }
+
+    class DeleteUser extends Save {
+      constructor(readonly userId: string) {
+        super(log, 'delete ' + userId, server.promise);
+      }
+
+      computeNonReentrantKey() {
+        return this.userId;
+      }
+    }
+
+    const store = new Store<State>({ initialState: new State(1), logger: logger });
+
+    store.dispatch(new SaveUser('123'));
+    store.dispatch(new DeleteUser('123'));
+    store.dispatch(new DeleteUser('456'));
+    expect(log).toEqual(['save 123', 'delete 456']);
+
+    server.resolve(undefined);
+    await store.waitAllActions([]);
+  });
+
+Bdd(feature)
+  .scenario('A non-reentrant action and an optimistic command with the same key block each other.')
+  .given('A non-reentrant action and an optimistic command, that compute the same non-reentrant key.')
+  .when('The non-reentrant action is dispatched.')
+  .and('The optimistic command is dispatched while the non-reentrant action is running.')
+  .then('The optimistic command is aborted.')
+  .run(async (_) => {
+    const log: string[] = [];
+    const server = new Deferred();
+
+    class SaveUser extends Save {
+      constructor() {
+        super(log, 'save', server.promise);
+      }
+
+      computeNonReentrantKey() {
+        return 'user';
+      }
+    }
+
+    class DeleteUser extends OptimisticCommand<State, number> {
+      optimisticValue() { return 0; }
+      getValueFromState(state: State) { return state.count; }
+      applyValueToState(_state: State, value: number) { return new State(value); }
+
+      async sendCommandToServer() {
+        log.push('delete');
+      }
+
+      computeNonReentrantKey() {
+        return 'user';
+      }
+    }
+
+    const store = new Store<State>({ initialState: new State(1), logger: logger });
+
+    store.dispatch(new SaveUser());
+    store.dispatch(new DeleteUser());
+    expect(log).toEqual(['save']);
+    expect(store.state.count).toBe(1);
+
+    server.resolve(undefined);
+    await store.waitAllActions([]);
+  });
+
+Bdd(feature)
+  .scenario('The non-reentrant key is released when the action fails.')
+  .given('A non-reentrant action that fails.')
+  .when('The action is dispatched and fails.')
+  .and('The action is dispatched again.')
+  .then('The second action runs.')
+  .run(async (_) => {
+    const log: string[] = [];
+    const store = new Store<State>({ initialState: new State(1), logger: logger });
+
+    const failure = new Deferred();
+    failure.reject(new UserException('Failed.'));
+    await store.dispatchAndWait(new Save(log, 'first', failure.promise));
+
+    await store.dispatchAndWait(new Save(log, 'second', Promise.resolve()));
+    expect(log).toEqual(['first', 'second']);
   });
 
 class NonReentrantSyncActionCallsItselfWithDispatchSync extends KissAction<State> {

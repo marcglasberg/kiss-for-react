@@ -7,15 +7,13 @@
   - The build: `package.json` exports, `tsconfig.*.json`, `scripts/fix-esm.cjs`, and the ESM and CJS output.
   - The JSDoc, checked against what the code actually does.
 - **Checked:**
-  - **Reproduced** means a small test in `bug-repros/` asserts the documented behavior and fails on the current code.
+  - **Reproduced** means the bug was confirmed by running code that asserts the documented behavior and fails.
   - **Code reading** means the bug was found by reading the code and has no test.
-  - Each repro is written as a BDD. They sit outside `__tests__/` so that the normal `npx jest` run still passes. To run them:
-    `npx jest --testRegex "bug-repros/.*\.repro\.tsx?$"`.
 - **How a bug gets fixed:**
-  1. Turn the repro into BDDs in `__tests__/bdd.<Topic>.test.ts` (see `AGENTS.md`), and check that they **fail** because of the bug.
+  1. Write BDDs that reproduce it in `__tests__/bdd.<Topic>.test.ts` (see `AGENTS.md`), and check that they **fail** because of the bug.
   2. Fix the bug, and check that those BDDs now pass.
   3. The BDDs stay in `__tests__/` for good, as part of the package's test suite, so the bug can't come back.
-  4. Delete the repro from `bug-repros/`, and in this file mark the bug as fixed, and point "How to trigger" to the new BDDs.
+  4. In this file, mark the bug as fixed, and point "How to trigger" to the new BDDs.
 - **Has BDD tests:** whether the existing `__tests__/bdd.*.test.ts` already cover the behavior.
 
 ## Summary
@@ -23,10 +21,11 @@
 | # | Severity | Area | Bug | Docs say | Checked | Has BDD tests | Fixed |
 |---|---|---|---|---|---|---|---|
 | 1 | Medium | Persistence / startup | A change made before the store is ready, followed by an `UpdateStateAction(ifPersists=false)`, is never saved. | `ifPersists=false`: "the persistor will ignore **this** state change" | Reproduced | Yes | Yes |
-| 2 | Medium | nonReentrant | A `nonReentrant` action is silently aborted while a *subclass* of it is running. | Aborts "in case the action is still running from a previous dispatch" | Reproduced | No | No |
-| 3 | Medium | dispatch | Re-dispatching the same running `nonReentrant` action object is silently ignored, instead of throwing. | "Dispatching an action that was already dispatched (running or finished) … throws a `StoreException`" | Reproduced | No | No |
-| 4 | Low | Wait helpers | The `actions` set returned by `waitActionCondition`/`waitAllActions` keeps changing after the wait resolves. | "You get back the set of the actions being dispatched that met the condition" | Reproduced | No | No |
-| 5 | Low | UserException | `withTitle`, `withMessage`, `addProps`, etc. return a plain `UserException`, losing the subclass. | (Not stated; breaks `instanceof` on subclasses) | Reproduced | No | No |
+| 2 | Medium | nonReentrant | A `nonReentrant` action is silently aborted while a *subclass* of it is running. | Aborts "in case the action is still running from a previous dispatch" | Reproduced | Yes | Yes |
+| 3 | Medium | dispatch | Re-dispatching the same running `nonReentrant` action object is silently ignored, instead of throwing. | "Dispatching an action that was already dispatched (running or finished) … throws a `StoreException`" | Reproduced | Yes | Yes |
+| 4 | Low | Wait helpers | The `actions` set returned by `waitActionCondition`/`waitAllActions` keeps changing after the wait resolves. | "You get back the set of the actions being dispatched that met the condition" | Reproduced | Yes | Yes |
+| 5 | Low | UserException | `withTitle`, `withMessage`, `addProps`, etc. return a plain `UserException`, losing the subclass. | (Not stated; breaks `instanceof` on subclasses) | Reproduced | Yes | Yes |
+| 6 | Medium | abortDispatch | `abortDispatch()` can't read `this.state`, `this.store` or `this.initialState` on the first dispatch, and the action is silently aborted. | "If method `abortDispatch()` returns true, the action will not be dispatched" | Reproduced | Yes | Yes |
 
 ## 1. A change made before the store is ready is lost after `ifPersists=false` (Medium) — FIXED
 
@@ -35,28 +34,35 @@
 - **How it was fixed:** dispatching any action before the store is ready is now a developer error, and throws a `StoreException` (`dispatch`, `dispatchSync` and `dispatchAndWait`). The only dispatch allowed is the store's own, applying the state it read. So no state change can happen before the store is ready, and this bug can't happen.
 - **How to trigger:** see `__tests__/bdd.Persistor.test.ts`, scenario "Dispatching an action while the persisted state is being read throws, and changes nothing."
 
-## 2. `nonReentrant` is aborted by a running subclass (Medium)
+## 2. `nonReentrant` is aborted by a running subclass (Medium) — FIXED
 
-- **Cause:** `_mustAbortDispatch` (`src/Store.tsx`) uses `this.isWaiting(action.constructor)`, which matches with `instanceof`. As a side effect, it also adds the type to `_awaitableActions`.
-- **How to trigger:** `class Base { nonReentrant = true; async reduce }`, `class Sub extends Base {}`. If you dispatch `Sub` and then `Base` concurrently, `Base` is dropped.
-- **Fix:** compare `a.constructor === action.constructor` over the actions in progress.
+- **Cause:** `_mustAbortDispatch` (`src/Store.tsx`) used `this.isWaiting(action.constructor)`, which matches with `instanceof`. As a side effect, it also added the type to `_awaitableActions`.
+- **How it was fixed:** `nonReentrant` now follows the API of AsyncRedux's `NonReentrant` mixin. The check is based on a non-reentrant key, which by default is the exact action class plus `nonReentrantKeyParams()`, and can be changed with `computeNonReentrantKey()`. These keys are shared with `OptimisticCommand`. The check no longer calls `isWaiting`.
+- **How to trigger:** see `__tests__/bdd.NonReentrant.test.ts`, scenario "A non-reentrant action is not aborted by a running action of a subclass."
 
-## 3. Re-dispatching a running `nonReentrant` action object doesn't throw (Medium)
+## 3. Re-dispatching a running `nonReentrant` action object doesn't throw (Medium) — FIXED
 
-- **Cause:** `dispatch`, `dispatchAndWait` and `dispatchSync` call `_mustAbortDispatch` before the `status.isDispatched` check.
-- **How to trigger:** `const a = new SlowNonReentrant(); store.dispatch(a); store.dispatch(a);`. The second call doesn't throw.
-- **Fix:** check `isDispatched` first.
+- **Cause:** `dispatch`, `dispatchAndWait` and `dispatchSync` called `_mustAbortDispatch` before the `status.isDispatched` check.
+- **How it was fixed:** the "already dispatched" check is now the first check of `dispatch`, `dispatchAndWait` and `dispatchSync`, before the store-ready and shut-down checks, the mock, and `abortDispatch`/`nonReentrant`. If the action is mocked, the mock is also checked, right after mocking. So re-dispatching an action always throws, even if it would now be aborted, or the store is shut down.
+- **How to trigger:** see `__tests__/bdd.DispatchTwice.test.ts`, scenarios "Dispatching a non-reentrant action that is still running throws.", "... even if it would now abort its dispatch.", "... even if the store is shut down." and "... even if it is now mocked."
 
-## 4. `waitActionCondition` returns a live view of the actions (Low)
+## 4. `waitActionCondition` returns a live view of the actions (Low) — FIXED
 
-- **Cause:** it resolves with `this.actionsInProgress()`, an `UnmodifiableSetView` over the live set (`_checkAllActionConditions` and the timeout path). The set is empty once the actions finish.
-- **Fix:** resolve with a snapshot: `new UnmodifiableSetView(new Set(this._actionsInProgress))`.
+- **Cause:** it resolved with `this.actionsInProgress()`, an `UnmodifiableSetView` over the live set (in `_checkAllActionConditions`, the `completeImmediately` path and the timeout path). The set was empty once the actions finished.
+- **How it was fixed:** all three paths now resolve with a copy, made by the new private `_actionsInProgressSnapshot()` (`src/Store.tsx`). The condition itself still gets the live view, since it runs right away. The JSDoc of `waitActionCondition` now says the returned set is a copy.
+- **How to trigger:** see `__tests__/bdd.WaitActionsSnapshot.test.ts`. Its scenarios cover `waitActionCondition` resolving on a dispatch, completing immediately and timing out, and `waitAllActions`.
 
-## 5. `UserException.with*` methods drop the subclass (Low)
+## 5. `UserException.with*` methods drop the subclass (Low) — FIXED
 
-- **Cause:** the private `copy()` in `src/UserException.ts` does `new UserException(...)`.
-- **How to trigger:** `class MyEx extends UserException {}`, then `new MyEx('x').withTitle('t') instanceof MyEx` is `false`.
-- **Fix:** construct from `this.constructor`, or document that subclasses must override `copy`.
+- **Cause:** the private `copy()` in `src/UserException.ts` did `new UserException(...)`.
+- **How it was fixed:** `copy()` now creates an object with the same prototype as the exception (`Object.create(Object.getPrototypeOf(this))`), copies all its own properties (including the fields of the subclass), and then applies the changes. It doesn't call `this.constructor`, since a subclass constructor may take different parameters. The copy gets its own stack trace, as before. The builder methods now return `this`, so TypeScript also knows that the subclass is kept.
+- **How to trigger:** see `__tests__/bdd.UserExceptionBuilders.test.ts`, scenarios "Builder methods keep the subclass of the exception." and "Builder methods work on a subclass whose constructor takes different parameters."
+
+## 6. `abortDispatch()` can't read the state (Medium) — FIXED
+
+- **Cause:** the store calls `abortDispatch()` (in `_mustAbortDispatch`, `src/Store.tsx`) before `_injectStore`, which is what sets the store in the action. So inside `abortDispatch()`, `this.state` and `this.store` throw `Store not set in action`, and `this.initialState` is not set. The error is logged and swallowed, and the dispatch is aborted.
+- **How it was fixed:** `_mustAbortDispatch` now calls `action._setStore(this)`, which sets the store and the initial state, before calling `abortDispatch()`. This is what AsyncRedux does with `setStore`. It runs after the "already dispatched" checks, so it never changes the store of an action that is already running.
+- **How to trigger:** see `__tests__/bdd.AbortDispatch.test.ts`, scenarios "The action can use the state to decide if it aborts its dispatch." and "Inside abortDispatch, the action can read its store and its initial state."
 
 ### Plausible, not confirmed
 

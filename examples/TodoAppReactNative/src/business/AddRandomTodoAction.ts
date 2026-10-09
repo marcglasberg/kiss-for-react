@@ -15,7 +15,7 @@ export class AddRandomTodoAction extends Action {
     let text = await this.getTextFromTheNumbersAPI();
 
     return (state: State) => state
-      .withTodos(this.state.todoList.addTodoFromText(text))
+      .withTodos(state.todoList.addTodoFromText(text))
       .withFilter(Filter.showActive, Filter.showAll);
   }
 

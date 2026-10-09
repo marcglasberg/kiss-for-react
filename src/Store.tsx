@@ -6,8 +6,10 @@ import {
   AsyncReducer,
   AsyncReducerResult,
   KissAction,
+  OptimisticCommand,
   ReduxReducer,
-  RetryOptions
+  RetryOptions,
+  _isSameNonReentrantKey,
 } from './KissAction';
 import { ProcessPersistence } from './ProcessPersistence';
 import { StoreException, TimeoutException } from './StoreException';
@@ -735,6 +737,7 @@ export class Store<St> {
    * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
    */
   dispatch(action: KissAction<St>): void {
+    this._throwIfAlreadyDispatched(action);
     this._throwIfNotReady(action);
     if (this._shutDown) {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
@@ -745,6 +748,7 @@ export class Store<St> {
 
     // 1) If mocked as `null`, the action is ignored.
     if (mockedActionOrAction === null) return; // If mocked as null, the action is ignored.
+    if (mockedActionOrAction !== action) this._throwIfAlreadyDispatched(mockedActionOrAction);
 
     // 2) If the action wants to abort the dispatch, or is non-reentrant and already running, aborts.
     if (this._mustAbortDispatch(mockedActionOrAction)) return;
@@ -779,6 +783,7 @@ export class Store<St> {
    * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
    */
   dispatchAndWait(action: KissAction<St>): Promise<ActionStatus> {
+    this._throwIfAlreadyDispatched(action);
     this._throwIfNotReady(action);
     if (this._shutDown) {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
@@ -789,14 +794,10 @@ export class Store<St> {
 
     // 1) If mocked as `null`, the action is ignored.
     if (mockedActionOrAction === null) return Promise.resolve(new ActionStatus());
+    if (mockedActionOrAction !== action) this._throwIfAlreadyDispatched(mockedActionOrAction);
 
     // 2) If the action wants to abort the dispatch, or is non-reentrant and already running, aborts.
     if (this._mustAbortDispatch(mockedActionOrAction)) return Promise.resolve(new ActionStatus());
-
-    // An action can only be dispatched once. Dispatching it again is a developer error, so we
-    // throw synchronously (instead of returning a rejected promise). We must check this before
-    // creating the promise, otherwise it would replace the promise of the first dispatch.
-    if (mockedActionOrAction.status.isDispatched) this._throwAlreadyDispatched(mockedActionOrAction);
 
     // 3) If the action is mocked to return another action, we dispatch the mock.
     const promise = mockedActionOrAction._createPromise();
@@ -904,6 +905,7 @@ export class Store<St> {
    * - `dispatchAll` which dispatches all given actions in parallel.
    */
   dispatchSync(action: KissAction<St>): void {
+    this._throwIfAlreadyDispatched(action);
     this._throwIfNotReady(action);
     if (this._shutDown) {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
@@ -914,6 +916,7 @@ export class Store<St> {
 
     // 1) If mocked as `null`, the action is ignored.
     if (mockedActionOrAction === null) return; // If mocked as null, the action is ignored.
+    if (mockedActionOrAction !== action) this._throwIfAlreadyDispatched(mockedActionOrAction);
 
     // 2) If the action wants to abort the dispatch, or is non-reentrant and already running, aborts.
     if (this._mustAbortDispatch(mockedActionOrAction)) return;
@@ -933,26 +936,51 @@ export class Store<St> {
         'Wait for store.ready() before dispatching actions.');
   }
 
-  // Dispatching an action that was already dispatched is a developer error, not an action
-  // failure: it counts as a dispatch, and throws a `StoreException` right away.
-  private _throwAlreadyDispatched(action: KissAction<St>): never {
+  // An action can only be dispatched once. Dispatching an action that was already dispatched
+  // is a developer error, not an action failure: it counts as a dispatch, and throws a
+  // `StoreException` right away (not a rejected promise). This is checked before anything
+  // else, so it throws even if the action would now be aborted, or the store is shut down.
+  // If the action is mocked, the mock is checked too. Note a mocked action is never marked
+  // as dispatched (its mock is), so dispatching it again doesn't throw.
+  private _throwIfAlreadyDispatched(action: KissAction<St>): void {
+    if (!action.status.isDispatched) return;
     this._dispatchCount++;
     Store._logLazy(() => `${this._dispatchCount}) ${action}`);
     throw new StoreException('The action was already dispatched. Please, create a new action each time.');
   }
 
   // Returns true if the dispatch must be aborted: either `abortDispatch()` returns true, or the
-  // action is `nonReentrant` and an action of the same type is already running.
-  // Note: It's up to the developer to make sure `abortDispatch` doesn't throw any errors.
-  // If it does, the error is logged and swallowed, and the dispatch is aborted.
+  // action is non-reentrant and another action with the same non-reentrant key is already running.
+  // Note: It's up to the developer to make sure `abortDispatch` and `computeNonReentrantKey`
+  // don't throw any errors. If they do, the error is logged and swallowed, and the dispatch is aborted.
   private _mustAbortDispatch(action: KissAction<St>): boolean {
+    // The action may access the store and the state in `abortDispatch()`.
+    action._setStore(this);
     try {
       if (action.abortDispatch()) return true;
-      return action.nonReentrant && this.isWaiting(action.constructor as new (...args: any[]) => KissAction<St>);
+      return Store._isNonReentrant(action) && this._isNonReentrantKeyRunning(action);
     } catch (error) {
-      Store._logLazy(() => `Method '${action}.abortDispatch()' has thrown an error: ${error}.`);
+      Store._logLazy(() => `Checking if '${action}' must abort its dispatch has thrown an error: ${error}.`);
       return true;
     }
+  }
+
+  // `nonReentrant` actions and `OptimisticCommand`s are non-reentrant, and share the same keys.
+  private static _isNonReentrant(action: KissAction<any>): boolean {
+    return action.nonReentrant || action instanceof OptimisticCommand;
+  }
+
+  // Returns true if a non-reentrant action with the same non-reentrant key as the given one is
+  // in progress. Saves the key in the action, so that later dispatches can compare against it.
+  // The key is released when the action leaves the set of actions in progress.
+  private _isNonReentrantKeyRunning(action: KissAction<St>): boolean {
+    const key = action.computeNonReentrantKey();
+    action._nonReentrantKey = key;
+    for (const other of this._actionsInProgress) {
+      if (Store._isNonReentrant(other) && _isSameNonReentrantKey(other._nonReentrantKey, key))
+        return true;
+    }
+    return false;
   }
 
   // Mocks an action to return another action.
@@ -992,7 +1020,7 @@ export class Store<St> {
       return;
     }
 
-    if (action.status.isDispatched) this._throwAlreadyDispatched(action);
+    this._throwIfAlreadyDispatched(action);
 
     this._dispatchCount++;
     Store._logLazy(() => `${this._dispatchCount}) ${action}`);
@@ -1249,7 +1277,7 @@ export class Store<St> {
         continue;
       }
       if (checked) {
-        condition.resolve(this.actionsInProgress(), triggerAction);
+        condition.resolve(this._actionsInProgressSnapshot(), triggerAction);
         toRemove.push(condition);
       }
     }
@@ -1333,10 +1361,15 @@ export class Store<St> {
   /**
    * Returns the action's own `wrapReduce`, or, when retry is on, a retry wrapper that calls the
    * action's own `wrapReduce` on each attempt. Never replaces `action.wrapReduce`.
+   *
+   * Note: An `OptimisticCommand` handles its own retry, by retrying only `sendCommandToServer`,
+   * so that the optimistic state is not applied and rolled back on each attempt.
    */
   private _getWrapReduce(action: KissAction<St>): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
     const userWrapReduce = action.wrapReduce.bind(action);
-    return action.ifRetryIsOn ? this._retryWrapReduce(action, userWrapReduce) : userWrapReduce;
+    return (action.ifRetryIsOn && !(action instanceof OptimisticCommand))
+      ? this._retryWrapReduce(action, userWrapReduce)
+      : userWrapReduce;
   }
 
   private _retryWrapReduce(
@@ -1355,20 +1388,6 @@ export class Store<St> {
     }
     //
     else {
-      /// Start with the `initialDelay`, and then increase it by `multiplier` each time this is called.
-      /// If the delay exceeds `maxDelay`, it will be set to `maxDelay`.
-      function nextDelay(retry: RetryOptions): number {
-        const _multiplier = retry.multiplier;
-        
-        retry.currentDelay = (retry.currentDelay == null) //
-          ? retry.initialDelay //
-          : retry.currentDelay! * _multiplier;
-
-        if (retry.currentDelay! > retry.maxDelay) retry.currentDelay = retry.maxDelay;
-
-        return retry.currentDelay!;
-      }
-
       function _syncRetryError(): StoreException {
         return new StoreException(`Action '${action}' uses retry, but its reducer is SYNC. Retry needs an ASYNC reducer, that returns a Promise<(St) => St>, because a SYNC reducer does not fail in a way that retrying can fix.`);
       }
@@ -1377,29 +1396,51 @@ export class Store<St> {
 
         async function _wrapReduceRetryAsync(): AsyncReducer<St> {
 
-          // A SYNC reducer can't be retried. If it throws synchronously,
-          // fail right away with a StoreException, without retrying.
+          // A SYNC reducer can't be retried. If the reducer throws synchronously, or returns
+          // without a Promise (even null, or the unchanged state), fail right away with a
+          // StoreException, without retrying. Note we check the reducer itself, and not the
+          // result of `wrapReduce`, since a custom `wrapReduce` may discard the result of an
+          // ASYNC reducer by returning null synchronously.
+          let isSyncReducer = false;
+          const reduceAndCheck = () => {
+            let result: ReduxReducer<St>;
+            try {
+              result = reduce();
+            } catch (error) {
+              isSyncReducer = true;
+              throw error;
+            }
+            if (!(result instanceof Promise)) isSyncReducer = true;
+            return result;
+          };
+
           let newState: any;
           try {
-            newState = userWrapReduce(reduce)();
+            newState = userWrapReduce(reduceAndCheck)();
           } catch (error) {
-            throw _syncRetryError();
+            throw isSyncReducer ? _syncRetryError() : error;
           }
 
+          if (isSyncReducer) throw _syncRetryError();
+
           try {
-            if (newState instanceof Promise)
-              newState = await newState;
+            newState = await newState;
           }
             //
           catch (error) {
+            if (isSyncReducer) throw _syncRetryError();
+
             (action.retry as RetryOptions).attempts++;
             const { maxRetries, unlimitedRetries } = action.retry as RetryOptions;
             if (!unlimitedRetries && (maxRetries >= 0) && (action.attempts > maxRetries)) throw error;
 
-            const currentDelay = nextDelay(action.retry as RetryOptions);
+            const currentDelay = action._nextRetryDelay();
             await new Promise(resolve => setTimeout(resolve, currentDelay));
             return _wrapReduceRetry(reduce)() as any;
           }
+
+          // The custom `wrapReduce` may have called a SYNC reducer only after some `await`.
+          if (isSyncReducer) throw _syncRetryError();
 
           return newState;
         }
@@ -2051,6 +2092,8 @@ export class Store<St> {
    *
    * You get back the set of the actions being dispatched that met the condition, as well as
    * the action that triggered the condition by being added or removed from the set.
+   * The returned set is a copy, taken when the condition was met (or when it timed out),
+   * so it doesn't change when other actions are later dispatched or finish.
    *
    * Note: The condition is only checked when some action is dispatched or finishes dispatching.
    * It's not checked every time action statuses change.
@@ -2113,7 +2156,7 @@ export class Store<St> {
     if (condition(this.actionsInProgress(), null)) {
       // Complete and return the actions in progress and the trigger action.
       if (completeImmediately)
-        return Promise.resolve({actions: this.actionsInProgress(), triggerAction: null});
+        return Promise.resolve({actions: this._actionsInProgressSnapshot(), triggerAction: null});
       // else throw an error.
       else
         throw new StoreException(completedErrorMessage + ", and the promise completed immediately.");
@@ -2143,7 +2186,7 @@ export class Store<St> {
             // Stop checking the condition, since nobody is waiting for it anymore.
             this._waitActionConditions = this._waitActionConditions.filter(c => c !== entry);
             _settleTimeout(timeoutMillis!, onTimeout,
-              () => resolve({actions: this.actionsInProgress(), triggerAction: null}), reject);
+              () => resolve({actions: this._actionsInProgressSnapshot(), triggerAction: null}), reject);
           }, timeoutMillis);
         }
       });
@@ -2520,6 +2563,13 @@ export class Store<St> {
    */
   actionsInProgress(): Set<KissAction<St>> {
     return new UnmodifiableSetView(this._actionsInProgress)
+  }
+
+  // Unlike `actionsInProgress()`, which is a live view, this is a copy of the actions in
+  // progress right now, so it doesn't change when actions are later dispatched or finish.
+  // The wait helpers resolve with it.
+  private _actionsInProgressSnapshot(): Set<KissAction<St>> {
+    return new UnmodifiableSetView(new Set(this._actionsInProgress));
   }
 
   /**

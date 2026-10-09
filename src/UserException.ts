@@ -117,7 +117,7 @@ export class UserException extends Error {
    throw new UserException('The item already exists').withTitle('Could not add');
    ```
    */
-  withTitle(title: string): UserException {
+  withTitle(title: string): this {
     return this.copy({title});
   }
 
@@ -131,7 +131,7 @@ export class UserException extends Error {
    throw new UserException('The item already exists').withTitle('Could not add');
    ```
    */
-  withMessage(message: string): UserException {
+  withMessage(message: string): this {
     return this.copy({message});
   }
 
@@ -144,7 +144,7 @@ export class UserException extends Error {
    * throw new UserException('The item already exists').withHardCause(someError);
    * ```
    */
-  withHardCause(hardCause: any): UserException {
+  withHardCause(hardCause: any): this {
     return this.copy({hardCause});
   }
 
@@ -160,7 +160,7 @@ export class UserException extends Error {
    * ```
    *
    */
-  withDialog(ifOpenDialog: boolean): UserException {
+  withDialog(ifOpenDialog: boolean): this {
     return this.copy({ifOpenDialog});
   }
 
@@ -170,7 +170,7 @@ export class UserException extends Error {
    * somewhere in the UI.
    * This is the same as doing: `.withDialog(false)`.
    */
-  get noDialog(): UserException {
+  get noDialog(): this {
     return this.withDialog(false);
   }
 
@@ -188,7 +188,7 @@ export class UserException extends Error {
    * ```
    *
    */
-  withErrorText(errorText: string | null): UserException {
+  withErrorText(errorText: string | null): this {
     return this.copy({errorText});
   }
 
@@ -196,7 +196,7 @@ export class UserException extends Error {
    * Adds `moreProps` to the properties of the `UserException`.
    * If the exception already had `props`, the new `moreProps` will be merged with those.
    */
-  addProps(moreProps?: { [key: string]: any }): UserException {
+  addProps(moreProps?: { [key: string]: any }): this {
     if (!moreProps) return this;
     return this.copy({props: {...this._props, ...moreProps}});
   }
@@ -212,7 +212,7 @@ export class UserException extends Error {
    * If the exception already had callbacks, the new callbacks will be merged with the old ones,
    * and the old callbacks will be called before the new ones.
    */
-  addCallbacks(onOk?: () => void, onCancel?: () => void): UserException {
+  addCallbacks(onOk?: () => void, onCancel?: () => void): this {
     let _onOk: (() => void) | undefined;
     let _onCancel: (() => void) | undefined;
 
@@ -236,8 +236,12 @@ export class UserException extends Error {
   }
 
   /**
-   * Returns a new `UserException` with the same fields as this one,
+   * Returns a new exception with the same fields as this one,
    * except for the ones given in `changes`.
+   *
+   * The copy has the same prototype as this exception, so it keeps its subclass, and the
+   * fields of the subclass. The constructor of the subclass is not called, since it may
+   * take different parameters.
    */
   private copy(changes: {
     message?: string,
@@ -248,18 +252,26 @@ export class UserException extends Error {
     onOk?: () => void,
     onCancel?: () => void,
     props?: { [key: string]: any }
-  }): UserException {
+  }): this {
     const has = (key: string) => Object.prototype.hasOwnProperty.call(changes, key);
-    return new UserException(
-      has('message') ? changes.message! : this.message,
-      {
-        title: has('title') ? changes.title : this.title,
-        hardCause: has('hardCause') ? changes.hardCause : this.hardCause,
-        ifOpenDialog: has('ifOpenDialog') ? changes.ifOpenDialog : this.ifOpenDialog,
-        errorText: has('errorText') ? changes.errorText : this.errorText,
-        onOk: has('onOk') ? changes.onOk : this.onOk,
-        onCancel: has('onCancel') ? changes.onCancel : this.onCancel,
-        props: has('props') ? changes.props : this._props,
-      });
+    const copy = Object.create(Object.getPrototypeOf(this));
+    Object.defineProperties(copy, Object.getOwnPropertyDescriptors(this));
+
+    // Same defaults as the constructor.
+    if (has('message')) copy.message = changes.message;
+    if (has('title')) copy.title = changes.title ?? '';
+    if (has('hardCause')) copy.hardCause = changes.hardCause;
+    if (has('ifOpenDialog')) copy.ifOpenDialog = changes.ifOpenDialog ?? true;
+    if (has('errorText')) copy.errorText = changes.errorText || null;
+    if (has('onOk')) copy.onOk = changes.onOk;
+    if (has('onCancel')) copy.onCancel = changes.onCancel;
+    if (has('props')) copy._props = changes.props || {};
+
+    // The copy gets its own stack trace, from where it was made, like a new exception would.
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(copy, this.copy);
+    }
+
+    return copy;
   }
 }

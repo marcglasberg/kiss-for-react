@@ -5,7 +5,7 @@ import {
   ActionStatus,
   AsyncReducer,
   AsyncReducerResult,
-  OptimisticUpdate,
+  OptimisticCommand,
   KissAction,
   UserExceptionAction,
   ReduxReducer,
@@ -51,7 +51,7 @@ export {
   StoreException,
   TimeoutException,
   UserException,
-  OptimisticUpdate, Retry, RetryOptions,
+  OptimisticCommand, Retry, RetryOptions,
 };
 
 

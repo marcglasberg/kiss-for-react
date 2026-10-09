@@ -84,3 +84,83 @@ Bdd(feature)
     expectSame(original.withErrorText('Text2'), { errorText: 'Text2' });
     expectSame(original.addProps({ x: 1 }), { props: { code: 42, x: 1 } });
   });
+
+class MyUserException extends UserException {
+  readonly code: number;
+
+  constructor(message: string, code: number) {
+    super(message);
+    this.name = 'MyUserException';
+    this.code = code;
+  }
+
+  describeCode() {
+    return `Code ${this.code}`;
+  }
+}
+
+// A subclass whose constructor doesn't take a message, so it can't be used to make copies.
+class FixedMessageUserException extends UserException {
+  static constructorCalls = 0;
+
+  constructor() {
+    super('Fixed message');
+    FixedMessageUserException.constructorCalls++;
+  }
+}
+
+Bdd(feature)
+  .scenario('Builder methods keep the subclass of the exception.')
+  .given('A subclass of UserException, with its own field and method.')
+  .and('An exception of that subclass.')
+  .when('A builder method is called on it.')
+  .then('The new exception is of the same subclass.')
+  .and('The new exception keeps the field, the method and the name of the subclass.')
+  .example(val('Builder', 'withTitle'))
+  .example(val('Builder', 'withMessage'))
+  .example(val('Builder', 'withHardCause'))
+  .example(val('Builder', 'withDialog'))
+  .example(val('Builder', 'noDialog'))
+  .example(val('Builder', 'withErrorText'))
+  .example(val('Builder', 'addProps'))
+  .example(val('Builder', 'addCallbacks'))
+  .run(async (ctx) => {
+    // Given
+    const original = new MyUserException('Message', 42);
+
+    // When
+    const result = builders[ctx.example.val('Builder') as string](original);
+
+    // Then
+    expect(result).not.toBe(original);
+    expect(result).toBeInstanceOf(MyUserException);
+    expect(result).toBeInstanceOf(UserException);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as MyUserException).code).toBe(42);
+    expect((result as MyUserException).describeCode()).toBe('Code 42');
+    expect(result.name).toBe('MyUserException');
+  });
+
+Bdd(feature)
+  .scenario('Builder methods work on a subclass whose constructor takes different parameters.')
+  .given('A subclass of UserException whose constructor always uses a fixed message.')
+  .and('An exception of that subclass.')
+  .when('withMessage and withTitle are called on it.')
+  .then('The new exception has the new message and title, and is of the same subclass.')
+  .and('The constructor of the subclass is not called again.')
+  .run(async (_) => {
+    // Given
+    FixedMessageUserException.constructorCalls = 0;
+    const original = new FixedMessageUserException();
+
+    // When
+    const result = original.withMessage('New message').withTitle('New title');
+
+    // Then
+    expect(result).toBeInstanceOf(FixedMessageUserException);
+    expect(result.message).toBe('New message');
+    expect(result.title).toBe('New title');
+    expect(original.message).toBe('Fixed message');
+    expect(original.title).toBe('');
+    expect(FixedMessageUserException.constructorCalls).toBe(1);
+  });

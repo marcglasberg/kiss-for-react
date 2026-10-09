@@ -412,6 +412,15 @@ export abstract class KissAction<St> {
    * If method `abortDispatch()` returns true, the action will not be dispatched: `before`,
    * `reduce` and `after` will not be called. This is an advanced feature only useful under rare
    * circumstances, and you should only use it if you know what you are doing.
+   *
+   * Inside `abortDispatch()`, you can read `this.state`, `this.store` and `this.initialState`.
+   * For example, to only run the action when there are no items loaded:
+   *
+   * ```ts
+   * abortDispatch() { return this.state.items.length > 0; }
+   * ```
+   *
+   * Note: If `abortDispatch()` throws an error, the error is logged and the action is aborted.
    */
   abortDispatch(): boolean {
     return false;
@@ -515,16 +524,123 @@ export abstract class KissAction<St> {
   }
 
   /**
-   * If your action overrides this method returning `true`, it will abort the action in
-   * case the action is still running from a previous dispatch. For example:
+   * Set `nonReentrant` to `true` to abort the action in case the action is still running
+   * from a previous dispatch. For example:
    *
    * ```ts
-   * class MyAction extends KissAction<State> {
-   *    nonReentrant = true;
+   * class SaveAction extends KissAction<State> {
+   *   nonReentrant = true;
+   *
+   *   async reduce() {
+   *     await fetch('https://myapi.com/save', { method: 'PUT', body: 'data' });
+   *     return null;
+   *   }
    * }
    * ```
+   *
+   * The aborted action is ignored silently, as if it had never been dispatched.
+   *
+   * ## Advanced usage
+   *
+   * The non-reentrant check is, by default, based on the action class. This means it will
+   * abort an action if another action of the same class is currently running. Note subclasses
+   * are different classes, so they don't block each other. If you want to check based on more
+   * than simply the class, you can override the `nonReentrantKeyParams()` method. For example,
+   * here we use a field of the action to differentiate:
+   *
+   * ```ts
+   * class SaveItem extends KissAction<State> {
+   *   nonReentrant = true;
+   *   constructor(readonly itemId: string) { super(); }
+   *   nonReentrantKeyParams() { return this.itemId; }
+   *   ...
+   * }
+   * ```
+   *
+   * With this setup, `SaveItem('A')` and `SaveItem('B')` can run in parallel,
+   * but two `SaveItem('A')` cannot.
+   *
+   * You can also override `computeNonReentrantKey()` if you want different action classes
+   * to share the same non-reentrant key. Check the documentation of that method for more
+   * information.
+   *
+   * The key is released when the action finishes, with or without errors.
+   *
+   * Notes:
+   * - It can be combined with `retry` and `checkInternet`. With `retry`, the key is only
+   *   released after the last attempt.
+   * - If `abortDispatch()` returns `true`, the action is aborted before the non-reentrant
+   *   check, and doesn't take the key.
+   * - It should not be used in an `OptimisticCommand`, which is already non-reentrant.
+   *   Dispatching it with `nonReentrant` throws a `StoreException`.
    */
   nonReentrant: boolean = false;
+
+  /**
+   * By default, the non-reentrant key is based on the action class.
+   * Override `nonReentrantKeyParams()` so that actions of the SAME CLASS but with different
+   * parameters don't block each other. For example:
+   *
+   * ```ts
+   * class SaveItem extends KissAction<State> {
+   *   nonReentrant = true;
+   *   constructor(readonly itemId: string) { super(); }
+   *   nonReentrantKeyParams() { return this.itemId; }
+   *   ...
+   * }
+   * ```
+   *
+   * Now `SaveItem('A')` and `SaveItem('B')` can run in parallel, but two concurrent dispatches
+   * of `SaveItem('A')` will not both run.
+   *
+   * Params are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents. For example, `[1, 'A']` and `{ id: 1 }` are valid params.
+   *
+   * This is used by `nonReentrant` actions, and by `OptimisticCommand`.
+   */
+  nonReentrantKeyParams(): any {
+    return null;
+  }
+
+  /**
+   * By default, the non-reentrant key combines the action class with `nonReentrantKeyParams()`.
+   * Override this method if you want different action classes to share the same key:
+   *
+   * ```ts
+   * class SaveUser extends KissAction<State> {
+   *   nonReentrant = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   computeNonReentrantKey() { return this.userId; }
+   *   ...
+   * }
+   *
+   * class DeleteUser extends KissAction<State> {
+   *   nonReentrant = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   computeNonReentrantKey() { return this.userId; }
+   *   ...
+   * }
+   * ```
+   *
+   * With this setup, `SaveUser('123')` and `DeleteUser('123')` can't run at the same time,
+   * because they share the same key.
+   *
+   * Keys are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents.
+   *
+   * This is used by `nonReentrant` actions, and by `OptimisticCommand`. They share the same
+   * keys, so a `nonReentrant` action and an `OptimisticCommand` with the same key can't run
+   * at the same time either.
+   */
+  computeNonReentrantKey(): any {
+    return [this.constructor, this.nonReentrantKeyParams()];
+  }
+
+  /**
+   * For Kiss internal use only.
+   * The non-reentrant key of this action, saved by the store when the action is dispatched.
+   */
+  _nonReentrantKey: any = undefined;
 
   /**
    * To retry the `reduce` method when it throws an error:
@@ -619,6 +735,23 @@ export abstract class KissAction<St> {
 
   get ifRetryIsOn(): boolean {
     return (this.retry as RetryOptions)?.on === true;
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Start with the `initialDelay`, and then increase it by `multiplier` each time this is called.
+   * If the delay exceeds `maxDelay`, it will be set to `maxDelay`.
+   */
+  _nextRetryDelay(): number {
+    const retry = this._retry;
+
+    retry.currentDelay = (retry.currentDelay == null)
+      ? retry.initialDelay
+      : retry.currentDelay * retry.multiplier;
+
+    if (retry.currentDelay > retry.maxDelay) retry.currentDelay = retry.maxDelay;
+
+    return retry.currentDelay;
   }
 
   /**
@@ -1339,10 +1472,19 @@ export abstract class KissAction<St> {
 
   /**
    * For Kiss internal use only.
+   * Sets the store and the initial state, so that the action can access them, even in
+   * `abortDispatch()`, which runs before `_injectStore`.
    */
-  _injectStore(_store: Store<St>) {
+  _setStore(_store: Store<St>) {
     this._store = _store;
     this._initialState = _store.state;
+  }
+
+  /**
+   * For Kiss internal use only.
+   */
+  _injectStore(_store: Store<St>) {
+    this._setStore(_store);
 
     if (this.retry) {
       this._validateRetry(this.retry);
@@ -1598,211 +1740,617 @@ export class ActionStatus {
 }
 
 /**
- * The `OptimisticUpdate` abstract class is designed to facilitate optimistic updates in your application.
- * This pattern can significantly enhance the user experience by immediately reflecting changes in the UI
- * before confirming those changes on the backend. It is particularly useful in scenarios where
- * you're dealing with asynchronous updates, such as saving or updating data on a remote server.
+ * The `OptimisticCommand` abstract class is for actions that represent a command.
+ * A command is something you want to run on the server once per dispatch.
+ * Typical examples are:
  *
- * This class provides a structured way to implement optimistic updates by defining a series of abstract
- * methods that you'll need to override in your subclasses. These methods include:
+ * - Create something (add todo, create comment, send message)
+ * - Delete something
+ * - Submit a form
+ * - Upload a file
+ * - Checkout, place order, confirm payment
  *
- * - `newValue()`: Define the new value that you intend to add or update in your application state.
- * - `getValueFromState(state)`: Extract and return the current value from the given state.
- * - `applyState(value, state)`: Apply the given value to the specified state and return the updated state.
- * - `saveValue(newValue)`: Handle the saving of the new value to your backend or cloud service.
- * - `reloadValue()`: Optionally, reload the value from the backend to ensure the UI is in sync with the latest data.
+ * It gives fast UI feedback by applying an optimistic state change immediately, then running
+ * the command on the server, and optionally rolling back and reloading.
  *
- * By implementing these methods, `OptimisticUpdate` helps manage the optimistic update process,
- * including rolling back changes if necessary. This approach allows for a smoother and more responsive
- * user interface, even when operations may fail or require more time to complete.
+ * Note: It's not built for save operations where only the final value matters, and users may
+ * tap many times quickly (like/follow toggles, settings switches, sliders, checkboxes). For
+ * those, each tap would be a separate server call.
  *
- * ---
+ * ## The problem
  *
- * The `OptimisticUpdate` abstract class is still EXPERIMENTAL. You can use it, but test it well.
+ * Let's use a Todo app as an example. We want to save a new Todo to a TodoList.
+ * This code saves the Todo, then reloads the TodoList from the cloud:
  *
- * Let's use this example: We want to save a new TodoItem to a TodoList.
+ * ```ts
+ * class SaveTodo extends Action {
+ *   constructor(readonly newTodo: Todo) { super(); }
  *
- * This code saves the TodoItem, then reloads the TodoList from the cloud:
- *
- * ```typescript
- * class SaveTodo extends KissAction<AppState> {
- *    newTodo: TodoItem;
- *    constructor(newTodo: TodoItem) {
- *        super();
- *        this.newTodo = newTodo;
- *    }
- *
- *    async reduce() {
- *
- *       try {
- *          // Saves the new TodoItem to the cloud.
- *          await saveTodoItem(this.newTodo);
- *       } finally {
- *          // Loads the complete TodoList from the cloud.
- *          let reloadedTodoList = await loadTodoList();
- *          return (state: AppState) => state.copy({ todoList: reloadedTodoList });
- *       }
- *    }
+ *   async reduce() {
+ *     try {
+ *       // Saves the new Todo to the cloud.
+ *       await saveTodo(this.newTodo);
+ *     } finally {
+ *       // Loads the complete TodoList from the cloud.
+ *       let reloadedTodoList = await loadTodoList();
+ *       return (state: State) => state.copy({ todoList: reloadedTodoList });
+ *     }
+ *   }
  * }
  * ```
  *
  * The problem with the above code is that it may take a second to update the TodoList on
- * the screen, while we save then load, which is not a good user experience.
+ * screen, while we save then load.
  *
- * The solution is optimistically updating the TodoList before saving the new TodoItem to the cloud:
+ * The solution is to optimistically update the TodoList before saving:
  *
- * ```typescript
- * class SaveTodo extends KissAction<AppState> {
- *    newTodo: TodoItem;
- *    constructor(newTodo: TodoItem) {
- *        super();
- *        this.newTodo = newTodo;
- *    }
+ * ```ts
+ * class SaveTodo extends Action {
+ *   constructor(readonly newTodo: Todo) { super(); }
  *
- *    async reduce() {
+ *   async reduce() {
+ *     // Updates the TodoList optimistically.
+ *     this.dispatch(new UpdateStateAction((state: State) =>
+ *       state.copy({ todoList: state.todoList.add(this.newTodo) })));
  *
- *       // Updates the TodoList optimistically.
- *       this.dispatch(new UpdateStateAction((state: AppState) => state.copy({ todoList: state.todoList.add(this.newTodo) })));
- *
- *       try {
- *          // Saves the new TodoItem to the cloud.
- *          await saveTodoItem(this.newTodo);
- *       } finally {
- *          // Loads the complete TodoList from the cloud.
- *          let reloadedTodoList = await loadTodoList();
- *          this.dispatch(new UpdateStateAction((state: AppState) => state.copy({ todoList: reloadedTodoList })));
- *       }
- *    }
+ *     try {
+ *       // Saves the new Todo to the cloud.
+ *       await saveTodo(this.newTodo);
+ *     } finally {
+ *       // Loads the complete TodoList from the cloud.
+ *       let reloadedTodoList = await loadTodoList();
+ *       return (state: State) => state.copy({ todoList: reloadedTodoList });
+ *     }
+ *   }
  * }
  * ```
  *
- * That's better. But if the saving fails, the users still have to wait for the reload until
- * they see the reverted state. We can further improve this:
+ * That's better. But if saving fails, users still have to wait for the reload until they see
+ * the reverted state. We can further improve this:
  *
- * ```typescript
- * class SaveTodo extends KissAction<AppState> {
- *    newTodo: TodoItem;
- *    constructor(newTodo: TodoItem) {
- *        super();
- *        this.newTodo = newTodo;
- *    }
+ * ```ts
+ * class SaveTodo extends Action {
+ *   constructor(readonly newTodo: Todo) { super(); }
  *
- *    async reduce() {
+ *   async reduce() {
+ *     // Updates the TodoList optimistically.
+ *     let newTodoList = this.state.todoList.add(this.newTodo);
+ *     this.dispatch(new UpdateStateAction((state: State) => state.copy({ todoList: newTodoList })));
  *
- *       // Updates the TodoList optimistically.
- *       let newTodoList = this.state.todoList.add(this.newTodo);
- *       this.dispatch(new UpdateStateAction((state: AppState) => state.copy({ todoList: newTodoList })));
- *
- *       try {
- *          // Saves the new TodoItem to the cloud.
- *          await saveTodoItem(this.newTodo);
- *       } catch (e) {
- *          // If the state still contains our optimistic update, we roll back.
- *          // If the state now contains something else, we DO NOT roll back.
- *          if (this.state.todoList === newTodoList) {
- *             return (state: AppState) => state.copy({ todoList: this.initialState.todoList }); // Rollback.
- *          }
- *       } finally {
- *          // Loads the complete TodoList from the cloud.
- *          let reloadedTodoList = await loadTodoList();
- *          this.dispatch(new UpdateStateAction((state: AppState) => state.copy({ todoList: reloadedTodoList })));
+ *     try {
+ *       // Saves the new Todo to the cloud.
+ *       await saveTodo(this.newTodo);
+ *     } catch (error) {
+ *       // If the state still contains our optimistic update, we roll back.
+ *       // If the state now contains something else, we do not roll back.
+ *       if (this.state.todoList === newTodoList) {
+ *         let initialTodoList = this.initialState.todoList;
+ *         this.dispatch(new UpdateStateAction((state: State) => state.copy({ todoList: initialTodoList })));
  *       }
- *    }
+ *       throw error;
+ *     } finally {
+ *       // Loads the complete TodoList from the cloud.
+ *       let reloadedTodoList = await loadTodoList();
+ *       this.dispatch(new UpdateStateAction((state: State) => state.copy({ todoList: reloadedTodoList })));
+ *     }
+ *     return null;
+ *   }
  * }
  * ```
  *
- * Now the user sees the rollback immediately after the saving fails.
+ * Now the user sees the rollback immediately after the saving fails. The `OptimisticCommand`
+ * class helps you implement this pattern easily, and takes care of the edge cases.
  *
- * Note: If you are using a realtime database or WebSockets to receive real-time updates from the
- * server, you may not need the finally block above, as long as the `newTodoList` above can be
- * told apart from the current `state.todoList`. This can be a problem if the state in question
- * is a primitive (boolean, number, etc.) or string.
+ * ## How to use it
  *
- * The `OptimisticUpdate` abstract class helps you implement the above code for you when you
- * provide the following:
+ * Extend `OptimisticCommand` instead of your base action, and DO NOT implement `reduce()`.
+ * Instead, you must provide:
  *
- * * `newValue()`: Is the new value, that you want to see saved and applied to the state.
- * * `getValueFromState(state: St)`: Is a function that extracts the value from the given state.
- * * `reloadValue()`: Is a function that reloads the value from the cloud.
- * * `applyState(value: any, state: St)`: Is a function that applies the given value to the given state.
+ * - `optimisticValue()` returns the optimistic value you want to apply right away.
+ * - `getValueFromState(state)` extracts the current value from a given state.
+ * - `applyValueToState(state, value)` applies a value to a given state and returns the new state.
+ * - `sendCommandToServer(optimisticValue)` runs the server command (it may use the action fields).
+ *
+ * And optionally:
+ *
+ * - `applyServerResponseToState(state, serverResponse)` applies the server response to the state.
+ * - `reloadFromServer()` reloads from the server (do not implement it to skip reloading).
+ * - `applyReloadResultToState(state, reloadResult)` applies the reload result to the state
+ *   (the default uses `applyValueToState`).
+ * - `rollbackState`, `shouldRollback`, `shouldReload` and `shouldApplyReload`, to customize
+ *   when and how the rollback and the reload happen.
+ *
+ * Important details:
+ *
+ * - The optimistic update is applied immediately.
+ *
+ * - If `sendCommandToServer` fails, the rollback happens only if the current state still
+ *   matches the optimistic value created by this dispatch. The rollback restores the value
+ *   from `initialState`. Then the action fails with the error of `sendCommandToServer`.
+ *
+ * - The reload is optional. If implemented, it runs after `sendCommandToServer` finishes,
+ *   only in case of error (this can be changed by overriding `shouldReload`).
+ *
+ * Complete example:
+ *
+ * ```ts
+ * class SaveTodo extends OptimisticCommand<State, Todo | undefined> {
+ *   constructor(readonly newTodo: Todo) { super(); }
+ *
+ *   // The new Todo is going to be optimistically applied to the state, right away.
+ *   optimisticValue() { return this.newTodo; }
+ *
+ *   // We teach the action how to read the Todo from the state.
+ *   getValueFromState(state: State) { return state.todoList.getById(this.newTodo.id); }
+ *
+ *   // Apply the value to the state.
+ *   applyValueToState(state: State, todo: Todo | undefined) {
+ *     return state.copy({ todoList: (todo === undefined)
+ *       ? state.todoList.removeById(this.newTodo.id)
+ *       : state.todoList.add(todo) });
+ *   }
+ *
+ *   // Contact the server to send the command (save the Todo).
+ *   async sendCommandToServer(newTodo: Todo) { return await saveTodo(newTodo); }
+ *
+ *   // If the server returns a value, we may apply it to the state.
+ *   applyServerResponseToState(state: State, todo: Todo) {
+ *     return state.copy({ todoList: state.todoList.add(todo) });
+ *   }
+ *
+ *   // Reload from the cloud (in case of error).
+ *   async reloadFromServer() { return await loadTodo(this.newTodo.id); }
+ * }
+ * ```
+ *
+ * ## Non-reentrant
+ *
+ * `OptimisticCommand` is always non-reentrant. If the same action is dispatched while a
+ * previous dispatch is still running, the new dispatch is aborted. This prevents race
+ * conditions such as:
+ *
+ * - Conflicting optimistic updates overwriting each other.
+ * - Incorrect rollback behavior (the rollback check may no longer match).
+ * - Race conditions in the reload phase.
+ * - Server side conflicts from concurrent requests.
+ *
+ * Your UI should let the user know that the command is in progress, so they don't try to
+ * dispatch it again until it finishes. That's easy to do, just check if the action is in
+ * progress with `useIsWaiting(SaveTodo)`.
+ *
+ * By default, the non-reentrant check is based on the action class. If your action has
+ * parameters and you want to allow concurrent dispatches for different parameters (for
+ * example, saving different items), override `nonReentrantKeyParams()`. For example:
+ *
+ * ```ts
+ * class SaveTodo extends OptimisticCommand<State> {
+ *   constructor(readonly todoId: string) { super(); }
+ *   nonReentrantKeyParams() { return this.todoId; }
+ *   ...
+ * }
+ * ```
+ *
+ * This allows `SaveTodo('A')` and `SaveTodo('B')` to run concurrently, while blocking
+ * concurrent dispatches of `SaveTodo('A')` with itself. This is useful for commands you
+ * **do** want to run in parallel, as long as they are for different items. Common examples
+ * are uploading multiple files at the same time (key by fileId), or sending multiple chat
+ * messages at the same time (key by clientMessageId).
+ *
+ * You can also override `computeNonReentrantKey()` if you want different action classes to
+ * share the same non-reentrant key. These keys are shared with `nonReentrant` actions, so a
+ * `nonReentrant` action and an `OptimisticCommand` with the same key can't run at the same time.
+ *
+ * ## Retry
+ *
+ * When combined with `retry`, only the `sendCommandToServer` call is retried, not the
+ * optimistic update or rollback. This prevents UI flickering that would otherwise occur if the
+ * entire reducer was retried on each attempt. The optimistic state remains in place during
+ * retries, and the rollback only happens if all retry attempts fail.
+ *
+ * ## CheckInternet
+ *
+ * When combined with `checkInternet`, if there is no internet: no optimistic state is
+ * applied, no server call is attempted, and the action fails (showing a dialog, if
+ * `checkInternet` is `{ dialog: true }`).
+ *
+ * Notes:
+ *
+ * - The default rollback check compares values with `Object.is` (which is the same as `===`,
+ *   except that `NaN` is equal to `NaN`). So, make sure `getValueFromState` returns the same
+ *   object you applied, or override `shouldRollback`.
+ * - It can be combined with `retry` and `checkInternet`.
+ * - It should not be combined with `nonReentrant` (it's already non-reentrant), nor with
+ *   unlimited retries (a command that never finishes would never release its non-reentrant
+ *   key). Dispatching it with those throws a `StoreException`.
  */
-
-export abstract class OptimisticUpdate<St> extends KissAction<St> {
+export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
 
   /**
-   * You should return here the value that you want to update. For example, if you want to add
-   * a new TodoItem to the todoList, you should return the new todoList with the new TodoItem added.
+   * Return the value you want to apply optimistically to the state.
    *
-   * You can access the fields of the action, and the state, and return the new value.
+   * You can access the fields of the action, and the current `state`, and return the new value.
+   *
+   * ```ts
+   * optimisticValue() { return this.newTodo; }
+   * ```
    */
-  abstract newValue(): any;
-
-  /**
-   * Using the given `state`, you should return the `value` from that state.
-   */
-  abstract getValueFromState(state: St): any;
+  abstract optimisticValue(): T;
 
   /**
    * Using the given `state`, you should apply the given `value` to it, and return the result.
-   */
-  abstract applyState(value: any, state: St): St;
-
-  /**
-   * You should save the `value` or other related value in the cloud.
-   */
-  abstract saveValue(newValue: any): Promise<void>;
-
-  /**
-   * You should reload the `value` from the cloud.
-   * If you want to skip this step, simply don't provide this method.
+   * This is used to apply the optimistic value to the state, and also later to roll back,
+   * if necessary, by applying the initial value.
    *
-   * If the save fails, the rollback is applied before the reload, so the reloaded value wins.
-   * If the reload throws, the action fails with that error (unless the save also failed,
-   * in which case the action fails with the save error).
+   * ```ts
+   * applyValueToState(state: State, todoList: TodoList) { return state.copy({ todoList }); }
+   * ```
    */
-  reloadValue?(): Promise<any>;
+  abstract applyValueToState(state: St, value: T): St;
 
-  async reduce() {
+  /**
+   * Using the given `state`, you should return the current value from that state. This is used
+   * to check if the state still contains the optimistic value, so it's safe to roll back.
+   *
+   * ```ts
+   * getValueFromState(state: State) { return state.todoList; }
+   * ```
+   */
+  abstract getValueFromState(state: St): T;
+
+  /**
+   * You should save the `optimisticValue` or other related value in the cloud, and optionally
+   * return the server's response.
+   *
+   * Note: You can ignore `optimisticValue` and use the action fields instead, if that makes
+   * more sense for your API.
+   *
+   * If `sendCommandToServer` returns a value that is not `null` or `undefined`, that value
+   * will be passed to `applyServerResponseToState` to update the state.
+   *
+   * ```ts
+   * async sendCommandToServer(newTodo: Todo) {
+   *   let response = await saveTodo(newTodo);
+   *   return response; // Return the server-confirmed value, or null.
+   * }
+   * ```
+   */
+  abstract sendCommandToServer(optimisticValue: T): Promise<any>;
+
+  /**
+   * Override `applyServerResponseToState` to return a new state, where the given
+   * `serverResponse` (previously received from the server when running `sendCommandToServer`)
+   * is applied to the current `state`. Example:
+   *
+   * ```ts
+   * applyServerResponseToState(state: State, serverResponse: Response) {
+   *   return state.copy({ todoList: serverResponse.todoList });
+   * }
+   * ```
+   *
+   * Note `serverResponse` is never `null` or `undefined` here, because this method is only
+   * called when `sendCommandToServer` returned some value.
+   *
+   * If you DO NOT want to apply the server response to the state, return `null`
+   * (which is the default).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  applyServerResponseToState(state: St, serverResponse: any): St | null {
+    return null;
+  }
+
+  /**
+   * Implement this method to reload the value from the cloud.
+   * If you want to skip the reload, do not implement this method.
+   *
+   * Note: If you are using a realtime database or WebSockets to receive server pushed
+   * updates, you may not need to reload here.
+   *
+   * ```ts
+   * reloadFromServer() { return loadTodoList(); }
+   * ```
+   */
+  reloadFromServer?(): Promise<any>;
+
+  /**
+   * Returns the state to apply when the command fails and it's safe to roll back.
+   *
+   * This method is called only when `sendCommandToServer` throws, AND `shouldRollback` returns
+   * true. By default, `shouldRollback` returns true only if the current value in the store still
+   * matches the optimistic value created by this dispatch (so we don't roll back over newer
+   * changes).
+   *
+   * Parameters:
+   *
+   * - `initialValue` is the value extracted from `initialState` using `getValueFromState`.
+   *   It's what the value was when this action was dispatched.
+   *
+   * - `optimisticValue` is the value returned by `optimisticValue()` and applied
+   *   optimistically by this dispatch.
+   *
+   * - `error` is the error thrown by `sendCommandToServer`.
+   *
+   * By default, it restores `initialValue` by calling `applyValueToState`.
+   *
+   * Override this method if rollback is not simply "put the old value back".
+   * For example, you may want to:
+   * - Keep the optimistic item but mark it as failed.
+   * - Remove only the item you added, while keeping other local changes.
+   * - Roll back multiple parts of the state, not just the value handled by `applyValueToState`.
+   *
+   * Return `null` to skip the rollback.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  rollbackState({ initialValue, optimisticValue, error }: {
+    initialValue: T,
+    optimisticValue: T,
+    error: any,
+  }): St | null {
+    return this.applyValueToState(this.state, initialValue);
+  }
+
+  /**
+   * Returns true if it should roll back after `sendCommandToServer` fails. This method is
+   * called only when `sendCommandToServer` throws.
+   *
+   * The default is to roll back only if the current value in the store still matches the
+   * optimistic value created by this dispatch (compared with `Object.is`). This avoids
+   * rolling back over newer changes that may have happened while the request was in flight.
+   *
+   * Override this if you need a different safety rule. For example:
+   * - You want to always roll back, even if something else changed.
+   * - You want to roll back only if a specific item is still present.
+   * - You want to roll back only for some errors.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  shouldRollback({ currentValue, initialValue, optimisticValue, error }: {
+    currentValue: T,
+    initialValue: T,
+    optimisticValue: T,
+    error: any,
+  }): boolean {
+    // Default: roll back only if we are still seeing our own optimistic value.
+    return Object.is(currentValue, optimisticValue);
+  }
+
+  /**
+   * Whether it should call `reloadFromServer()`. Only called if `reloadFromServer` is
+   * implemented. It's called after `sendCommandToServer` finishes, both on success and on error.
+   *
+   * Parameters:
+   *
+   * - `currentValue` is the value currently in the store (extracted with `getValueFromState`)
+   *   at the moment we are deciding whether to reload.
+   *
+   * - `lastAppliedValue` is the last value this action applied for the same state slice.
+   *   It is the optimistic value, or the value from the server response if it was applied,
+   *   or the rollback value if the rollback was applied.
+   *
+   * - `optimisticValue` is the value returned by `optimisticValue()` and applied
+   *   optimistically by this dispatch.
+   *
+   * - `rollbackValue` is `undefined` if no rollback state was applied. If the rollback was
+   *   applied, this is the value extracted from the rollback state using `getValueFromState`.
+   *
+   * - `error` is `null` on success, or the error thrown by `sendCommandToServer` on failure.
+   *
+   * The default is to reload only on error.
+   *
+   * Override this method to reload in other cases. For example, to also reload on success,
+   * or to skip the reload when the value already changed to something else:
+   *
+   * ```ts
+   * shouldReload({ currentValue, lastAppliedValue }) { return currentValue === lastAppliedValue; }
+   * ```
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  shouldReload({ currentValue, lastAppliedValue, optimisticValue, rollbackValue, error }: {
+    currentValue: T,
+    lastAppliedValue: T,
+    optimisticValue: T,
+    rollbackValue: T | undefined,
+    error: any,
+  }): boolean {
+    return error !== null;
+  }
+
+  /**
+   * Returns true if it should apply the result returned by `reloadFromServer` to the state.
+   *
+   * This method is called after `reloadFromServer` completes, both when the command
+   * succeeded and when it failed.
+   *
+   * Parameters are the same as `shouldReload`, plus `reloadResult`, which is whatever
+   * `reloadFromServer` returned. Note `currentValue` is read again after the reload finishes,
+   * because the state may have changed while reloading.
+   *
+   * The default is to always apply the reload result. This matches the common expectation
+   * that if you chose to reload, the server is the source of truth.
+   *
+   * Override this method if you want to avoid overwriting newer local changes, or if you need
+   * custom rules based on `reloadResult` or `error`.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  shouldApplyReload({ currentValue, lastAppliedValue, optimisticValue, rollbackValue, reloadResult, error }: {
+    currentValue: T,
+    lastAppliedValue: T,
+    optimisticValue: T,
+    rollbackValue: T | undefined,
+    reloadResult: any,
+    error: any,
+  }): boolean {
+    return true;
+  }
+
+  /**
+   * Applies the result returned by `reloadFromServer` to the state.
+   *
+   * Override this method when `reloadFromServer` returns something that is not the same type
+   * or shape expected by `applyValueToState`, or when applying the reload requires updating
+   * multiple parts of the state.
+   *
+   * Return `null` to ignore the reload result.
+   */
+  applyReloadResultToState(state: St, reloadResult: any): St | null {
+    return this.applyValueToState(state, reloadResult as T);
+  }
+
+  /**
+   * Do NOT override this method. Implement `optimisticValue`, `getValueFromState`,
+   * `applyValueToState` and `sendCommandToServer` instead.
+   */
+  async reduce(): Promise<null> {
     // Updates the value optimistically.
-    const _newValue = this.newValue();
-    const action = new UpdateStateAction((state: St) => this.applyState(_newValue, state));
-    this.dispatch(action);
+    const optimistic = this.optimisticValue();
+    this._applyState(this.applyValueToState(this.state, optimistic));
 
-    let saveError: unknown = undefined;
-    let saveFailed = false;
+    let commandFailed = false;
+    let commandError: any = null;
+    let lastAppliedValue: T = optimistic; // What this action last wrote.
+    let rollbackValue: T | undefined = undefined; // Value slice after the rollback, if any.
 
     try {
-      // Saves the new value to the cloud.
-      await this.saveValue(_newValue);
-    } catch (e) {
-      saveFailed = true;
-      saveError = e;
+      // Sends the command to the server.
+      // If retry is on, only this call is retried, keeping the optimistic state in place.
+      const serverResponse = await this._sendCommandWithRetryIfNeeded(optimistic);
 
-      // If the state still contains our optimistic update, we roll back.
-      // If the state now contains something else, we DO NOT roll back.
-      // The rollback is dispatched right away, so that it comes before the reload.
-      if (this.getValueFromState(this.state) === _newValue) {
-        const initialValue = this.getValueFromState(this.initialState);
-        this.dispatch(new UpdateStateAction((state: St) => this.applyState(initialValue, state)));
+      // Applies the server response, if any.
+      if (serverResponse !== null && serverResponse !== undefined) {
+        const newState = this.applyServerResponseToState(this.state, serverResponse);
+        if (newState !== null) {
+          this._applyState(newState);
+          lastAppliedValue = this.getValueFromState(newState);
+        }
+      }
+    } catch (error) {
+      commandFailed = true;
+      commandError = error;
+
+      // Decides if it's safe to roll back (default: only if we are still seeing our own
+      // optimistic value, to avoid undoing newer changes made while the request was in flight).
+      const initialValue = this.getValueFromState(this.initialState);
+
+      if (this.shouldRollback({
+        currentValue: this.getValueFromState(this.state),
+        initialValue,
+        optimisticValue: optimistic,
+        error,
+      })) {
+        const rollback = this.rollbackState({ initialValue, optimisticValue: optimistic, error });
+        if (rollback !== null) {
+          this._applyState(rollback);
+          rollbackValue = this.getValueFromState(rollback);
+          lastAppliedValue = rollbackValue;
+        }
       }
     }
 
-    // Loads the value from the cloud, if `reloadValue` was provided.
-    if (this.reloadValue !== undefined) {
+    // Reloads from the server, if `reloadFromServer` was implemented.
+    if (this.reloadFromServer !== undefined) {
       try {
-        const reloadedValue = await this.reloadValue();
-        this.dispatch(new UpdateStateAction((state: St) => this.applyState(reloadedValue, state)));
+        const doReload = this.shouldReload({
+          currentValue: this.getValueFromState(this.state),
+          lastAppliedValue,
+          optimisticValue: optimistic,
+          rollbackValue,
+          error: commandError,
+        });
+
+        if (doReload) {
+          const reloadResult = await this.reloadFromServer();
+
+          // Reads the current value again, because the state may have changed while reloading.
+          const apply = this.shouldApplyReload({
+            currentValue: this.getValueFromState(this.state),
+            lastAppliedValue,
+            optimisticValue: optimistic,
+            rollbackValue,
+            reloadResult,
+            error: commandError,
+          });
+
+          if (apply) {
+            const newState = this.applyReloadResultToState(this.state, reloadResult);
+            if (newState !== null) this._applyState(newState);
+          }
+        }
       } catch (reloadError) {
-        // If both fail, the save error is the one that matters.
-        if (!saveFailed) throw reloadError;
+        // A reload failure does not hide the original command error.
+        if (!commandFailed) throw reloadError;
       }
     }
 
-    // Rethrow, so that the action fails, and the user can be notified.
-    if (saveFailed) throw saveError;
+    // Rethrows, so that the action fails, and the user can be notified.
+    if (commandFailed) throw commandError;
 
     return null;
   }
+
+  private _applyState(newState: St): void {
+    this.dispatch(new UpdateStateAction(() => newState));
+  }
+
+  /**
+   * When retry is on, retries only the `sendCommandToServer` call, keeping the optimistic
+   * update in place and avoiding UI flickering. Note the store does not retry the reducer
+   * of an `OptimisticCommand`.
+   */
+  private async _sendCommandWithRetryIfNeeded(optimistic: T): Promise<any> {
+    if (!this.ifRetryIsOn) return this.sendCommandToServer(optimistic);
+
+    while (true) {
+      try {
+        return await this.sendCommandToServer(optimistic);
+      } catch (error) {
+        this._retry.attempts++;
+        if (this._retry.attempts > this._retry.maxRetries) throw error;
+        await new Promise(resolve => setTimeout(resolve, this._nextRetryDelay()));
+      }
+    }
+  }
+
+  /**
+   * For Kiss internal use only.
+   */
+  _injectStore(_store: Store<St>) {
+    super._injectStore(_store);
+
+    if (this.nonReentrant)
+      throw new StoreException(
+        `Action ${this.constructor.name} is an OptimisticCommand, which is always non-reentrant. ` +
+        'Remove its `nonReentrant` property.');
+
+    if (this.ifRetryIsOn && (this._retry.unlimitedRetries || this._retry.maxRetries === -1))
+      throw new StoreException(
+        `Action ${this.constructor.name} is an OptimisticCommand, which can't use unlimited retries. ` +
+        'Use a `retry.maxRetries` of 0 or more.');
+  }
+}
+
+/**
+ * Returns true if the given non-reentrant keys are the same. Keys are compared with
+ * `Object.is`, except arrays and plain objects, which are compared by their contents.
+ * For Kiss internal use only.
+ */
+export function _isSameNonReentrantKey(a: any, b: any): boolean {
+  if (Object.is(a, b)) return true;
+
+  if (Array.isArray(a) && Array.isArray(b))
+    return a.length === b.length && a.every((value, i) => _isSameNonReentrantKey(value, b[i]));
+
+  if (_isPlainObject(a) && _isPlainObject(b)) {
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
+    return keysA.length === keysB.length &&
+      keysA.every(key => Object.prototype.hasOwnProperty.call(b, key) && _isSameNonReentrantKey(a[key], b[key]));
+  }
+
+  return false;
+}
+
+function _isPlainObject(value: any): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 /**

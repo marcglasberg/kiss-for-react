@@ -44,7 +44,32 @@
 * `isWaiting` and `useIsWaiting` now accept abstract action classes, and return `true` while
   any subclass of them is running.
 
+* New `OptimisticCommand` abstract class, for actions that send a command to the server
+  (create, delete, submit, upload, checkout...). It applies an optimistic value right away,
+  rolls it back if the command fails (unless the value was changed meanwhile), and can apply
+  the server response and reload from the server. It's always non-reentrant (per class, or
+  per key with `nonReentrantKeyParams()` or `computeNonReentrantKey()`). With `retry`, only
+  the server call is retried, so the optimistic value is not rolled back between attempts.
+
+* `nonReentrant` actions can now override `nonReentrantKeyParams()`, so that actions of the
+  same class but with different parameters can run in parallel, and `computeNonReentrantKey()`,
+  so that different action classes share the same key. These keys are shared with
+  `OptimisticCommand`.
+
 ### Breaking changes
+
+* A `nonReentrant` action is no longer aborted while an action of one of its subclasses is
+  running. The non-reentrant check now uses the exact action class (or the key, see above).
+
+* Dispatching an action that was already dispatched now always throws a `StoreException`.
+  Before, it was silently ignored if the action was then aborted (by `abortDispatch()` or
+  `nonReentrant`), mocked, or the store was shut down.
+
+* `OptimisticUpdate` was removed. Use `OptimisticCommand` instead: `newValue()` is now
+  `optimisticValue()`, `applyState(value, state)` is now `applyValueToState(state, value)`,
+  `saveValue()` is now `sendCommandToServer()`, and `reloadValue()` is now
+  `reloadFromServer()`. Note the reload now runs only when the command fails (override
+  `shouldReload` to change this), and the action is now non-reentrant.
 
 * Dispatching an action before the store is ready (see `store.ready()`) now throws a
   `StoreException`. Before, the action ran, but its state changes could be overwritten when
@@ -88,5 +113,14 @@
 * The type declarations now need TypeScript 5.0 or later.
 
 ### Other
+
+* `abortDispatch()` can now read `this.state`, `this.store` and `this.initialState`. Before,
+  reading them threw an error, which was swallowed, and the action was silently aborted.
+
+* The set of `actions` returned by `waitActionCondition` and `waitAllActions` is now a copy,
+  so it no longer changes after the wait resolves, when actions are dispatched or finish.
+
+* The `UserException` builder methods (`withTitle`, `withMessage`, `addProps` etc.) now keep
+  the subclass of the exception, and its fields. Before, they returned a plain `UserException`.
 
 * Bug fixes.

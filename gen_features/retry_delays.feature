@@ -62,3 +62,17 @@ Feature: Retry delays
     Given An action that always fails, with retry options "initialDelay: 0", "maxDelay: 0" and "maxRetries: 0".
     When The action is dispatched.
     Then It runs once, does not retry, and fails with its own error.
+
+  Scenario: The retry delay only starts after the failed reducer finishes.
+    Given An action with retry options "initialDelay: 350" and "maxRetries: 1".
+    And Its reducer takes 1000 millis to fail.
+    When The action is dispatched.
+    Then The second attempt starts 1350 millis after the first one started.
+
+  Scenario: While it waits to retry, the action is still in progress.
+    Given An action with retry options "initialDelay: 100", "multiplier: 2" and "maxRetries: 2".
+    And The action always fails.
+    When The action is dispatched.
+    Then It runs again only when each delay ends.
+    And While it waits, the action is in progress, and has not failed yet.
+    And After the last attempt, the action is not in progress anymore, and has failed.

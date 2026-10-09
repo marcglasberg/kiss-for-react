@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["jest", "node"],
+    "paths": {
+      "kiss-for-react": ["../../../src/index.ts"]
+    }
+  },
+  "include": ["*.ts", "*.tsx"]
+}
