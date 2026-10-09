@@ -46,21 +46,17 @@ Feature: Persistor
     When The action is dispatched twice.
     Then The second state is only persisted when the first one finishes.
 
-  Scenario: A state change made while the persisted state is being read is persisted after the initial-state.
-    Given There is no persisted state when the store is created.
-    And The persistor is async and slow, taking 150 millis to read/write/delete the state.
-    When The store is created.
-    And An action changes the state before the persistor finished reading and saving the initial-state.
-    Then The new state is only persisted after the initial-state is saved.
-    And The persisted state is the new state, not the initial-state.
-
-  Scenario: A state change made while the persisted state is being read does not overwrite the persisted state.
-    Given There is some state already persisted when the store is created.
-    And The persistor is async and slow, taking 150 millis to read/write/delete the state.
-    When The store is created.
-    And An action changes the state before the persistor finished reading the state.
-    Then The persisted state is read into the store.
-    And The persisted state is not overwritten.
+  Scenario Outline: Dispatching an action while the persisted state is being read throws, and changes nothing.
+    Given The persistor is async and slow, taking 150 millis to read/write/delete the state.
+    And The store was just created, and is still reading the persisted state.
+    When An action is dispatched with dispatch, dispatchSync or dispatchAndWait.
+    Then The dispatch throws a StoreException.
+    And The state does not change, and the action is not dispatched.
+    And After the store is ready, the store has the persisted state.
+    Examples: 
+      | Persisted |
+      | NULL      |
+      | 42        |
 
   Scenario: persistAndPausePersistor can be awaited, and the current state is persisted when it returns.
     Given The persistor is async and slow, taking 150 millis to read/write/delete the state.
@@ -81,8 +77,12 @@ Feature: Persistor
   Scenario: persistAndPausePersistor called while the persisted state is being read waits for the reading to finish.
     Given There is no persisted state when the store is created.
     And The persistor is async and slow, taking 150 millis to read/write/delete the state.
-    When An action changes the state while the persistor is reading the state.
-    And We await persistAndPausePersistor, before the reading finishes.
-    Then The initial-state is saved first.
-    And Then the new state is persisted, before persistAndPausePersistor returns.
+    When We await persistAndPausePersistor, before the reading finishes.
+    Then The initial-state is saved before persistAndPausePersistor returns.
     And The persistor stays paused.
+
+  Scenario: Logging out while the persisted state is still being read throws, and changes nothing.
+    Given A store whose persisted state is still being read.
+    When logOut is called before the read finishes.
+    Then logOut throws a StoreException.
+    And After the read finishes, the store has the state that was read, and it is still persisted.

@@ -28,8 +28,3 @@ Feature: ClassPersistor with Map
     Then The new store state has the Map with all the saved entries.
     And The saved state is not deleted.
     And No error is logged.
-
-  Scenario: A Map saved by an older version, without its entries, is read back as an empty Map.
-    Given A saved state where the Map was written without its entries.
-    When The state is read by the ClassPersistor.
-    Then There is no error, and the Map is read back as an empty Map.

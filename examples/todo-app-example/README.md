@@ -42,7 +42,7 @@ If you run it from an independent project, you'll need to include Kiss from npm 
 ```json
 {
   "dependencies": {
-    "kiss-for-react": "^1.1.0"
+    "kiss-for-react": "^2.0.0"
   }
 }
 ```

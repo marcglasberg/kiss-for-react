@@ -1,140 +1,109 @@
 // The Esserializer code was copied and adapted from the original copyrighted work, MIT licensed, by cshao.
 // All credit goes to him. See: https://www.npmjs.com/package/esserializer
 
+/**
+ * Returned by internal helpers to mean "I don't handle this value". We can't use
+ * `null` or `undefined` for that, because those are valid results.
+ */
 const ESSERIALIZER_NULL = '__ESSERIALIZER_NULL__';
 
-const ARRAY_FIELD = 'ess_arr';
-const BOOLEAN_FIELD = 'ess_bool';
-const CLASS_NAME_FIELD = '*type';
-const OPTIONS_FIELD = 'ess_opt';
-const TIMESTAMP_FIELD = 'ess_ts';
-const TO_STRING_FIELD = 'ess_str';
+/** The type of a saved object: a class name, a built-in class name, or a special type. */
+const TYPE_FIELD = '*type';
 
-const BUILTIN_CLASS_INT8ARRAY = 'Int8Array';
-const BUILTIN_CLASS_UINT8ARRAY = 'Uint8Array';
-const BUILTIN_CLASS_UINT8CLAMPEDARRAY = 'Uint8ClampedArray';
-const BUILTIN_CLASS_INT16ARRAY = 'Int16Array';
-const BUILTIN_CLASS_UINT16ARRAY = 'Uint16Array';
-const BUILTIN_CLASS_INT32ARRAY = 'Int32Array';
-const BUILTIN_CLASS_UINT32ARRAY = 'Uint32Array';
-const BUILTIN_CLASS_FLOAT32ARRAY = 'Float32Array';
-const BUILTIN_CLASS_FLOAT64ARRAY = 'Float64Array';
-const BUILTIN_CLASS_BIGINT64ARRAY = 'BigInt64Array';
-const BUILTIN_CLASS_BIGUINT64ARRAY = 'BigUint64Array';
-const BUILTIN_CLASS_ARRAYBUFFER = 'ArrayBuffer';
-const BUILTIN_CLASS_SHAREDARRAYBUFFER = 'SharedArrayBuffer';
-const BUILTIN_CLASS_BOOLEAN = 'Boolean';
-const BUILTIN_CLASS_DATAVIEW = 'DataView';
-const BUILTIN_CLASS_DATE = 'Date';
-const BUILTIN_CLASS_INTL_COLLATOR = 'Collator';
-const BUILTIN_CLASS_INTL_DATETIMEFORMAT = 'DateTimeFormat';
-const BUILTIN_CLASS_INTL_LISTFORMAT = 'ListFormat';
-const BUILTIN_CLASS_INTL_LOCALE = 'Locale';
-const BUILTIN_CLASS_INTL_NUMBERFORMAT = 'NumberFormat';
-const BUILTIN_CLASS_INTL_PLURALRULES = 'PluralRules';
-const BUILTIN_CLASS_INTL_RELATIVETIMEFORMAT = 'RelativeTimeFormat';
-const BUILTIN_CLASS_REGEXP = 'RegExp';
-const BUILTIN_CLASS_MAP = 'Map';
-const BUILTIN_CLASS_SET = 'Set';
-const BUILTIN_CLASS_STRING = 'String';
-const BUILTIN_CLASS_ERROR = 'Error';
-const BUILTIN_CLASS_EVAL_ERROR = 'EvalError';
-const BUILTIN_CLASS_RANGE_ERROR = 'RangeError';
-const BUILTIN_CLASS_REFERENCE_ERROR = 'ReferenceError';
-const BUILTIN_CLASS_SYNTAX_ERROR = 'SyntaxError';
-const BUILTIN_CLASS_TYPE_ERROR = 'TypeError';
-const BUILTIN_CLASS_URI_ERROR = 'URIError';
-const BUILTIN_CLASS_AGGREGATE_ERROR = 'AggregateError';
-const BUILTIN_TYPE_BIG_INT = 'BI';
-const BUILTIN_TYPE_NOT_FINITE = 'NF';
-const BUILTIN_TYPE_UNDEFINED = 'UD';
+/** The data needed to rebuild a built-in value (its items, timestamp, text form, etc.). */
+const VALUE_FIELD = '*value';
 
-const ALL_BUILTIN_ARRAYS = [
-  BUILTIN_CLASS_INT8ARRAY,
-  BUILTIN_CLASS_UINT8ARRAY,
-  BUILTIN_CLASS_UINT8CLAMPEDARRAY,
-  BUILTIN_CLASS_INT16ARRAY,
-  BUILTIN_CLASS_UINT16ARRAY,
-  BUILTIN_CLASS_INT32ARRAY,
-  BUILTIN_CLASS_UINT32ARRAY,
-  BUILTIN_CLASS_FLOAT32ARRAY,
-  BUILTIN_CLASS_FLOAT64ARRAY,
-  BUILTIN_CLASS_BIGINT64ARRAY,
-  BUILTIN_CLASS_BIGUINT64ARRAY
-];
+// Special types, for primitive values that JSON can't represent.
+const TYPE_UNDEFINED = 'UD';
+const TYPE_NOT_FINITE = 'NF'; // Infinity, -Infinity and NaN.
+const TYPE_BIG_INT = 'BI';
 
-const ALL_BUILTIN_ERRORS = [
-  BUILTIN_CLASS_ERROR,
-  BUILTIN_CLASS_EVAL_ERROR,
-  BUILTIN_CLASS_RANGE_ERROR,
-  BUILTIN_CLASS_REFERENCE_ERROR,
-  BUILTIN_CLASS_SYNTAX_ERROR,
-  BUILTIN_CLASS_TYPE_ERROR,
-  BUILTIN_CLASS_URI_ERROR,
-  BUILTIN_CLASS_AGGREGATE_ERROR
-];
+// Built-in classes that have their own way of being saved.
+const BUILTIN_ARRAYBUFFER = 'ArrayBuffer';
+const BUILTIN_SHAREDARRAYBUFFER = 'SharedArrayBuffer';
+const BUILTIN_DATAVIEW = 'DataView';
+const BUILTIN_BOOLEAN = 'Boolean';
+const BUILTIN_STRING = 'String';
+const BUILTIN_DATE = 'Date';
+const BUILTIN_REGEXP = 'RegExp';
+const BUILTIN_MAP = 'Map';
+const BUILTIN_SET = 'Set';
+const BUILTIN_INTL_LOCALE = 'Locale';
 
-const ALL_BUILTIN_INTLS = [
-  BUILTIN_CLASS_INTL_COLLATOR,
-  BUILTIN_CLASS_INTL_DATETIMEFORMAT,
-  BUILTIN_CLASS_INTL_LISTFORMAT,
-  BUILTIN_CLASS_INTL_NUMBERFORMAT,
-  BUILTIN_CLASS_INTL_PLURALRULES,
-  BUILTIN_CLASS_INTL_RELATIVETIMEFORMAT
-];
+/** Typed arrays, by name. They are saved as the array of their items. */
+const TYPED_ARRAY_CLASSES: Readonly<Record<string, any>> = {
+  Int8Array,
+  Uint8Array,
+  Uint8ClampedArray,
+  Int16Array,
+  Uint16Array,
+  Int32Array,
+  Uint32Array,
+  Float32Array,
+  Float64Array,
+  BigInt64Array,
+  BigUint64Array,
+};
 
-const CLASSNAMES_WHOSE_ENUMERABLE_PROPERTIES_SHOULD_BE_IGNORED = [
-  BUILTIN_CLASS_STRING, ...ALL_BUILTIN_ARRAYS
-];
+/** Error classes, by name. They are saved with their name, message and stack. */
+const ERROR_CLASSES: Readonly<Record<string, any>> = {
+  Error,
+  EvalError,
+  RangeError,
+  ReferenceError,
+  SyntaxError,
+  TypeError,
+  URIError,
+  AggregateError,
+};
+
+/**
+ * `Intl` classes, by name. They are saved as their resolved options.
+ * `Intl.Locale` is not here, because it's saved as its text form.
+ */
+const INTL_CLASSES: Readonly<Record<string, any>> = {
+  Collator: Intl.Collator,
+  DateTimeFormat: Intl.DateTimeFormat,
+  ListFormat: Intl.ListFormat,
+  NumberFormat: Intl.NumberFormat,
+  PluralRules: Intl.PluralRules,
+  RelativeTimeFormat: Intl.RelativeTimeFormat,
+};
+
+/**
+ * Classes whose enumerable properties are not saved, because they are just their items
+ * (like the characters of a `String`, or the numbers of an `Int8Array`), which are saved apart.
+ */
+const CLASSNAMES_WHOSE_ENUMERABLE_PROPERTIES_SHOULD_BE_IGNORED: ReadonlySet<string> = new Set([
+  BUILTIN_STRING,
+  ...Object.keys(TYPED_ARRAY_CLASSES),
+]);
+
+/** Returns true if `name` is an own key of `table` (not an inherited one, like `toString`). */
+function hasName(table: Readonly<Record<string, any>>, name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(table, name);
+}
 
 export {
   ESSERIALIZER_NULL,
-  ALL_BUILTIN_ARRAYS,
-  ALL_BUILTIN_ERRORS,
-  ALL_BUILTIN_INTLS,
+  TYPE_FIELD,
+  VALUE_FIELD,
+  TYPE_UNDEFINED,
+  TYPE_NOT_FINITE,
+  TYPE_BIG_INT,
+  BUILTIN_ARRAYBUFFER,
+  BUILTIN_SHAREDARRAYBUFFER,
+  BUILTIN_DATAVIEW,
+  BUILTIN_BOOLEAN,
+  BUILTIN_STRING,
+  BUILTIN_DATE,
+  BUILTIN_REGEXP,
+  BUILTIN_MAP,
+  BUILTIN_SET,
+  BUILTIN_INTL_LOCALE,
+  TYPED_ARRAY_CLASSES,
+  ERROR_CLASSES,
+  INTL_CLASSES,
   CLASSNAMES_WHOSE_ENUMERABLE_PROPERTIES_SHOULD_BE_IGNORED,
-  BUILTIN_CLASS_INT8ARRAY,
-  BUILTIN_CLASS_UINT8ARRAY,
-  BUILTIN_CLASS_UINT8CLAMPEDARRAY,
-  BUILTIN_CLASS_INT16ARRAY,
-  BUILTIN_CLASS_UINT16ARRAY,
-  BUILTIN_CLASS_INT32ARRAY,
-  BUILTIN_CLASS_UINT32ARRAY,
-  BUILTIN_CLASS_FLOAT32ARRAY,
-  BUILTIN_CLASS_FLOAT64ARRAY,
-  BUILTIN_CLASS_BIGINT64ARRAY,
-  BUILTIN_CLASS_BIGUINT64ARRAY,
-  BUILTIN_CLASS_ARRAYBUFFER,
-  BUILTIN_CLASS_SHAREDARRAYBUFFER,
-  BUILTIN_CLASS_BOOLEAN,
-  BUILTIN_CLASS_DATAVIEW,
-  BUILTIN_CLASS_DATE,
-  BUILTIN_CLASS_INTL_COLLATOR,
-  BUILTIN_CLASS_INTL_DATETIMEFORMAT,
-  BUILTIN_CLASS_INTL_LISTFORMAT,
-  BUILTIN_CLASS_INTL_LOCALE,
-  BUILTIN_CLASS_INTL_NUMBERFORMAT,
-  BUILTIN_CLASS_INTL_PLURALRULES,
-  BUILTIN_CLASS_INTL_RELATIVETIMEFORMAT,
-  BUILTIN_CLASS_REGEXP,
-  BUILTIN_CLASS_MAP,
-  BUILTIN_CLASS_SET,
-  BUILTIN_CLASS_STRING,
-  BUILTIN_CLASS_ERROR,
-  BUILTIN_CLASS_EVAL_ERROR,
-  BUILTIN_CLASS_RANGE_ERROR,
-  BUILTIN_CLASS_REFERENCE_ERROR,
-  BUILTIN_CLASS_SYNTAX_ERROR,
-  BUILTIN_CLASS_TYPE_ERROR,
-  BUILTIN_CLASS_URI_ERROR,
-  BUILTIN_CLASS_AGGREGATE_ERROR,
-  BUILTIN_TYPE_BIG_INT,
-  BUILTIN_TYPE_NOT_FINITE,
-  BUILTIN_TYPE_UNDEFINED,
-  ARRAY_FIELD,
-  BOOLEAN_FIELD,
-  CLASS_NAME_FIELD,
-  OPTIONS_FIELD,
-  TIMESTAMP_FIELD,
-  TO_STRING_FIELD
+  hasName,
 };

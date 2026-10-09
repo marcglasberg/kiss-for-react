@@ -34,7 +34,7 @@ function createStore() {
 }
 
 /** Renders a component that calls `useIsWaiting(type)` and records what it returns on every render. */
-function renderRecording(store: Store<State>, type: new (...args: any[]) => KissAction<State>) {
+function renderRecording(store: Store<State>, type: abstract new (...args: any[]) => KissAction<State>) {
   const results: boolean[] = [];
   const Comp: React.FC = () => {
     results.push(useIsWaiting(type));
@@ -60,7 +60,7 @@ Bdd(feature)
   .and('The component re-renders again showing it is no longer waiting.')
   .run(async (_) => {
     const store = createStore();
-    const results = renderRecording(store, BaseAction as any);
+    const results = renderRecording(store, BaseAction);
     expect(results).toEqual([false]);
 
     const d = deferred();
@@ -141,4 +141,30 @@ Bdd(feature)
       await store.waitAllActions([]);
     });
     expect(results.every((r) => r === false)).toBe(true);
+  });
+
+Bdd(feature)
+  .scenario('The store and actions can check if they are waiting for an abstract base action class.')
+  .given('An abstract base action class.')
+  .and('A subclass action is running.')
+  .when('isWaiting is called with the abstract base class, from the store and from an action.')
+  .then('It returns true.')
+  .run(async (_) => {
+    const store = createStore();
+    const d = deferred();
+    store.dispatch(new SubAction(d.promise));
+
+    class CheckAction extends KissAction<State> {
+      reduce() {
+        expect(this.isWaiting(BaseAction)).toBe(true);
+        return null;
+      }
+    }
+
+    expect(store.isWaiting(BaseAction)).toBe(true);
+    store.dispatchSync(new CheckAction());
+
+    d.resolve();
+    await store.waitAllActions([]);
+    expect(store.isWaiting(BaseAction)).toBe(false);
   });

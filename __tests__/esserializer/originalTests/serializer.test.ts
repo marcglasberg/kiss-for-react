@@ -80,7 +80,7 @@ describe('Test getSerializeValueWithClassName', () => {
       id: 1,
       date: {
         '*type': 'Date',
-        ess_ts: 1613723040000
+        '*value': 1613723040000
       }
     });
   });
@@ -91,7 +91,7 @@ describe('Test getSerializeValueWithClassName', () => {
     expect(getSerializeValueWithClassName(objWithBoolean)).toStrictEqual({
       b: {
         '*type': 'Boolean',
-        ess_bool: true
+        '*value': true
       }
     });
   });

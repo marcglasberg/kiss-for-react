@@ -5,6 +5,7 @@ import {
   useDispatch,
   useExceptionFor,
   useIsFailed,
+  useIsStoreReady,
   useIsWaiting,
   useSelect,
   useStore,
@@ -44,7 +45,11 @@ function TodoInput() {
   const errorText = useExceptionFor(AddTodoAction)?.errorText ?? '';
   const clearExceptionFor = useClearExceptionFor();
 
+  // Actions can't be dispatched before the store loaded the persisted state.
+  const isReady = useIsStoreReady();
+
   async function sendInputToStore(text: string) {
+    if (!isReady) return;
     const status = await store.dispatchAndWait(new AddTodoAction(text))
     if (status.isCompletedOk) setInputText(''); // If added, clean the text from the TextField.
   }
@@ -66,7 +71,7 @@ function TodoInput() {
                    if (e.key === 'Enter') sendInputToStore(inputText);
                  }}
       />
-      <Button style={{height: 55}} variant="contained" color="primary"
+      <Button style={{height: 55}} variant="contained" color="primary" disabled={!isReady}
               onClick={() => sendInputToStore(inputText)}>
         Add
       </Button>
@@ -124,6 +129,11 @@ function TodoList() {
   const count = useSelect((state: State) => state.todoList.count(filter));
   const items: TodoItem[] = useSelect((state: State) => state.todoList.items);
 
+  // While the store is loading the persisted state, the list is still empty. Show it's loading,
+  // instead of "No todos".
+  const isReady = useIsStoreReady();
+  if (!isReady) return <div className='noTodosDiv'><CircularProgress/></div>;
+
   // No todos to show with the current filter.
   if (count === 0) return <NoTodosWarning/>;
   //
@@ -168,10 +178,12 @@ function TodoItemComponent({item}: {item: TodoItem}) {
 function FilterButton() {
   const store = useStore();
   const filter = useSelect((state: State) => state.filter);
+  const isReady = useIsStoreReady();
 
   return (
     <Button style={{display: "block", width: '100%', height: '60px', marginBottom: "10px"}}
             variant="outlined"
+            disabled={!isReady}
             onClick={() => {
               store.dispatch(new NextFilterAction());
             }}
@@ -183,7 +195,8 @@ function FilterButton() {
 
 function RemoveAllButton() {
   const dispatch = useDispatch();
-  const isDisabled = useIsWaiting(RemoveCompletedTodosAction);
+  const isWaiting = useIsWaiting(RemoveCompletedTodosAction);
+  const isReady = useIsStoreReady();
 
   return (
     <Button style={{
@@ -193,17 +206,18 @@ function RemoveAllButton() {
       marginBottom: "10px",
       color: 'white'
     }}
-            disabled={isDisabled}
+            disabled={isWaiting || !isReady}
             variant="contained"
             onClick={() => dispatch(new RemoveCompletedTodosAction())}
     >
-      {isDisabled ? <CircularProgress size={24} color='inherit'/> : 'Remove Completed Todos'}
+      {isWaiting ? <CircularProgress size={24} color='inherit'/> : 'Remove Completed Todos'}
     </Button>
   );
 }
 
 function AddRandomTodoButton() {
   const isLoading = useIsWaiting(AddRandomTodoAction);
+  const isReady = useIsStoreReady();
   const store = useStore();
 
   return (
@@ -215,6 +229,7 @@ function AddRandomTodoButton() {
       color: 'white'
     }}
             variant="contained"
+            disabled={!isReady}
             onClick={() => store.dispatch(new AddRandomTodoAction())}
     >
       {isLoading ? <CircularProgress size={24} color='inherit'/> : 'Add Random Todo'}

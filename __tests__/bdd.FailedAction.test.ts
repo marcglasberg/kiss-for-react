@@ -70,6 +70,56 @@ Bdd(feature)
   })
 
 Bdd(feature)
+  .scenario('Dispatching an action again clears its failed state, even if nobody checked it before.')
+  .given('A SYNC action that failed, and nobody called `isFailed` or `exceptionFor` for it.')
+  .when('The action is dispatched again and succeeds.')
+  .and('Only then `isFailed` and `exceptionFor` are called for it.')
+  .then('The action is not failed, and has no exception.')
+  .run(async (_) => {
+
+    const store = new Store<State>({
+      initialState: new State(1),
+      logger: logger
+    });
+
+    // Fails, but nobody checks it.
+    store.dispatch(new SyncActionThatFails(true));
+
+    // Succeeds, and only now we check it.
+    store.dispatch(new SyncActionThatFails(false));
+
+    expect(store.isFailed(SyncActionThatFails)).toBe(false);
+    expect(store.exceptionFor(SyncActionThatFails)).toBeNull();
+  });
+
+Bdd(feature)
+  .scenario('The failed state is cleared when the action is dispatched again, not when it finishes.')
+  .given('An ASYNC action that failed, and nobody called `isFailed` or `exceptionFor` for it.')
+  .when('The action is dispatched again, and is still running.')
+  .then('The action is not failed, and has no exception.')
+  .and('If it fails again, it is failed again, with the new exception.')
+  .run(async (_) => {
+
+    const store = new Store<State>({
+      initialState: new State(1),
+      logger: logger
+    });
+
+    // Fails, but nobody checks it.
+    await store.dispatchAndWait(new AsyncActionThatFails(true));
+
+    // Dispatched again. While it runs, it's not failed.
+    const promise = store.dispatchAndWait(new AsyncActionThatFails(true));
+    expect(store.isFailed(AsyncActionThatFails)).toBe(false);
+    expect(store.exceptionFor(AsyncActionThatFails)).toBeNull();
+
+    // It fails again.
+    await promise;
+    expect(store.isFailed(AsyncActionThatFails)).toBe(true);
+    expect(store.exceptionFor(AsyncActionThatFails)).toEqual(new UserException('Yes, it failed.'));
+  });
+
+Bdd(feature)
   .scenario('Checking if an ASYNC action has failed.')
   .given('An ASYNC action.')
   .when('The action is dispatched twice with `dispatch(action)`.')

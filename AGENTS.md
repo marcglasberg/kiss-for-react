@@ -49,13 +49,8 @@ Guidelines:
 - When fixing a bug, first write BDDs that fail because of the bug, then fix it, then check they pass.
 - Run the tests with `npx jest` (or `npx jest __tests__/bdd.<Topic>.test.ts`).
 
-## No backward compatibility before version 2.0.0
-
-Until version 2.0.0, this package has no users to protect, so **it's not important to keep backward compatibility**.
-
 ## Git
 
 - **NEVER use `git stash`** (or anything else that changes or reverts the working tree, like
-  `git checkout -- <file>` or `git reset --hard`). Other agents may be working in this same
-  directory at the same time, and stashing would take away, or mix up, their uncommitted work.
-  To compare behavior with and without a change, temporarily edit only your own lines instead.
+  `git checkout -- <file>` or `git reset --hard`), as other agents may be working in this same
+  directory at the same time.

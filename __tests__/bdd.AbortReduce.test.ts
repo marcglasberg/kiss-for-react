@@ -101,6 +101,51 @@ Bdd(feature)
     expect(store.state.count).toBe(3);
   });
 
+Bdd(feature)
+  .scenario('abortReduce is not called when the reducer leaves the state unchanged.')
+  .given('An action whose reducer returns the same state it received.')
+  .and('The action is SYNC, or has an async "reduce", or has both async "before" and async "reduce".')
+  .when('The action is dispatched.')
+  .then('abortReduce is not called, because there is no state change to abort.')
+  .and('The state-observer is still called once, with the unchanged state.')
+  .run(async (_) => {
+
+    const abortCalls: string[] = [];
+    const observed: string[] = [];
+
+    const store = new Store<State>({
+      initialState: new State(1),
+      stateObserver: (action, prevState, newState) => {
+        expect(newState).toBe(prevState);
+        observed.push(action.constructor.name);
+      },
+    });
+
+    class SameStateSync extends KissAction<State> {
+      abortReduce() { abortCalls.push('SameStateSync'); return false; }
+      reduce() { return this.state; }
+    }
+
+    class SameStateAsyncReduce extends KissAction<State> {
+      abortReduce() { abortCalls.push('SameStateAsyncReduce'); return false; }
+      async reduce() { return (state: State) => state; }
+    }
+
+    class SameStateAsyncBeforeReduce extends KissAction<State> {
+      async before() { await delayMillis(10); }
+      abortReduce() { abortCalls.push('SameStateAsyncBeforeReduce'); return false; }
+      async reduce() { return (state: State) => state; }
+    }
+
+    await store.dispatchAndWait(new SameStateSync());
+    await store.dispatchAndWait(new SameStateAsyncReduce());
+    await store.dispatchAndWait(new SameStateAsyncBeforeReduce());
+
+    expect(abortCalls).toEqual([]);
+    expect(observed).toEqual(['SameStateSync', 'SameStateAsyncReduce', 'SameStateAsyncBeforeReduce']);
+    expect(store.state.count).toBe(1);
+  });
+
 class State {
   constructor(readonly count: number) {
   }

@@ -24,4 +24,5 @@ Feature: StateObserver
       | SyncAbortsReduce         |
       | AsyncReturnsNull         |
       | AsyncFunctionReturnsNull |
+      | AsyncReturnsSameState    |
       | AsyncAbortsReduce        |

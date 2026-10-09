@@ -424,15 +424,32 @@ export abstract class KissAction<St> {
    * as if the `reduce()` method itself returned null.
    *
    * Note: `abortReduce()` is called BEFORE the `after()` method, and the `after()` method will
-   * run normally no mather the result of `abortReduce()`.
+   * run normally no matter the result of `abortReduce()`.
    *
-   * For example, suppose you want to abort an async action if some part of the state changed
-   * since when the action was dispatched:
-   * ```
-   * abortReduce(state: St): boolean {
-   *    return (state.somePart !== this.initialState.somePart);
+   * This is mostly useful for async actions. While the action is waiting (for example, for a
+   * server response), other actions may change the state, so the result may be out of date
+   * by the time it arrives.
+   *
+   * For example, suppose a different user logs in while the profile of the previous user is
+   * still loading. The loaded profile belongs to the wrong person, so we discard it:
+   *
+   * ```ts
+   * class LoadUserProfile extends Action {
+   *
+   *   async reduce() {
+   *     const profile = await api.getProfile(this.state.userId);
+   *     return (state: State) => state.copy({ profile });
+   *   }
+   *
+   *   // If a different user logged in while we were loading, don't save this profile.
+   *   abortReduce(newState: State): boolean {
+   *     return newState.userId !== this.initialState.userId;
+   *   }
    * }
    * ```
+   *
+   * Note `this.initialState` is the state when the action was dispatched, while `newState`
+   * is the state the reducer wants to apply.
    *
    * Method `abortReduce()` is an advanced feature only useful under rare circumstances,
    * and you should only use it if you know what you are doing.
@@ -455,7 +472,7 @@ export abstract class KissAction<St> {
    * if (this.isWaiting(MyAction)) { // Show a spinner }   *
    * ```
    */
-  isWaiting<T extends KissAction<St>>(type: { new(...args: any[]): T }): boolean {
+  isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T): boolean {
     return this.store.isWaiting(type);
   }
 
@@ -648,7 +665,7 @@ export abstract class KissAction<St> {
    *
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name, 'John')
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name, 'Bill');
@@ -686,9 +703,9 @@ export abstract class KissAction<St> {
    * await dispatchAndWait(new SellAction('TSLA'));
    * expect(store.state.portfolio.includes('IBM', 'TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
-   * let action = store.waitActionType(ChangeNameAction);
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
+   * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
    * expect(store.state.name, 'Bill');
@@ -757,7 +774,7 @@ export abstract class KissAction<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -797,8 +814,8 @@ export abstract class KissAction<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
@@ -883,7 +900,7 @@ export abstract class KissAction<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -923,8 +940,8 @@ export abstract class KissAction<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
@@ -967,14 +984,14 @@ export abstract class KissAction<St> {
   }
 
   /**
-   * Returns a promise that completes when an action of the given type in NOT in progress
+   * Returns a promise that completes when an action of the given type is NOT in progress
    * (it's not being dispatched):
    *
    * - If NO action of the given type is currently in progress when the method is called,
-   *   and `completeImmediately` is false (the default), this method will throw an error.
+   *   and `completeImmediately` is false, this method will throw an error.
    *
    * - If NO action of the given type is currently in progress when the method is called,
-   *   and `completeImmediately` is true, the promise completes immediately, returns `null`,
+   *   and `completeImmediately` is true (the default), the promise completes immediately, returns `null`,
    *   and throws no error.
    *
    * - If an action of the given type is in progress, the promise completes when the action
@@ -982,7 +999,7 @@ export abstract class KissAction<St> {
    *
    *   ```dart
    *   var action = await store.waitActionType(MyAction);
-   *   expect(action.status.originalError, isA<UserException>());
+   *   expect(action.status.originalError).toBeInstanceOf(UserException);
    *   ```
    *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
@@ -999,7 +1016,7 @@ export abstract class KissAction<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -1039,8 +1056,8 @@ export abstract class KissAction<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
@@ -1065,7 +1082,7 @@ export abstract class KissAction<St> {
   async waitActionType(
     actionType: { new(...args: any[]): KissAction<St> },
     {
-      completeImmediately = false,
+      completeImmediately = true,
       timeoutMillis = null,
       onTimeout,
     }: {
@@ -1086,10 +1103,10 @@ export abstract class KissAction<St> {
    * (none of them is being dispatched):
    *
    * - If NO action of the given types is currently in progress when the method is called,
-   *   and `completeImmediately` is false (the default), this method will throw an error.
+   *   and `completeImmediately` is false, this method will throw an error.
    *
    * - If NO action of the given type is currently in progress when the method is called,
-   *   and `completeImmediately` is true, the promise completes immediately and throws no error.
+   *   and `completeImmediately` is true (the default), the promise completes immediately and throws no error.
    *
    * - If any action of the given types is in progress, the promise completes only when
    *   no action of the given types is in progress anymore.
@@ -1108,7 +1125,7 @@ export abstract class KissAction<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -1148,8 +1165,8 @@ export abstract class KissAction<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
@@ -1174,7 +1191,7 @@ export abstract class KissAction<St> {
   async waitAllActionTypes(
     actionTypes: { new(...args: any[]): KissAction<any> }[],
     {
-      completeImmediately = false,
+      completeImmediately = true,
       timeoutMillis = null,
       onTimeout,
     }: {
@@ -1207,7 +1224,7 @@ export abstract class KissAction<St> {
    * ```dart
    * dispatch(StartAction());
    * let action = await store.waitAnyActionTypeFinishes([MyFinalAction]);
-   * expect(action.status.originalError).toBeInstanceOf(UserException>);
+   * expect(action.status.originalError).toBeInstanceOf(UserException);
    * ```
    *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
@@ -1224,7 +1241,7 @@ export abstract class KissAction<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -1264,8 +1281,8 @@ export abstract class KissAction<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);

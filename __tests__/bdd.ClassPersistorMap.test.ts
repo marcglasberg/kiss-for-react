@@ -140,23 +140,6 @@ Bdd(feature)
     expect(logs.filter(l => l.includes('Error'))).toEqual([]);
   });
 
-Bdd(feature)
-  .scenario('A Map saved by an older version, without its entries, is read back as an empty Map.')
-  .given('A saved state where the Map was written without its entries.')
-  .when('The state is read by the ClassPersistor.')
-  .then('There is no error, and the Map is read back as an empty Map.')
-  .run(async (_) => {
-    const storage = new MemoryStorage();
-    storage.serialized = '{"map":{"*type":"Map"},"*type":"MapState"}';
-    const persistor = storage.persistor<MapState>([MapState]);
-
-    const read = (await persistor.readState())!;
-
-    expect(read).toBeInstanceOf(MapState);
-    expect(read.map).toBeInstanceOf(Map);
-    expect(read.map.size).toBe(0);
-  });
-
 class MemoryStorage {
   serialized: string | null = null;
   deleted = false;

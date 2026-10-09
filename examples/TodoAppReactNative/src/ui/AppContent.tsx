@@ -5,6 +5,7 @@ import {
   useDispatch,
   useExceptionFor,
   useIsFailed,
+  useIsStoreReady,
   useIsWaiting,
   useSelect,
   useStore
@@ -50,7 +51,11 @@ function TodoInput() {
   let errorText = useExceptionFor(AddTodoAction)?.errorText ?? '';
   let clearExceptionFor = useClearExceptionFor();
 
+  // Actions can't be dispatched before the store loaded the persisted state.
+  const isReady = useIsStoreReady();
+
   async function sendInputToStore(text: string) {
+    if (!isReady) return;
     let status = await store.dispatchAndWait(new AddTodoAction(text));
     if (status.isCompletedOk) setInputText(''); // If added, clean the text from the input.
   }
@@ -71,7 +76,7 @@ function TodoInput() {
           onSubmitEditing={() => sendInputToStore(inputText)}
         />
 
-        <TouchableOpacity onPress={() => sendInputToStore(inputText)} style={styles.button}>
+        <TouchableOpacity onPress={() => sendInputToStore(inputText)} style={styles.button} disabled={!isReady}>
           <Text style={styles.footerButtonText}>Add</Text>
         </TouchableOpacity>
 
@@ -140,6 +145,16 @@ function TodoList() {
   const count = useSelect((state: State) => state.todoList.count(filter));
   let items: TodoItem[] = useSelect((state: State) => state.todoList.items);
 
+  // While the store is loading the persisted state, the list is still empty. Show it's loading,
+  // instead of "No todos".
+  const isReady = useIsStoreReady();
+  if (!isReady)
+    return (
+      <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
+        <ActivityIndicator size="large" color="#BBB"/>
+      </View>
+    );
+
   // No todos to show with the current filter.
   if (count === 0) return <NoTodosWarning/>;
     //
@@ -195,6 +210,7 @@ function TodoItemComponent({item}: {item: TodoItem}) {
 function FilterButton() {
   const store = useStore();
   const state = useAllState<State>();
+  const isReady = useIsStoreReady();
 
   // <View style={{ paddingVertical: 20 }}>
   return (
@@ -204,6 +220,7 @@ function FilterButton() {
         store.dispatch(new NextFilterAction());
       }}
       style={styles.filterButton}
+      disabled={!isReady}
     >
       <Text style={styles.filterButtonText}>{state.filter}</Text>
     </TouchableOpacity>
@@ -212,7 +229,8 @@ function FilterButton() {
 
 function RemoveAllButton() {
   const dispatch = useDispatch();
-  let isDisabled = useIsWaiting(RemoveCompletedTodosAction);
+  let isWaiting = useIsWaiting(RemoveCompletedTodosAction);
+  const isReady = useIsStoreReady();
 
   return (
     <TouchableOpacity
@@ -220,10 +238,10 @@ function RemoveAllButton() {
         dispatch(new RemoveCompletedTodosAction());
       }}
       style={styles.footerButton}
-      disabled={isDisabled}
+      disabled={isWaiting || !isReady}
     >
 
-      {isDisabled ? (
+      {isWaiting ? (
         <ActivityIndicator size="small" color="#ffffff"/>
       ) : (
         <Text style={styles.footerButtonText}>Remove Completed Todos</Text>
@@ -235,12 +253,14 @@ function RemoveAllButton() {
 
 function AddRandomTodoButton() {
   let isLoading = useIsWaiting(AddRandomTodoAction);
+  const isReady = useIsStoreReady();
   const store = useStore();
 
   return (
     <TouchableOpacity
       onPress={() => store.dispatch(new AddRandomTodoAction())}
       style={styles.footerButton}
+      disabled={!isReady}
     >
 
       {isLoading ?

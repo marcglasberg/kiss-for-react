@@ -48,7 +48,7 @@ const parsedObjWithDateFieldValue = {
   id: 1,
   date: {
     '*type': 'Date',
-    ess_ts: 1613723040000
+    '*value': 1613723040000
   }
 };
 
@@ -56,7 +56,7 @@ const parsedObjWithInvalidDateFieldValue = {
   id: 1,
   date: {
     '*type': 'Date',
-    ess_ts: 'invalid timestamp'
+    '*value': 'invalid timestamp'
   }
 };
 
@@ -101,7 +101,7 @@ describe('Test getParentClassName', () => {
 describe('Test deserializeFromParsedObjWithClassMapping', () => {
   const deserializedValueForBooleanObject = deserializeFromParsedObjWithClassMapping({
     '*type': 'Boolean',
-    ess_bool: false
+    '*value': false
   }, {});
   const deserializedValueForErrorObject = deserializeFromParsedObjWithClassMapping({
     '*type': 'Error',
@@ -110,7 +110,7 @@ describe('Test deserializeFromParsedObjWithClassMapping', () => {
   }, {});
   const deserializedValueForNotFinite = deserializeFromParsedObjWithClassMapping({
     '*type': 'NF',
-    ess_str: 'Infinity'
+    '*value': 'Infinity'
   }, {});
   const deserializedValueForUndefined = deserializeFromParsedObjWithClassMapping({ '*type': 'UD' }, {});
   const deserializedValueForNoneObject = deserializeFromParsedObjWithClassMapping(42, classMapping);

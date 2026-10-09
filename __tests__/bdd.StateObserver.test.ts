@@ -125,6 +125,7 @@ Bdd(feature)
   .example(val('Action', 'SyncAbortsReduce'))
   .example(val('Action', 'AsyncReturnsNull'))
   .example(val('Action', 'AsyncFunctionReturnsNull'))
+  .example(val('Action', 'AsyncReturnsSameState'))
   .example(val('Action', 'AsyncAbortsReduce'))
   .run(async (ctx) => {
 
@@ -139,7 +140,7 @@ Bdd(feature)
 
     const actionTypes: Record<string, new () => KissAction<State>> = {
       SyncReturnsNull, SyncReturnsSameState, SyncAbortsReduce,
-      AsyncReturnsNull, AsyncFunctionReturnsNull, AsyncAbortsReduce,
+      AsyncReturnsNull, AsyncFunctionReturnsNull, AsyncReturnsSameState, AsyncAbortsReduce,
     };
     const action = new actionTypes[ctx.example.val('Action')]();
 
@@ -235,6 +236,13 @@ class AsyncFunctionReturnsNull extends KissAction<State> {
   async reduce() {
     await delayMillis(1);
     return (_: State) => null;
+  }
+}
+
+class AsyncReturnsSameState extends KissAction<State> {
+  async reduce() {
+    await delayMillis(1);
+    return (state: State) => state;
   }
 }
 

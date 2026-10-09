@@ -20,3 +20,9 @@ Feature: useIsWaiting with action subclasses
     Given A component that waits for a subclass.
     When An action of the parent class (not the subclass) is dispatched.
     Then The component keeps showing it is not waiting.
+
+  Scenario: The store and actions can check if they are waiting for an abstract base action class.
+    Given An abstract base action class.
+    And A subclass action is running.
+    When isWaiting is called with the abstract base class, from the store and from an action.
+    Then It returns true.

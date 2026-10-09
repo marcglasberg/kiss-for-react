@@ -1,6 +1,7 @@
 import { PersistAction, Persistor } from "./Persistor";
 import { KissAction, UpdateStateAction } from "./KissAction";
 import { Store } from "./Store";
+import { StoreException } from "./StoreException";
 
 export class ProcessPersistence<St> {
   persistor: Persistor<St>;
@@ -14,6 +15,9 @@ export class ProcessPersistence<St> {
   isInit = false;
   // False while `readInitialState` is running. State changes are only persisted after it finishes.
   isReady = false;
+  // True only while the store applies the state read from the persistor. That's the only
+  // dispatch allowed before the store is ready.
+  isApplyingReadState = false;
   private readonly _ready: Promise<void>;
   private _resolveReady!: () => void;
   // The persistence process currently running, if any.
@@ -90,12 +94,19 @@ export class ProcessPersistence<St> {
       // If the saved state was read successfully, we replace the store state with it.
       // In this case, the initial-state passed in the Store constructor was used
       // only while the persisted state is loading.
-      await store.dispatchAndWait(
-        new UpdateStateAction<St>(
-          (_) => stateReadFromPersistor,
-          false, // Do not persist the state we just read from the persistence.
-        )
-      );
+      let promise: Promise<unknown>;
+      this.isApplyingReadState = true;
+      try {
+        promise = store.dispatchAndWait(
+          new UpdateStateAction<St>(
+            (_) => stateReadFromPersistor,
+            false, // Do not persist the state we just read from the persistence.
+          )
+        );
+      } finally {
+        this.isApplyingReadState = false;
+      }
+      await promise;
     }
   }
 
@@ -206,6 +217,13 @@ export class ProcessPersistence<St> {
     actionsThrottle?: number,
   }): Promise<void> {
 
+    // Logging out while the persisted state is still being read is a developer error:
+    // the read would finish afterwards and bring back the old user's state.
+    if (!this.isReady)
+      throw new StoreException(
+        'Called logOut() while the persisted state is still being read. ' +
+        'Wait for store.ready() before calling logOut().');
+
     // Pauses the persistor, so it doesn't start a new persistence process.
     this.pause();
 
@@ -280,7 +298,11 @@ export class ProcessPersistence<St> {
     if (this.isPaused || this.lastPersistedState === newState) return false;
 
     if ((action instanceof UpdateStateAction) && (!action.ifPersists)) {
-      this.lastPersistedState = this.newestState;
+      // Only consider this state as persisted if no earlier change is waiting to be saved.
+      // Otherwise, those earlier changes would be lost. In that case, the pending save will
+      // save the newest state, which includes this one.
+      if (!this.timer && !this.isPersisting && !this.isANewStateAvailable)
+        this.lastPersistedState = this.newestState;
       return false;
     }
 

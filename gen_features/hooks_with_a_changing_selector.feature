@@ -33,3 +33,15 @@ Feature: Hooks with a changing selector
     When It is re-rendered for type B.
     Then It shows that type B is not running.
     And When type B starts later, it shows that it is running.
+
+  Scenario: useSelect shows the latest value when the state changes while its new selector is being committed.
+    Given A component that selects the item with the id it gets as a prop, rendered with id 0.
+    When It is re-rendered with id 1.
+    And During that same commit, before the component saves its new selector, a child changes item 1.
+    Then The component shows the new value of item 1.
+
+  Scenario: useIsFailed shows the latest value when its action type fails while the new type is being committed.
+    Given A component that shows if action type A failed. Type A did not fail.
+    When It is re-rendered for type B.
+    And During that same commit, before the component saves its new type, a child dispatches B, which fails.
+    Then The component shows that type B failed.

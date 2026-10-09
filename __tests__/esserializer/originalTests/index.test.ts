@@ -195,7 +195,8 @@ describe('Test deserialize', () => {
     };
     const serializedText = ESSerializer.serialize(objToSerialize);
     const deserializedObj = ESSerializer.deserialize(serializedText);
-    expect(deserializedObj.e.message).toBe('Unexpected identifier');
+    expect(deserializedObj.e.message).toBe((error as SyntaxError).message);
+    expect(deserializedObj.e.message).toMatch(/^Unexpected identifier/);
   });
 
   test('can serialize and deserialize TypeError object', () => {

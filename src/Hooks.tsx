@@ -108,19 +108,96 @@ export function useDispatcher(): (action: KissAction<any>) => void {
 }
 
 /**
- * Dispatches the action to the Redux store, to potentially change the state:
+ * Options for `useDispatch`, to run code when the component mounts, when its `deps` change,
+ * and when it unmounts. See `useDispatch`.
+ */
+export interface UseDispatchOptions<St, D> {
+  /**
+   * A single value, or an array of values. When they change, `onDepsChange` is called.
+   * They are compared with `Object.is`, like React's dependencies. So, don't create new objects
+   * or arrays in each render, or they will be considered changed in every render.
+   */
+  deps?: D;
+
+  /** Called once, when the component mounts (but only after the store is ready). */
+  onMount?: (store: Store<St>) => unknown;
+
+  /**
+   * Called when `deps` change (but only after `onMount`). It gets the old `deps`.
+   * The new values are the ones in your component.
+   */
+  onDepsChange?: (store: Store<St>, oldDeps: D) => unknown;
+
+  /** Called once, when the component unmounts (but only if `onMount` was called). */
+  onUnmount?: (store: Store<St>) => unknown;
+}
+
+/**
+ * Returns a function that dispatches an action, to potentially change the state:
  *
  * ```ts
  * const dispatch = useDispatch();
- * dispatch(MyAction());
+ * dispatch(new MyAction());
  * ```
  *
  * This also works:
  *
  * ```ts
  * const store = useStore();
- * dispatch(MyAction());
+ * store.dispatch(new MyAction());
  * ```
+ *
+ * ## Dispatching when the component mounts and unmounts
+ *
+ * You can pass `onMount`, `onUnmount`, and `onDepsChange` with its `deps`, to dispatch actions
+ * when the component mounts, when some values change, and when it unmounts:
+ *
+ * ```tsx
+ * const dispatch = useDispatch({
+ *   deps: userId,
+ *   onMount: (store) => store.dispatch(new LoadUser(userId)),
+ *   onDepsChange: (store, oldUserId) => {
+ *     store.dispatch(new StopListening(oldUserId));
+ *     store.dispatch(new LoadUser(userId));
+ *   },
+ *   onUnmount: (store) => store.dispatch(new CleanResources()),
+ * });
+ * ```
+ *
+ * If `deps` is an array, `onDepsChange` gets the old array:
+ *
+ * ```tsx
+ * const dispatch = useDispatch({
+ *   deps: [userId, filter],
+ *   onMount: (store) => store.dispatch(new LoadUser(userId, filter)),
+ *   onDepsChange: (store, [oldUserId, oldFilter]) => {
+ *     if (userId !== oldUserId) {
+ *       store.dispatch(new StopListening(oldUserId));
+ *       store.dispatch(new LoadUser(userId, filter));
+ *     }
+ *     else if (filter !== oldFilter) store.dispatch(new ApplyFilter(filter));
+ *   },
+ * });
+ * ```
+ *
+ * All of them are optional, and get the store, so you can use any of its dispatch methods,
+ * and read its current `state`. They may be async. To type the state, type the store:
+ * `onMount: (store: Store<State>) => ...`.
+ *
+ * Note you can still dispatch actions from a `useEffect`, as usual, if you prefer.
+ * These options are just more convenient, because:
+ *
+ * - They only run after the store is ready (see `useIsStoreReady`). If the store is not ready
+ *   when the component mounts, `onMount` is called as soon as it is. If the component unmounts
+ *   before that, none of them is called.
+ *
+ * - They run in order: `onMount`, then `onDepsChange` (any number of times), then `onUnmount`.
+ *   `onMount` and `onUnmount` run once, even in React's `StrictMode`, which mounts components
+ *   twice during development. And `onDepsChange` runs once per change.
+ *
+ * Note: Changing `deps` doesn't call `onMount` again. If you want to dispatch the same actions
+ * on mount and when `deps` change, call the same function from both `onMount` and
+ * `onDepsChange`. Each of them sees the values from the latest render.
  *
  * See also:
  * - `dispatchAll` which dispatches all given actions in parallel.
@@ -128,9 +205,90 @@ export function useDispatcher(): (action: KissAction<any>) => void {
  * - `dispatchAndWait` which dispatches both sync and async actions, and returns a Promise.
  * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
  */
-export function useDispatch(): (action: KissAction<any>) => void {
-  const store = useStoreFromContext<any>();
+export function useDispatch<St = any, const D = undefined>(
+  options?: UseDispatchOptions<St, D>
+): (action: KissAction<St>) => void {
+  const store = useStoreFromContext<St>();
+  useLifecycle(store, options);
   return useMemo(() => store.dispatch.bind(store), [store]);
+}
+
+// Runs `onMount`, `onDepsChange` and `onUnmount` of `useDispatch`. See `useDispatch`.
+function useLifecycle<St, D>(store: Store<St>, options: UseDispatchOptions<St, D> | undefined): void {
+
+  // The options from the latest committed render, so that the callbacks see the latest values.
+  const optionsRef = useRef(options);
+  useLayoutEffect(() => {
+    optionsRef.current = options;
+  });
+
+  // The store for which `onMount` was called, or null if it wasn't called (or after `onUnmount`).
+  const mountedStoreRef = useRef<Store<St> | null>(null);
+
+  // The deps seen by the last `onMount` or `onDepsChange`.
+  const lastDepsRef = useRef<D | undefined>(undefined);
+
+  // The `onUnmount` waiting to run. See below why it waits.
+  const pendingUnmountRef = useRef<{ store: Store<St>, isCancelled: boolean } | null>(null);
+
+  useEffect(() => {
+    // In `StrictMode`, React unmounts and then mounts again right away. This is not a real
+    // unmount, so we cancel the `onUnmount` that is waiting to run.
+    const pending = pendingUnmountRef.current;
+    if (pending !== null && pending.store === store) {
+      pending.isCancelled = true;
+      pendingUnmountRef.current = null;
+    }
+
+    let isActive = true;
+
+    if (mountedStoreRef.current !== store) {
+      const mount = () => {
+        if (!isActive) return;
+        mountedStoreRef.current = store;
+        lastDepsRef.current = optionsRef.current?.deps;
+        optionsRef.current?.onMount?.(store);
+      };
+      if (store._isReady) mount();
+      else store.ready().then(mount);
+    }
+
+    return () => {
+      isActive = false;
+      if (mountedStoreRef.current !== store) return;
+
+      // Waits a microtask, so that it can be cancelled if this is not a real unmount (see above).
+      const pendingUnmount = {store, isCancelled: false};
+      pendingUnmountRef.current = pendingUnmount;
+      Promise.resolve().then(() => {
+        if (pendingUnmount.isCancelled) return;
+        if (pendingUnmountRef.current === pendingUnmount) pendingUnmountRef.current = null;
+        if (mountedStoreRef.current === store) mountedStoreRef.current = null;
+        optionsRef.current?.onUnmount?.(store);
+      });
+    };
+  }, [store]);
+
+  // After each render, calls `onDepsChange` if the deps changed (only after `onMount` was called).
+  useEffect(() => {
+    if (mountedStoreRef.current !== store) return;
+    const deps = optionsRef.current?.deps as D;
+    const oldDeps = lastDepsRef.current as D;
+    if (_depsAreEqual(oldDeps, deps)) return;
+    lastDepsRef.current = deps;
+    optionsRef.current?.onDepsChange?.(store, oldDeps);
+  });
+}
+
+// Compares deps like React does: each value with `Object.is`.
+function _depsAreEqual(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++)
+      if (!Object.is(a[i], b[i])) return false;
+    return true;
+  }
+  return Object.is(a, b);
 }
 
 /**
@@ -273,8 +431,43 @@ export function useDispatchSync(): (action: KissAction<any>) => void {
  * if (isWaiting) { // Show a spinner }
  * ```
  */
-export function useIsWaiting(type: { new(...args: any[]): KissAction<any> }): boolean {
+export function useIsWaiting(type: abstract new (...args: any[]) => KissAction<any>): boolean {
   return useStoreSelector<any, boolean>((store) => store.isWaiting(type));
+}
+
+/**
+ * Returns true if the store is ready, and false while it's still loading the persisted state.
+ * See `Store.ready()`.
+ *
+ * You can show the UI before the store is ready, using the initial-state. But dispatching an
+ * action before the store is ready throws a `StoreException`. Use this hook to show a loading
+ * state, and to disable the buttons that dispatch actions:
+ *
+ * ```tsx
+ * const isReady = useIsStoreReady();
+ * if (!isReady) return <Spinner/>;
+ * // or: <button disabled={!isReady} onClick={() => dispatch(new AddTodo())}>Add</button>
+ * ```
+ *
+ * A store without a persistor is always ready. Once ready, a store stays ready.
+ */
+export function useIsStoreReady(): boolean {
+  const store = useStoreFromContext<any>();
+  const isReady: boolean = store._isReady;
+  const [, forceRender] = useReducer((x: number) => x + 1, 0);
+
+  useEffect(() => {
+    let isMounted = true;
+    // Re-renders when the store becomes ready, or right away if it became ready after this render.
+    if (!isReady) store.ready().then(() => {
+      if (isMounted) forceRender();
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [store, isReady]);
+
+  return isReady;
 }
 
 /**
@@ -352,23 +545,30 @@ function useSubscribedSelector<In, T, R>(
   // 2. Apply each selector to calculate the selected value.
   // 3. And compare the selected value with the last selected value.
   // 4. If it changed, it calls setValue, which re-renders the component.
-  useLayoutEffect(() => {
-    ref.current = new RefClass([selector, value, forceRender as React.Dispatch<React.SetStateAction<T>>]);
-  });
-
-  // Only once when the component mounts.
-  useEffect(() => {
-    hooks.add(ref);
-
-    // Child effects run before parent effects, so the state may have changed since the render.
-    // If it did, re-render. If the selector throws, re-render too, so the error is thrown
-    // during render, where React can deal with it.
+  // Child effects run before parent effects, so the state may have changed since the render,
+  // while the store was still checking with the previous selector. If it did, re-render.
+  // If the selector throws, re-render too, so the error is thrown during render,
+  // where React can deal with it.
+  const rerenderIfChanged = () => {
     try {
       const [latestSelector, renderedValue] = (ref.current as any).selectorAndValueAndSetValue;
       if (latestSelector(getInput()) !== renderedValue) forceRender();
     } catch {
       forceRender();
     }
+  };
+
+  useLayoutEffect(() => {
+    ref.current = new RefClass([selector, value, forceRender as React.Dispatch<React.SetStateAction<T>>]);
+
+    // On later commits (already subscribed), the new selector may have missed a change.
+    if (hooks.has(ref)) rerenderIfChanged();
+  });
+
+  // Only once when the component mounts.
+  useEffect(() => {
+    hooks.add(ref);
+    rerenderIfChanged();
 
     return () => {
       // When the component unmounts, delete the ref.
@@ -516,7 +716,7 @@ class StoreDispatchers<St> {
    *
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name, 'John')
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name, 'Bill');
@@ -554,9 +754,9 @@ class StoreDispatchers<St> {
    * await dispatchAndWait(new SellAction('TSLA'));
    * expect(store.state.portfolio.includes('IBM', 'TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
-   * let action = store.waitActionType(ChangeNameAction);
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
+   * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
    * expect(store.state.name, 'Bill');
@@ -625,7 +825,7 @@ class StoreDispatchers<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -665,8 +865,8 @@ class StoreDispatchers<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
@@ -751,7 +951,7 @@ class StoreDispatchers<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -791,8 +991,8 @@ class StoreDispatchers<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
@@ -850,7 +1050,7 @@ class StoreDispatchers<St> {
    *
    *   ```dart
    *   var action = await store.waitActionType(MyAction);
-   *   expect(action.status.originalError, isA<UserException>());
+   *   expect(action.status.originalError).toBeInstanceOf(UserException);
    *   ```
    *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
@@ -867,7 +1067,7 @@ class StoreDispatchers<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -907,8 +1107,8 @@ class StoreDispatchers<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
@@ -976,7 +1176,7 @@ class StoreDispatchers<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -1016,8 +1216,8 @@ class StoreDispatchers<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);
@@ -1075,7 +1275,7 @@ class StoreDispatchers<St> {
    * ```dart
    * dispatch(StartAction());
    * let action = await store.waitAnyActionTypeFinishes([MyFinalAction]);
-   * expect(action.status.originalError).toBeInstanceOf(UserException>);
+   * expect(action.status.originalError).toBeInstanceOf(UserException);
    * ```
    *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
@@ -1092,7 +1292,7 @@ class StoreDispatchers<St> {
    * ```ts
    * // Dispatches an actions that changes the state, then await for the state change:
    * expect(store.state.name).toBe('John');
-   * dispatch(new ChangeNameAction("Bill"));
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 });
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(store.state.name).toBe('Bill');
@@ -1132,8 +1332,8 @@ class StoreDispatchers<St> {
    * expect(store.state.portfolio.includes('IBM')).toBe(true);
    * expect(store.state.portfolio.includes('TSLA')).toBe(false);
    *
-   * // Wait until some action of a given type is dispatched.
-   * dispatch(new DoALotOfStuffAction());
+   * // Dispatches an action and waits until no action of its type is in progress.
+   * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(action.status.isCompletedOk).toBe(true);

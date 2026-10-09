@@ -17,8 +17,8 @@ Bdd(feature)
   .given('A SYNC action that retries up to 10 times.')
   .and('The action fails with a user exception the first 4 times.')
   .when('The action is dispatched.')
-  .then('It is retried until its reducer succeeds.')
-  .but('It does not change the state, and fails with a StoreException saying retry needs an ASYNC reducer.')
+  .then('It is not retried.')
+  .and('It does not change the state, and fails with a StoreException saying retry needs an ASYNC reducer.')
   .run(async (_) => {
 
     let errorInErrorObserver: any;
@@ -34,8 +34,8 @@ Bdd(feature)
     expect(store.state.count).toBe(1);
     const action = new SyncActionThatRetriesAndSucceeds();
     await store.dispatchAndWait(action);
-    expect(action.attempts).toBe(5);
-    expect(action.trace).toBe('012345');
+    expect(action.attempts).toBe(0);
+    expect(action.trace).toBe('0');
 
     // Should fail because the action is SYNC.
     // Only ASYNC actions can retry.
@@ -47,6 +47,29 @@ Bdd(feature)
     // Waits for the exception to be caught by the errorObserver.
     await delayMillis(1);
     expect(errorInErrorObserver).toBeInstanceOf(StoreException);
+  });
+
+Bdd(feature)
+  .scenario('A SYNC action with retry, whose reducer always throws, fails right away with a StoreException.')
+  .given('A SYNC action that retries up to 3 times.')
+  .and('Its reducer always throws an error.')
+  .when('The action is dispatched.')
+  .then('The reducer runs only once, with no retry delays.')
+  .and('It fails with a StoreException saying retry needs an ASYNC reducer, not with the original error.')
+  .run(async (_) => {
+
+    const store = new Store<State>({initialState: new State(1), logger: logger, errorObserver: () => false});
+
+    const action = new SyncActionThatRetriesAndAlwaysFails();
+    const start = Date.now();
+    await store.dispatchAndWait(action);
+    expect(Date.now() - start).toBeLessThan(200);
+
+    expect(action.reduceCount).toBe(1);
+    expect(store.state.count).toBe(1);
+    expect(action.status.isCompletedOk).toBe(false);
+    expect(action.status.originalError).toBeInstanceOf(StoreException);
+    expect(action.status.originalError.message).toContain('uses retry, but its reducer is SYNC');
   });
 
 Bdd(feature)
@@ -159,6 +182,21 @@ class SyncActionThatRetriesAndSucceeds extends KissAction<State> {
     this.trace += this.attempts.toString();
     if (this.attempts <= 4) throw new UserException(`Failed: ${this.attempts}`);
     return new State(this.state.count + 1);
+  }
+}
+
+class SyncActionThatRetriesAndAlwaysFails extends KissAction<State> {
+
+  reduceCount = 0;
+
+  retry = {
+    initialDelay: 300,
+    maxRetries: 3,
+  }
+
+  reduce(): State {
+    this.reduceCount++;
+    throw new Error('sync boom');
   }
 }
 

@@ -174,6 +174,20 @@ function MyComponent() {
 };
 ```
 
+To dispatch actions when the component mounts, when some values change, and when it unmounts:
+
+```tsx
+const dispatch = useDispatch({
+  deps: userId,
+  onMount: (store) => store.dispatch(new LoadUser(userId)),
+  onDepsChange: (store, oldUserId) => {
+    store.dispatch(new StopListening(oldUserId));
+    store.dispatch(new LoadUser(userId));
+  },
+  onUnmount: (store) => store.dispatch(new CleanResources()),
+});
+```
+
 &nbsp;
 
 ## Actions can do asynchronous work
@@ -220,17 +234,6 @@ class LoadText extends Action {
     return (state) => text;
   }
 ```
-
-Errors are processed by the store (`wrapError`, `after`, `errorObserver`, etc). A `UserException`
-is swallowed after being shown to the user. Other errors are thrown back to the code that
-dispatched the action (unless an `errorObserver` returns `false`):
-
-| Action | Error         | `try { dispatch() } catch`    | `try { await dispatchAndWait() } catch` |
-|--------|---------------|-------------------------------|-----------------------------------------|
-| Sync   | Other errors  | Caught                        | Caught                                  |
-| Sync   | UserException | Swallowed                     | Swallowed                               |
-| Async  | Other errors  | Not caught: unhandled rejection | Caught                                |
-| Async  | UserException | Swallowed                     | Swallowed                               |
 
 &nbsp;
 
@@ -454,6 +457,18 @@ await store.ready();
 store.dispatch(new InitAppAction());
 ```
 
+Dispatching an action before the store is ready throws.
+Your UI can show before that, using the initial state.
+In components, use `useIsStoreReady` to show a loading state and disable buttons:
+
+```tsx
+function TodoList() {
+  const isReady = useIsStoreReady();
+  if (!isReady) return <Spinner />;
+  ...
+}
+```
+
 &nbsp;
 
 ## Testing your app is easy
@@ -579,5 +594,3 @@ class SelectItem extends Action {
 * [Kiss GitHub](https://github.com/marcglasberg/kiss-for-react)
 
 * Created by [Marcelo Glasberg](https://glasberg.dev) ([GitHub](https://github.com/marcglasberg), [LinkedIn](https://www.linkedin.com/in/marcglasberg/))
-
-

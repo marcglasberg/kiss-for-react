@@ -4,8 +4,15 @@ Feature: Retry action
     Given A SYNC action that retries up to 10 times.
     And The action fails with a user exception the first 4 times.
     When The action is dispatched.
-    Then It is retried until its reducer succeeds.
-    But It does not change the state, and fails with a StoreException saying retry needs an ASYNC reducer.
+    Then It is not retried.
+    And It does not change the state, and fails with a StoreException saying retry needs an ASYNC reducer.
+
+  Scenario: A SYNC action with retry, whose reducer always throws, fails right away with a StoreException.
+    Given A SYNC action that retries up to 3 times.
+    And Its reducer always throws an error.
+    When The action is dispatched.
+    Then The reducer runs only once, with no retry delays.
+    And It fails with a StoreException saying retry needs an ASYNC reducer, not with the original error.
 
   Scenario: Action retries a few times and succeeds.
     Given An action that retries up to 10 times.

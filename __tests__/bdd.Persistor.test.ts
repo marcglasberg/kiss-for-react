@@ -1,7 +1,8 @@
 import { expect } from '@jest/globals';
-import { Bdd, Feature, FeatureFileReporter, reporter } from 'easy-bdd-tool-jest';
+import { Bdd, Feature, FeatureFileReporter, reporter, val } from 'easy-bdd-tool-jest';
 import { KissAction, Store, Persistor } from '../src';
 import { delayMillis } from '../src/utils';
+import { StoreException } from '../src/StoreException';
 
 reporter(new FeatureFileReporter());
 
@@ -249,16 +250,20 @@ Bdd(feature)
   });
 
 Bdd(feature)
-  .scenario('A state change made while the persisted state is being read is persisted after the initial-state.')
-  .given('There is no persisted state when the store is created.')
-  .and('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
-  .when('The store is created.')
-  .and('An action changes the state before the persistor finished reading and saving the initial-state.')
-  .then('The new state is only persisted after the initial-state is saved.')
-  .and('The persisted state is the new state, not the initial-state.')
-  .run(async (_) => {
+  .scenario('Dispatching an action while the persisted state is being read throws, and changes nothing.')
+  .given('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
+  .and('The store was just created, and is still reading the persisted state.')
+  .when('An action is dispatched with dispatch, dispatchSync or dispatchAndWait.')
+  .then('The dispatch throws a StoreException.')
+  .and('The state does not change, and the action is not dispatched.')
+  .and('After the store is ready, the store has the persisted state.')
+  .example(val('Persisted', null))
+  .example(val('Persisted', 42))
+  .run(async (ctx) => {
 
+    const persisted = ctx.example.val('Persisted') as number | null;
     const persistor = new MyPersistorSlow();
+    if (persisted !== null) persistor.savedState = new State(persisted);
 
     const store = new Store<State>({
       initialState: new State(1),
@@ -268,58 +273,25 @@ Bdd(feature)
 
     // The persistor is still reading the state.
     await delayMillis(10);
+
+    const action1 = new Increment();
+    const action2 = new Increment();
+    const action3 = new Increment();
+    expect(() => store.dispatch(action1)).toThrow(StoreException);
+    expect(() => store.dispatchSync(action2)).toThrow(StoreException);
+    expect(() => store.dispatchAndWait(action3)).toThrow(StoreException);
+    expect(store.state.count).toBe(1);
+    expect(action1.status.isDispatched).toBe(false);
+    expect(store.dispatchCount).toBe(0);
+
+    await store.ready();
+    await delayMillis(200);
+    expect(store.state.count).toBe(persisted ?? 1);
+    expect(persistor.savedState?.count).toBe(persisted ?? 1);
+
+    // After the store is ready, dispatching works.
     store.dispatch(new Increment());
-    expect(store.state.count).toBe(2);
-
-    // Wait for reading (150), saving the initial-state (150) and persisting (150).
-    await delayMillis(600);
-
-    expect(persistor.record).toBe('' +
-      'Creating persistor.' +
-      'Persistor reading state: undefined.' +
-      'Finished reading state: undefined.' +
-      'Persistor saving state: undefined.' +
-      'Finished saving state: undefined.' +
-      'Persisting difference: 1 → 2.' + // Only starts after the initial-state is saved.
-      'Finished persisting difference: 1 → 2.'
-    );
-    expect(store.state.count).toBe(2);
-    expect(persistor.savedState?.count).toBe(2);
-  });
-
-Bdd(feature)
-  .scenario('A state change made while the persisted state is being read does not overwrite the persisted state.')
-  .given('There is some state already persisted when the store is created.')
-  .and('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
-  .when('The store is created.')
-  .and('An action changes the state before the persistor finished reading the state.')
-  .then('The persisted state is read into the store.')
-  .and('The persisted state is not overwritten.')
-  .run(async (_) => {
-
-    const persistor = new MyPersistorSlow();
-    persistor.savedState = new State(42);
-
-    const store = new Store<State>({
-      initialState: new State(1),
-      logger: logger,
-      persistor: persistor
-    });
-
-    // The persistor is still reading the state.
-    await delayMillis(10);
-    store.dispatch(new Increment());
-    expect(store.state.count).toBe(2);
-
-    await delayMillis(600);
-
-    expect(persistor.record).toBe('' +
-      'Creating persistor.' +
-      'Persistor reading state: 42.' +
-      'Finished reading state: 42.'
-    );
-    expect(store.state.count).toBe(42);
-    expect(persistor.savedState?.count).toBe(42);
+    expect(store.state.count).toBe((persisted ?? 1) + 1);
   });
 
 Bdd(feature)
@@ -389,10 +361,8 @@ Bdd(feature)
   .scenario('persistAndPausePersistor called while the persisted state is being read waits for the reading to finish.')
   .given('There is no persisted state when the store is created.')
   .and('The persistor is async and slow, taking 150 millis to read/write/delete the state.')
-  .when('An action changes the state while the persistor is reading the state.')
-  .and('We await persistAndPausePersistor, before the reading finishes.')
-  .then('The initial-state is saved first.')
-  .and('Then the new state is persisted, before persistAndPausePersistor returns.')
+  .when('We await persistAndPausePersistor, before the reading finishes.')
+  .then('The initial-state is saved before persistAndPausePersistor returns.')
   .and('The persistor stays paused.')
   .run(async (_) => {
 
@@ -401,24 +371,56 @@ Bdd(feature)
 
     // The persistor is still reading the state.
     await delayMillis(10);
-    store.dispatch(new Increment());
     await store.persistAndPausePersistor();
+    expect(store.state.count).toBe(1);
 
     expect(persistor.record).toBe('' +
       'Creating persistor.' +
       'Persistor reading state: undefined.' +
       'Finished reading state: undefined.' +
       'Persistor saving state: undefined.' +
-      'Finished saving state: undefined.' +
-      'Persisting difference: 1 → 2.' +
-      'Finished persisting difference: 1 → 2.'
+      'Finished saving state: undefined.'
     );
-    expect(persistor.savedState?.count).toBe(2);
+    expect(persistor.savedState?.count).toBe(1);
 
     // Paused.
     store.dispatch(new Increment());
     await delayMillis(300);
-    expect(persistor.savedState?.count).toBe(2);
+    expect(persistor.savedState?.count).toBe(1);
+  });
+
+Bdd(feature)
+  .scenario('Logging out while the persisted state is still being read throws, and changes nothing.')
+  .given('A store whose persisted state is still being read.')
+  .when('logOut is called before the read finishes.')
+  .then('logOut throws a StoreException.')
+  .and('After the read finishes, the store has the state that was read, and it is still persisted.')
+  .run(async (_) => {
+
+    class SlowPersistor extends Persistor<string> {
+      saved: string | null = 'old-user';
+      async readState() { const v = this.saved; await delayMillis(100); return v; }
+      async deleteState() { this.saved = null; }
+      async saveInitialState(s: string) { this.saved = s; }
+      async persistDifference(_l: string | null, s: string) { this.saved = s; }
+      get throttle() { return 0; }
+    }
+
+    const persistor = new SlowPersistor();
+    const store = new Store<string>({ initialState: 'initial', persistor });
+
+    await expect(store.logOut({ initialState: 'initial', throttle: 0, actionsThrottle: 0 }))
+      .rejects.toBeInstanceOf(StoreException);
+
+    await store.ready();
+    await delayMillis(20);
+    expect(store.state).toBe('old-user');
+    expect(persistor.saved).toBe('old-user');
+
+    // After the read, logOut works.
+    await store.logOut({ initialState: 'initial', throttle: 0, actionsThrottle: 0 });
+    expect(store.state).toBe('initial');
+    expect(persistor.saved).toBe('initial');
   });
 
 class State {

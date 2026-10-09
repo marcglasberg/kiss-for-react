@@ -12,3 +12,10 @@ Feature: Abort reduce of actions
     When The action is dispatched.
     Then The reduce method is aborted (or is not aborted, respectively).
     # We have to separately test with async "before", async "reduce", and both "before" and "reduce" being async, because they abort in different ways.
+
+  Scenario: abortReduce is not called when the reducer leaves the state unchanged.
+    Given An action whose reducer returns the same state it received.
+    And The action is SYNC, or has an async "reduce", or has both async "before" and async "reduce".
+    When The action is dispatched.
+    Then abortReduce is not called, because there is no state change to abort.
+    And The state-observer is still called once, with the unchanged state.

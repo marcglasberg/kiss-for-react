@@ -11,6 +11,7 @@ import {
   useIsFailed,
   useIsWaiting,
   useSelect,
+  useStore,
 } from '../src';
 
 reporter(new FeatureFileReporter());
@@ -188,4 +189,63 @@ Bdd(feature)
       await store.waitAllActions([]);
     });
     expect(r.text()).toBe('"false"');
+  });
+
+/** When it gets `onIndex`, dispatches during the commit (in a layout effect), before the parent's layout effects run. */
+const DispatchDuringCommit: React.FC<{ id: number; onId: number; action: () => KissAction<State> }> = ({ id, onId, action }) => {
+  const store = useStore() as any;
+  React.useLayoutEffect(() => {
+    if (id === onId) store.dispatch(action());
+  }, [id]);
+  return null;
+};
+
+const ItemWithChild: React.FC<{ id: number }> = ({ id }) =>
+  React.createElement(
+    React.Fragment,
+    null,
+    useSelect((s: State) => s.items[id]),
+    React.createElement(DispatchDuringCommit, { id, onId: 1, action: () => new SetItem(1, 'X') }),
+  );
+
+Bdd(feature)
+  .scenario('useSelect shows the latest value when the state changes while its new selector is being committed.')
+  .given('A component that selects the item with the id it gets as a prop, rendered with id 0.')
+  .when('It is re-rendered with id 1.')
+  .and('During that same commit, before the component saves its new selector, a child changes item 1.')
+  .then('The component shows the new value of item 1.')
+  .run(async (_) => {
+    const store = createStore();
+    const r = renderWithStore(store, ItemWithChild, { id: 0 });
+    expect(r.text()).toBe('"a"');
+
+    r.rerender({ id: 1 });
+    expect(store.state.items[1]).toBe('X');
+    expect(r.text()).toBe('"X"');
+  });
+
+const FailedWithChild: React.FC<{ id: number }> = ({ id }) => {
+  const type = id === 0 ? FailA : FailB;
+  return React.createElement(
+    React.Fragment,
+    null,
+    `${useIsFailed(type)}`,
+    React.createElement(DispatchDuringCommit, { id, onId: 1, action: () => new FailB() }),
+  );
+};
+
+Bdd(feature)
+  .scenario('useIsFailed shows the latest value when its action type fails while the new type is being committed.')
+  .given('A component that shows if action type A failed. Type A did not fail.')
+  .when('It is re-rendered for type B.')
+  .and('During that same commit, before the component saves its new type, a child dispatches B, which fails.')
+  .then('The component shows that type B failed.')
+  .run(async (_) => {
+    const store = createStore();
+    const r = renderWithStore(store, FailedWithChild, { id: 0 });
+    expect(r.text()).toBe('"false"');
+
+    r.rerender({ id: 1 });
+    expect(store.isFailed(FailB)).toBe(true);
+    expect(r.text()).toBe('"true"');
   });
