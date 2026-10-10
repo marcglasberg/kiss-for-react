@@ -354,3 +354,53 @@ ${syncMethods}${ctx.example.val('Code')}
       expect(result.messages.map((m) => m.text)).toEqual(reported ? ['ToggleLike'] : []);
     }
   });
+
+// ---------------------------------------------------------------------------------------------
+// OptimisticSyncWithPush
+
+const syncWithPushPrelude = `import { OptimisticSyncWithPush } from 'kiss-for-react';
+
+class State {
+  constructor(readonly likes: Record<string, boolean>) {}
+  withLike(id: string, liked: boolean): State { return new State({ ...this.likes, [id]: liked }); }
+}
+
+declare function setLiked(id: string, liked: boolean): Promise<number>;
+`;
+
+const syncWithPushMethods = `
+  valueToApply() { return !this.state.likes[this.itemId]; }
+  applyOptimisticValueToState(state: State, liked: boolean) { return state.withLike(this.itemId, liked); }
+  getValueFromState(state: State) { return state.likes[this.itemId] ?? false; }
+  getServerRevisionFromState(state: State, key: any) { return -1; }
+  async sendValueToServer(liked: boolean, localRevision: number, deviceId: number) {
+    this.informServerRevision(await setLiked(this.itemId, liked));
+  }`;
+
+Bdd(feature)
+  .scenario('An OptimisticSyncWithPush with fields, without a key, is a warning.')
+  .given('A subclass of OptimisticSyncWithPush with the field itemId.')
+  .and('It {Case}.')
+  .when('The code is linted.')
+  .then('There is {Result}.')
+  .example(val('Case', 'doesn\'t override optimisticSyncKeyParams or computeOptimisticSyncKey'), val('Code', ''), val('Result', 'a warning in the class name'))
+  .example(val('Case', 'overrides optimisticSyncKeyParams'), val('Code', `
+  optimisticSyncKeyParams() { return this.itemId; }`), val('Result', 'no warning'))
+  .run(async (ctx) => {
+    const code = `${syncWithPushPrelude}
+class ToggleLike extends OptimisticSyncWithPush<State, boolean> {
+  constructor(readonly itemId: string) { super(); }
+${syncWithPushMethods}${ctx.example.val('Code')}
+}
+`;
+    const reported = ctx.example.val('Result') !== 'no warning';
+    for (const types of [true, false]) {
+      const result = lint(rule, code, {types});
+      expect(result.typeErrors).toEqual([]);
+      expect(result.messages.map((m) => m.text)).toEqual(reported ? ['ToggleLike'] : []);
+      if (reported) {
+        expect(result.messages[0].message).toContain('its optimistic sync key doesn\'t depend on them');
+        expect(result.messages[0].suggestions).toEqual(['Override `optimisticSyncKeyParams()`, returning `this.itemId`.']);
+      }
+    }
+  });

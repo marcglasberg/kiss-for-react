@@ -680,11 +680,52 @@ Optionally, apply the server response with `applyServerResponseToState`, and run
 state stabilizes, or when a request fails, with `onFinish` (for example, to reload the value
 from the server).
 
+### OptimisticSyncWithPush and ServerPush
+
+If your app also receives server pushes (WebSockets, Server-Sent Events, Firebase) that may
+change the same values, and more than one device can change them, extend
+`OptimisticSyncWithPush` instead of `OptimisticSync`, and apply the pushes with an action that
+extends `ServerPush`. They track revisions, so that stale or out-of-order pushes are ignored,
+local changes are not overwritten by older pushes, and the last write wins across devices.
+
+```tsx
+class ToggleLike extends OptimisticSyncWithPush<State, boolean> {
+  constructor(readonly itemId: string) { super(); }
+
+  optimisticSyncKeyParams() { return this.itemId; }
+  valueToApply() { return !this.state.isLiked(this.itemId); }
+  applyOptimisticValueToState(state: State, liked: boolean) { return state.setLiked(this.itemId, liked); }
+  getValueFromState(state: State) { return state.isLiked(this.itemId); }
+  getServerRevisionFromState(state: State, key: any) { return state.revisionOf(key); }
+
+  async sendValueToServer(liked: boolean, localRevision: number, deviceId: number) {
+    const response = await api.setLiked(this.itemId, liked, localRevision, deviceId);
+    this.informServerRevision(response.serverRevision);
+  }
+}
+
+class PushLike extends ServerPush<State> {
+  constructor(readonly itemId: string, readonly liked: boolean, readonly metadata: PushMetadata) { super(); }
+
+  associatedAction() { return ToggleLike; }
+  optimisticSyncKeyParams() { return this.itemId; }
+  pushMetadata() { return this.metadata; } // { serverRevision, localRevision, deviceId }
+  applyServerPushToState(state: State, key: any, serverRevision: number) {
+    return state.setLiked(this.itemId, this.liked).setRevision(key, serverRevision);
+  }
+  getServerRevisionFromState(state: State, key: any) { return state.revisionOf(key); }
+}
+```
+
+The server must return a server revision that always increases, and its pushes must include
+the server revision, and the local revision and device ID sent by `sendValueToServer`.
+
 ### Clearing the features on logout
 
 The store keeps some information for these features: the fresh keys, the throttle and
-debounce locks, the polling timers, the sequential queues, the actions waiting to retry, and
-the `OptimisticSync` keys.
+debounce locks, the polling timers, the sequential queues, the actions waiting to retry, the
+`OptimisticSync` and `OptimisticSyncWithPush` keys, and the revisions kept by
+`OptimisticSyncWithPush` and `ServerPush`.
 On logout, call
 `store.clearInternalActionProps()` so that the previous user's actions stop, and don't affect
 the next user. For example, without it, loading the new user's data could be aborted because

@@ -38,7 +38,7 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 3  | `wrap_reduce_return_type`                 | -                                                                             | Skipped. TypeScript already reports it.                                                                                                                                      |
 | 4  | `reduce_without_await`                    | [`reduce-without-await`](#reduce-without-await)                               | Implemented, adapted. In Kiss it doesn't lose state changes, but it makes the action async for nothing. |
 | 5  | `dispatch_sync_async_action`              | `dispatch-sync-async-action`                                                  | Implemented. |
-| 6  | `incompatible_mixins`                     | [`incompatible-action-features`](#incompatible-action-features)               | Implemented, adapted. Reports the action features that can't be combined (the same checks the store does on dispatch), including the ones an `OptimisticCommand` or an `OptimisticSync` can't use. |
+| 6  | `incompatible_mixins`                     | [`incompatible-action-features`](#incompatible-action-features)               | Implemented, adapted. Reports the action features that can't be combined (the same checks the store does on dispatch), including the ones an `OptimisticCommand`, an `OptimisticSync`, an `OptimisticSyncWithPush` or a `ServerPush` can't use. |
 | 7  | `polling_with_caveat_mixin`               | [`polling-with-caveat`](#polling-with-caveat)                 | Implemented, adapted: `checkInternet`, `nonReentrant`, `throttle`, `fresh` or `sequential` in an action with `poll`. |
 | 8  | `wait_fail_invalid_argument`              | -                                                                             | Skipped. The TypeScript types of `isWaiting`, `isFailed`, `exceptionFor` and their hooks only accept action classes.                                                         |
 | 9  | `wait_fail_never_matches`                 | [`wait-fail-never-matches`](#wait-fail-never-matches)                         | Implemented, adapted. Only the "sync action in `isWaiting`" case applies. Abstract classes in `isFailed` are already TypeScript errors, and `isWaiting` accepts them in Kiss. |
@@ -59,7 +59,7 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 24 | `prefer_return_null`                      | [`prefer-return-null`](#prefer-return-null)                                   | Implemented. |
 | 25 | `stale_state_after_await`                 | `stale-state-after-await`                                                     | Implemented. |
 | 26 | `after_throws`                            | [`after-throws`](#after-throws)                                               | Implemented. |
-| 27 | `missing_super_in_mixin_override`         | [`missing-super-in-override`](#missing-super-in-override)                     | Implemented, adapted: Kiss has no mixins, but `checkInternet`, `OptimisticCommand` and `OptimisticSync` depend on inherited methods. |
+| 27 | `missing_super_in_mixin_override`         | [`missing-super-in-override`](#missing-super-in-override)                     | Implemented, adapted: Kiss has no mixins, but `checkInternet`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` and `ServerPush` depend on inherited methods. |
 | 28 | `user_exception_outside_action`           | [`user-exception-outside-action`](#user-exception-outside-action)             | Implemented. |
 | 29 | `user_exception_without_cause`            | [`user-exception-without-cause`](#user-exception-without-cause)               | Implemented. Uses `withHardCause` instead of `addCause`. |
 | 30 | `dispatch_in_global_error_observer`       | [`dispatch-in-global-wrap-error`](#dispatch-in-global-wrap-error)             | Skipped. Checked in Kiss's code and with a test: dispatching from `globalWrapError` (or an action's `wrapError`) works fine. |
@@ -103,7 +103,7 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 68 | `avoid_abort_dispatch`                    | [`avoid-abort-dispatch`](#avoid-abort-dispatch-and-avoid-wrap-reduce)         | Implemented, opt-in. The Kiss docs also call it "a complex power feature that you may not need to learn". |
 | 69 | `avoid_wrap_reduce`                       | [`avoid-wrap-reduce`](#avoid-abort-dispatch-and-avoid-wrap-reduce)            | Implemented, opt-in. Same. |
 | 70 | `global_error_observer_without_env`       | -                                                                             | Skipped. Kiss has no `environment`.                                                                                                                                          |
-| 71 | `missing_key_params`                      | [`missing-key-params`](#missing-key-params)                                   | Implemented, opt-in. For `nonReentrant` actions, `OptimisticCommand` and `OptimisticSync`. |
+| 71 | `missing_key_params`                      | [`missing-key-params`](#missing-key-params)                                   | Implemented, opt-in. For `nonReentrant` actions, `OptimisticCommand`, `OptimisticSync` and `OptimisticSyncWithPush`. |
 | 72 | `route_in_state`                          | [`route-in-state`](#route-in-state)                                           | Implemented, opt-in, with React's router names. |
 | 73 | `action_without_to_string`                | -                                                                             | Skipped. Kiss's `KissAction.toString()` already shows all fields of the action.                                                                                              |
 
@@ -280,8 +280,9 @@ Error. An override that silently turns off a Kiss feature, because it doesn't ca
   }
   ```
 
-- `reduce()` in a subclass of `OptimisticCommand` or `OptimisticSync`, whose docs say "Do NOT
-  override this method". The optimistic update stops working.
+- `reduce()` in a subclass of `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`
+  or `ServerPush`, whose docs say "Do NOT override this method". The optimistic update (or, in
+  a `ServerPush`, the revision checks) stops working.
 
 Quick fix, for `before`: add `await super.before();` as the first statement.
 
@@ -626,7 +627,7 @@ class SaveTodo extends OptimisticCommand<State> {
 }
 ```
 
-Also for a subclass of `OptimisticSync` with fields, that doesn't override
+Also for a subclass of `OptimisticSync` (or `OptimisticSyncWithPush`) with fields, that doesn't override
 `optimisticSyncKeyParams` or `computeOptimisticSyncKey`. Then, while `ToggleLike('A')` has a
 request in flight, `ToggleLike('B')` doesn't send its own request, and the follow-up request
 of `ToggleLike('A')` only checks item A, so item B may never be sent to the server.

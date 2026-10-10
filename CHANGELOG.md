@@ -59,6 +59,17 @@
   them between classes with `computeOptimisticSyncKey()`. It can only be combined with
   `checkInternet`. `store.clearInternalActionProps()` releases its keys.
 
+* New `OptimisticSyncWithPush` and `ServerPush` abstract classes, for apps that receive server
+  pushes (WebSockets, SSE, Firebase), and where more than one device may change the same value.
+  `OptimisticSyncWithPush` works like `OptimisticSync`, but each dispatch increments a
+  local-revision of its key, and `sendValueToServer(value, localRevision, deviceId)` must call
+  `informServerRevision()`. When a request finishes, a follow-up request is sent if the latest
+  change is local and newer than the one sent, but not if it came from a push. The server
+  response is only applied if no newer server revision is known. Pushes are applied by actions
+  that extend `ServerPush`, which ignore stale and out-of-order pushes, and the echoes of older
+  requests of this device. The device ID is `OptimisticSyncWithPush.deviceId()`, which you can
+  change. `ServerPush` can't be combined with any other feature.
+
 * New `debounce` action property. With `debounce = 300` (milliseconds), or `debounce = true`
   for the default 333 milliseconds, the action waits until it stops being dispatched for that
   long, and only the last action runs its reducer. Actions of the same class debounce each

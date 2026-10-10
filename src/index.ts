@@ -7,6 +7,9 @@ import {
   AsyncReducerResult,
   OptimisticCommand,
   OptimisticSync,
+  OptimisticSyncWithPush,
+  PushMetadata,
+  ServerPush,
   KissAction,
   Poll,
   UserExceptionAction,
@@ -55,7 +58,7 @@ export {
   AbortDispatchException,
   TimeoutException,
   UserException,
-  OptimisticCommand, OptimisticSync, Retry, RetryOptions, UnlimitedRetryCheckInternet,
+  OptimisticCommand, OptimisticSync, OptimisticSyncWithPush, ServerPush, PushMetadata, Retry, RetryOptions, UnlimitedRetryCheckInternet,
   Poll,
 };
 

@@ -83,6 +83,39 @@ Feature: Lint: incompatible-action-features
       | sequential   | true             |
       | nonReentrant | false            |
 
+  Scenario: The rule reports exactly the features an OptimisticSyncWithPush does not allow.
+    Given An OptimisticSyncWithPush with each feature.
+    When The code is linted, and the same action is dispatched.
+    Then The lint reports the feature if, and only if, the dispatch throws a StoreException.
+    And It allows the same features as an OptimisticSync.
+
+  Scenario Outline: An OptimisticSyncWithPush with a feature it can't use is an error.
+    Given An OptimisticSyncWithPush with {Feature}.
+    When The code is linted.
+    Then There is an error in {Feature}, saying an OptimisticSyncWithPush can't use it, with a suggestion to remove it.
+    Examples: 
+      | Feature      | Type information |
+      | retry        | true             |
+      | retry        | false            |
+      | sequential   | true             |
+      | nonReentrant | false            |
+
+  Scenario: The rule reports exactly the features a ServerPush does not allow.
+    Given A ServerPush with each feature.
+    When The code is linted, and the same action is dispatched.
+    Then The lint reports the feature if, and only if, the dispatch throws a StoreException.
+    And It does not allow any feature, not even checkInternet.
+
+  Scenario Outline: A ServerPush with a feature is an error.
+    Given A ServerPush with {Feature}.
+    When The code is linted.
+    Then There is an error in {Feature}, saying a ServerPush can't use it, with a suggestion to remove it.
+    Examples: 
+      | Feature       | Type information |
+      | checkInternet | true             |
+      | checkInternet | false            |
+      | sequential    | true             |
+
   Scenario: An OptimisticSync with checkInternet is not reported.
     Given An OptimisticSync with checkInternet.
     When The code is linted.

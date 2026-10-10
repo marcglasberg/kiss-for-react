@@ -4,7 +4,8 @@ import { classDeclarationOf } from './actions.js';
 import { findMethod, isAsyncMethod, isThenable, kissImportName, memberName, TypeInfo, unwrap, isAnyOrUnknown } from './utils.js';
 
 // Helpers for the rules about action features: `nonReentrant`, `retry`, `checkInternet`,
-// `unlimitedRetryCheckInternet`, `OptimisticCommand`, `OptimisticSync`, and the base action.
+// `unlimitedRetryCheckInternet`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`,
+// `ServerPush`, and the base action.
 
 type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 
@@ -14,18 +15,21 @@ export type ClassNode = TSESTree.ClassDeclaration | TSESTree.ClassExpression;
 const SYMBOL_FLAGS_ALIAS = 2097152; // ts.SymbolFlags.Alias
 
 /** Kiss's own classes. Their members are the defaults, not overrides. */
-const KISS_CLASSES = ['KissAction', 'OptimisticCommand', 'OptimisticSync'];
+const KISS_CLASSES = ['KissAction', 'OptimisticCommand', 'OptimisticSync', 'OptimisticSyncWithPush', 'ServerPush'];
+
+/** Kiss's own action classes that already declare `reduce`. */
+export const KISS_CLASSES_WITH_REDUCE = ['OptimisticCommand', 'OptimisticSync', 'OptimisticSyncWithPush', 'ServerPush'];
 
 /** Kiss's own action classes, that the actions of the app extend. */
-export type KissClassName = 'KissAction' | 'OptimisticCommand' | 'OptimisticSync';
+export type KissClassName = 'KissAction' | 'OptimisticCommand' | 'OptimisticSync' | 'OptimisticSyncWithPush' | 'ServerPush';
 
 // ---------------------------------------------------------------------------------------------
 // The class and its superclasses, without type information.
 
 /**
  * The class, and its superclasses declared in this file, in order. `end` is the Kiss class the
- * chain reaches (`KissAction`, `OptimisticCommand` or `OptimisticSync`), or `null` if it leaves
- * the file (or the last class doesn't extend anything).
+ * chain reaches (`KissAction`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`
+ * or `ServerPush`), or `null` if it leaves the file (or the last class doesn't extend anything).
  */
 export interface ClassChain {
   classes: ClassNode[];
@@ -48,8 +52,7 @@ export function classChain(classNode: ClassNode, context: Context): ClassChain {
   return {classes, end: null};
 }
 
-// `KissAction`, `OptimisticCommand` or `OptimisticSync`, imported from Kiss (or, when not
-// declared in this file, by name).
+// One of Kiss's action classes, imported from Kiss (or, when not declared in this file, by name).
 function kissClassName(node: TSESTree.Node, context: Context): KissClassName | null {
   const imported = kissImportName(node, context);
   if (imported !== null && KISS_CLASSES.includes(imported)) return imported as KissClassName;
@@ -140,7 +143,7 @@ export function reduceKind(classNode: ClassNode, context: Context, typeInfo: Typ
     const type = instanceTypeOfClass(classNode, typeInfo);
     const symbol = type.getProperty('reduce');
     if (!symbol || !isDeclaredByUser(type, 'reduce') &&
-      !symbol.getDeclarations()?.some((d) => ['OptimisticCommand', 'OptimisticSync'].includes(ownerName(d) ?? ''))) {
+      !symbol.getDeclarations()?.some((d) => KISS_CLASSES_WITH_REDUCE.includes(ownerName(d) ?? ''))) {
       return 'unknown';
     }
     const location = typeInfo.services.esTreeNodeToTSNodeMap.get(classNode);

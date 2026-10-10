@@ -22,7 +22,10 @@ const KISS_PROPERTIES = ['retry', 'checkInternet', 'nonReentrant', 'debounce', '
   'removeThrottleLockOnError', 'fresh', 'sequential', 'poll', 'pollInterval', 'pollWaitsForRun',
   'unlimitedRetryCheckInternet', 'maxFollowUpRequests'];
 
-/** The kind of key the action uses: the non-reentrant key, or the `OptimisticSync` key. */
+/**
+ * The kind of key the action uses: the non-reentrant key, or the `OptimisticSync` key (also used
+ * by `OptimisticSyncWithPush`).
+ */
 type KeyKind = 'nonReentrant' | 'optimisticSync';
 
 /** The methods that compute each kind of key. The first one is the one the suggestion overrides. */
@@ -38,8 +41,8 @@ const KEY_METHODS: Record<KeyKind, [string, string]> = {
  *   `computeNonReentrantKey`. Non-reentrant actions are the ones with `nonReentrant = true` or
  *   `unlimitedRetryCheckInternet`, and the subclasses of `OptimisticCommand`.
  *
- * - A subclass of `OptimisticSync` that doesn't override `optimisticSyncKeyParams` or
- *   `computeOptimisticSyncKey`.
+ * - A subclass of `OptimisticSync` or `OptimisticSyncWithPush` that doesn't override
+ *   `optimisticSyncKeyParams` or `computeOptimisticSyncKey`.
  *
  * ```ts
  * class SaveTodo extends OptimisticCommand<State> {  // Warning
@@ -71,7 +74,7 @@ export default createRule({
     type: 'suggestion',
     docs: {
       description: 'Recommend `nonReentrantKeyParams` in non-reentrant actions with fields, and ' +
-        '`optimisticSyncKeyParams` in `OptimisticSync` actions with fields.',
+        '`optimisticSyncKeyParams` in `OptimisticSync` and `OptimisticSyncWithPush` actions with fields.',
     },
     hasSuggestions: true,
     schema: [],
@@ -131,7 +134,8 @@ export default createRule({
  * The kind of key the action uses, if it doesn't override how that key is computed. Otherwise,
  * or if the action doesn't use a key, `null`.
  *
- * The action uses the `OptimisticSync` key if it extends `OptimisticSync`. It uses the
+ * The action uses the `OptimisticSync` key if it extends `OptimisticSync` or
+ * `OptimisticSyncWithPush`. It uses the
  * non-reentrant key if it extends `OptimisticCommand`, or it or a superclass sets
  * `nonReentrant = true` or turns on `unlimitedRetryCheckInternet`.
  */
@@ -141,7 +145,8 @@ function keyKindWithoutKey(classNode: ClassNode, context: Context, typeInfo: Typ
 
   if (typeInfo) {
     const type = instanceTypeOfClass(classNode, typeInfo);
-    kind = extendsClassNamed(type, 'OptimisticSync', typeInfo.checker) ? 'optimisticSync'
+    kind = (extendsClassNamed(type, 'OptimisticSync', typeInfo.checker) ||
+      extendsClassNamed(type, 'OptimisticSyncWithPush', typeInfo.checker)) ? 'optimisticSync'
       : (extendsClassNamed(type, 'OptimisticCommand', typeInfo.checker) ||
         (extendsClassNamed(type, 'KissAction', typeInfo.checker) &&
           (initializerTextOf(type, 'nonReentrant')?.trim() === 'true' ||
@@ -150,7 +155,7 @@ function keyKindWithoutKey(classNode: ClassNode, context: Context, typeInfo: Typ
   } else {
     const chain = classChain(classNode, context);
     const property = findPropertyInChain(chain, 'nonReentrant');
-    kind = chain.end === 'OptimisticSync' ? 'optimisticSync'
+    kind = (chain.end === 'OptimisticSync' || chain.end === 'OptimisticSyncWithPush') ? 'optimisticSync'
       : (chain.end === 'OptimisticCommand' || (chain.end === 'KissAction' &&
         ((!!property && isTrue(property)) || unlimitedRetryCheckInternetOfClass(classNode, context, null)))) ? 'nonReentrant' : null;
     declares = (name) => !!findMemberInChain(chain, name);

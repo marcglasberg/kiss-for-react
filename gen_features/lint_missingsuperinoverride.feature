@@ -139,3 +139,23 @@ class SaveUser extends MyCommand {
     Given An OptimisticSync that does not override reduce.
     When The code is linted.
     Then There are no errors.
+
+  Scenario Outline: Overriding reduce in an OptimisticSyncWithPush or a ServerPush is an error.
+    Given An action that extends {Class} {Where}, and overrides reduce.
+    When The code is linted.
+    Then There is an error in reduce, saying not to override it in an {Class}.
+    Examples: 
+      | Class                  | Where                                 | Type information |
+      | OptimisticSyncWithPush | directly                              | true             |
+      | OptimisticSyncWithPush | directly                              | false            |
+      | OptimisticSyncWithPush | through a base class of the same file | true             |
+      | OptimisticSyncWithPush | through a base class of the same file | false            |
+      | ServerPush             | directly                              | true             |
+      | ServerPush             | directly                              | false            |
+      | ServerPush             | through a base class of the same file | true             |
+      | ServerPush             | through a base class of the same file | false            |
+
+  Scenario: An OptimisticSyncWithPush and a ServerPush that do not override reduce are fine.
+    Given An OptimisticSyncWithPush and a ServerPush that do not override reduce.
+    When The code is linted.
+    Then There are no errors.

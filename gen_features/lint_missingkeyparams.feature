@@ -181,3 +181,14 @@ class LoadTodos extends KissAction<State> {
   computeOptimisticSyncKey() { return this.itemId; } |
       | only overrides nonReentrantKeyParams, which it does not use, so it is still reported | 
   nonReentrantKeyParams() { return this.itemId; }    |
+
+  Scenario Outline: An OptimisticSyncWithPush with fields, without a key, is a warning.
+    Given A subclass of OptimisticSyncWithPush with the field itemId.
+    And It {Case}.
+    When The code is linted.
+    Then There is {Result}.
+    Examples: 
+      | Case                                                                 | Code                                                 | Result                      |
+      | doesn't override optimisticSyncKeyParams or computeOptimisticSyncKey |                                                      | a warning in the class name |
+      | overrides optimisticSyncKeyParams                                    | 
+  optimisticSyncKeyParams() { return this.itemId; } | no warning                  |

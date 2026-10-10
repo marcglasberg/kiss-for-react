@@ -18,6 +18,8 @@ Built-in features you can add to actions, as listed in the README section
 | **UnlimitedRetryCheckInternet** | `unlimitedRetryCheckInternet = true`, or an object to change `{initialDelay, multiplier, maxDelay, maxDelayNoInternet}` (defaults 350, 2, 5000 and 1000). Checks the internet (`hasInternet()`) before each attempt: if offline, the reducer doesn't run, and it retries unlimited times until there is internet. Also retries unlimited times when it fails with internet. Non-reentrant for the whole time until it succeeds, sharing the keys of `nonReentrant` (`nonReentrantKeyParams()`, `computeNonReentrantKey()`). Retries are logged. Needs an ASYNC reducer. (Plain `retry` + `checkInternet` doesn't retry when offline.) Can't be combined with any other feature in the matrix. |
 | **OptimisticCommand** | Extend `OptimisticCommand<St, T>` (a base class, not a property) and implement `optimisticValue`, `getValueFromState`, `applyValueToState`, `sendCommandToServer`, and optionally `reloadFromServer`. |
 | **OptimisticSync** | Extend `OptimisticSync<St, T>` (a base class, not a property) and implement `valueToApply`, `applyOptimisticValueToState`, `getValueFromState`, `sendValueToServer`, and optionally `applyServerResponseToState` and `onFinish`. For rapid toggles like a "like" button: every dispatch applies its value to the state at once, but only one request per key is in flight. When it finishes, if the state changed, a follow-up request sends the latest value, repeating until the state stabilizes. Separate keys with `optimisticSyncKeyParams()`, or make different action classes share a key with `computeOptimisticSyncKey()`. Customize the follow-ups with `ifShouldSendAnotherRequest` and `maxFollowUpRequests` (default 10000). Can only be combined with `checkInternet`. |
+| **OptimisticSyncWithPush** | Extend `OptimisticSyncWithPush<St, T>` (a base class, not a property) and implement `valueToApply`, `applyOptimisticValueToState`, `getValueFromState`, `sendValueToServer(value, localRevision, deviceId)` (which must call `informServerRevision()`) and `getServerRevisionFromState`, and optionally `applyServerResponseToState` and `onFinish`. Like `OptimisticSync`, but for apps that receive server pushes (WebSockets, SSE, Firebase), with "last write wins" across devices. Each dispatch increments a local-revision per key, and a follow-up request is sent when a request finishes and the latest change is local and newer than the sent one (even if the value is the same), but not when the latest change came from a push. The server response is only applied if no newer server revision is known. The device ID is `OptimisticSyncWithPush.deviceId()`. Separate keys with `optimisticSyncKeyParams()`, or share them with `computeOptimisticSyncKey()`. Limit the follow-ups with `maxFollowUpRequests` (default 10000). Can only be combined with `checkInternet`. |
+| **ServerPush** | Extend `ServerPush<St>` (a base class, not a property) and implement `associatedAction()` (the `OptimisticSyncWithPush` class), `pushMetadata()` (`{serverRevision, localRevision, deviceId}`), `applyServerPushToState` and `getServerRevisionFromState`, and optionally `optimisticSyncKeyParams()` (same as the associated action). Applies the values received by server push, ignoring stale and out-of-order pushes, and the echoes of older requests of this device. An applied push tells the in-flight `OptimisticSyncWithPush` request of its key that no follow-up is needed. Can't be combined with any feature, not even `checkInternet`. |
 | **Polling** | A `poll` property (usually a constructor parameter) with `Poll.start`, `Poll.stop`, `Poll.runNowAndRestart` or `Poll.once`, plus `createPollingAction()`, which returns the action each tick dispatches. `pollInterval` (milliseconds, default 10000). By default each tick waits for the previous run to finish, so runs never overlap; set `pollWaitsForRun = false` for a fixed rate. Separate timers with `pollingKeyParams()`, or make different action classes share one with `computePollingKey()`. Stop all with `stopAllPolling()` (also stopped by `store.clearInternalActionProps()` and `store.setShutDown(true)`). Can't be combined with `retry`, `debounce` or `OptimisticCommand`. |
 
 ## Compatibility matrix
@@ -26,19 +28,21 @@ Which features can be used together in the same action. ❌ means the combinatio
 allowed: dispatching the action throws a `StoreException`. The ESLint plugin's
 `incompatible-action-features` rule reports these combinations in the editor.
 
-|                       | NonReentrant | Retry | CheckInternet | Debounce | Throttle | Fresh | Sequential | OptimisticCommand | OptimisticSync | Polling | UnlimitedRetryCheckInternet |
-|-----------------------|:------------:|:-----:|:-------------:|:--------:|:--------:|:-----:|:----------:|:-----------------:|:--------------:|:-------:|:---------------------------:|
-| **NonReentrant**      |      —       |  ✅   |      ✅       |    ✅    |    ❌    |  ❌   |     ✅     |       ❌ ¹        |       ❌       |  ✅ ³   |            ❌ ⁴             |
-| **Retry**             |      ✅      |   —   |      ✅       |    ❌    |    ✅    |  ✅   |     ✅     |       ✅ ²        |       ❌       |   ❌    |            ❌ ⁴             |
-| **CheckInternet**     |      ✅      |  ✅   |       —       |    ✅    |    ✅    |  ✅   |     ✅     |        ✅         |       ✅       |  ✅ ³   |            ❌ ⁴             |
-| **Debounce**          |      ✅      |  ❌   |      ✅       |    —     |    ✅    |  ✅   |     ❌     |        ❌         |       ❌       |   ❌    |             ❌              |
-| **Throttle**          |      ❌      |  ✅   |      ✅       |    ✅    |    —     |  ❌   |     ✅     |        ❌         |       ❌       |  ✅ ³   |             ❌              |
-| **Fresh**             |      ❌      |  ✅   |      ✅       |    ✅    |    ❌    |   —   |     ✅     |        ❌         |       ❌       |  ✅ ³   |             ❌              |
-| **Sequential**        |      ✅      |  ✅   |      ✅       |    ❌    |    ✅    |  ✅   |     —      |        ✅         |      ❌ ⁶      |  ✅ ³   |            ❌ ⁵             |
-| **OptimisticCommand** |     ❌ ¹     | ✅ ²  |      ✅       |    ❌    |    ❌    |  ❌   |     ✅     |         —         |      ❌ ⁷      |   ❌    |             ❌              |
-| **OptimisticSync**    |      ❌      |  ❌   |      ✅       |    ❌    |    ❌    |  ❌   |    ❌ ⁶    |       ❌ ⁷        |       —        |   ❌    |             ❌              |
-| **Polling**           |     ✅ ³     |  ❌   |     ✅ ³      |    ❌    |   ✅ ³   | ✅ ³  |    ✅ ³    |        ❌         |       ❌       |    —    |            ❌ ³             |
-| **UnlimitedRetryCheckInternet** | ❌ ⁴ | ❌ ⁴ |     ❌ ⁴      |    ❌    |    ❌    |  ❌   |    ❌ ⁵    |        ❌         |       ❌       |  ❌ ³   |              —              |
+|                                 | NonReentrant | Retry | CheckInternet | Debounce | Throttle | Fresh | Sequential | OptimisticCommand | OptimisticSync | OptimisticSyncWithPush | ServerPush | Polling | UnlimitedRetryCheckInternet |
+|---------------------------------|:------------:|:-----:|:-------------:|:--------:|:--------:|:-----:|:----------:|:-----------------:|:--------------:|:----------------------:|:----------:|:-------:|:---------------------------:|
+| **NonReentrant**                |      —       |  ✅   |      ✅       |    ✅    |    ❌    |  ❌   |     ✅     |       ❌ ¹        |       ❌       |           ❌           |     ❌     |  ✅ ³   |            ❌ ⁴             |
+| **Retry**                       |      ✅      |   —   |      ✅       |    ❌    |    ✅    |  ✅   |     ✅     |       ✅ ²        |       ❌       |           ❌           |     ❌     |   ❌    |            ❌ ⁴             |
+| **CheckInternet**               |      ✅      |  ✅   |       —       |    ✅    |    ✅    |  ✅   |     ✅     |        ✅         |       ✅       |           ✅           |     ❌     |  ✅ ³   |            ❌ ⁴             |
+| **Debounce**                    |      ✅      |  ❌   |      ✅       |    —     |    ✅    |  ✅   |     ❌     |        ❌         |       ❌       |           ❌           |     ❌     |   ❌    |             ❌              |
+| **Throttle**                    |      ❌      |  ✅   |      ✅       |    ✅    |    —     |  ❌   |     ✅     |        ❌         |       ❌       |           ❌           |     ❌     |  ✅ ³   |             ❌              |
+| **Fresh**                       |      ❌      |  ✅   |      ✅       |    ✅    |    ❌    |   —   |     ✅     |        ❌         |       ❌       |           ❌           |     ❌     |  ✅ ³   |             ❌              |
+| **Sequential**                  |      ✅      |  ✅   |      ✅       |    ❌    |    ✅    |  ✅   |     —      |        ✅         |      ❌ ⁶      |          ❌ ⁶          |    ❌ ⁸    |  ✅ ³   |            ❌ ⁵             |
+| **OptimisticCommand**           |     ❌ ¹     | ✅ ²  |      ✅       |    ❌    |    ❌    |  ❌   |     ✅     |         —         |      ❌ ⁷      |          ❌ ⁷          |    ❌ ⁷    |   ❌    |             ❌              |
+| **OptimisticSync**              |      ❌      |  ❌   |      ✅       |    ❌    |    ❌    |  ❌   |    ❌ ⁶    |       ❌ ⁷        |       —        |          ❌ ⁷          |    ❌ ⁷    |   ❌    |             ❌              |
+| **OptimisticSyncWithPush**      |      ❌      |  ❌   |      ✅       |    ❌    |    ❌    |  ❌   |    ❌ ⁶    |       ❌ ⁷        |      ❌ ⁷      |           —            |    ❌ ⁷    |   ❌    |             ❌              |
+| **ServerPush**                  |      ❌      |  ❌   |      ❌       |    ❌    |    ❌    |  ❌   |    ❌ ⁸    |       ❌ ⁷        |      ❌ ⁷      |          ❌ ⁷          |     —      |   ❌    |             ❌              |
+| **Polling**                     |     ✅ ³     |  ❌   |     ✅ ³      |    ❌    |   ✅ ³   | ✅ ³  |    ✅ ³    |        ❌         |       ❌       |           ❌           |     ❌     |    —    |            ❌ ³             |
+| **UnlimitedRetryCheckInternet** |     ❌ ⁴     | ❌ ⁴  |     ❌ ⁴      |    ❌    |    ❌    |  ❌   |    ❌ ⁵    |        ❌         |       ❌       |           ❌           |     ❌     |  ❌ ³   |              —              |
 
 1. `OptimisticCommand` is already non-reentrant, so it can't set `nonReentrant`.
 2. Only `sendCommandToServer` is retried. Unlimited retries (`maxRetries: -1` or
@@ -56,12 +60,17 @@ allowed: dispatching the action throws a `StoreException`. The ESLint plugin's
 5. It aborts the dispatch while another action with the same key is in progress (and a queued
    action counts as in progress), so two actions of the same class would never queue behind
    each other. It would also retry forever while holding the queue.
-6. `OptimisticSync` needs dispatches to overlap: it applies the optimistic value as soon as the
+6. `OptimisticSync` (and `OptimisticSyncWithPush`) needs dispatches to overlap: it applies the optimistic value as soon as the
    action is dispatched, and coalesces the dispatches made while a request is in flight into a
    single follow-up request. With `sequential`, the UI would stop responding immediately, and
    nothing would ever be coalesced. `OptimisticSync` already sends a single request per key at
    a time, so it doesn't need `sequential` to serialize the requests.
-7. Both are base classes, so an action can't extend both.
+7. Both are base classes, so an action can't extend both. Note `ServerPush` works together with
+   `OptimisticSyncWithPush`, but in a separate action, whose `associatedAction()` returns the
+   `OptimisticSyncWithPush` class.
+8. Pushed values must be applied to the state as soon as they arrive, and `sequential` would
+   delay them behind other queued actions. A push is also what tells an in-flight
+   `OptimisticSyncWithPush` request that no follow-up is needed, and that would arrive too late.
 
 Other restrictions:
 - `retry` and `unlimitedRetryCheckInternet` need an ASYNC reducer. With a SYNC reducer, the
@@ -72,26 +81,20 @@ Other restrictions:
 ## Clearing the features
 
 The store keeps the internal information of the features (fresh keys, throttle and debounce
-locks, polling timers, sequential queues, and `OptimisticSync` keys).
+locks, polling timers, sequential queues, `OptimisticSync` and `OptimisticSyncWithPush` keys,
+and the revisions kept by `OptimisticSyncWithPush` and `ServerPush`).
 `store.clearInternalActionProps()` clears all of it, which is useful on logout, and
 `store.setShutDown(true)` calls it too. It's the Kiss version of AsyncRedux's
 `store.internalMixinProps.clear()`, except it also discards the actions waiting in sequential
 queues, so they don't run after the logout, and stops the actions that retry (`retry` and
 `unlimitedRetryCheckInternet`), so they don't keep retrying for the previous user. Also, an
-`OptimisticSync` whose request was in flight stops when the request finishes, without sending
-follow-up requests (it's aborted, so it doesn't fail). `nonReentrant` keys are not cleared
-directly, since they belong to the actions that are running, but stopping a retrying action
-releases its key.
+`OptimisticSync` or `OptimisticSyncWithPush` whose request was in flight stops when the request
+finishes, without sending follow-up requests (it's aborted, so it doesn't fail). The server
+revisions saved in the state (by `ServerPush`) are kept, and still used. `nonReentrant` keys
+are not cleared directly, since they belong to the actions that are running, but stopping a
+retrying action releases its key.
 
-## Candidates from AsyncRedux
+## Not in Kiss
 
-These AsyncRedux mixins (`async_redux/lib/src/action_mixins.dart`) don't exist in Kiss yet,
-and would also make sense in Kiss. The "Possible Kiss form" column is only a suggestion.
-
-| Feature | What it does | Possible Kiss form |
-|---|---|---|
-| **OptimisticSyncWithPush** | Like OptimisticSync, but uses revision tracking so it works with server pushes (WebSockets, SSE, Firebase) without stale pushes overwriting local optimistic changes. | Base class `OptimisticSyncWithPush<St, T>` |
-| **ServerPush** | For actions that put values received by server push into the state. Works with OptimisticSyncWithPush so out-of-order or stale pushes don't corrupt the state. | Base class `ServerPush<St>` |
-
-AsyncRedux's `NoDialog` and `UnlimitedRetries` aren't listed because Kiss already covers them
-with `checkInternet = { dialog: false }` and `retry = { maxRetries: -1 }`.
+AsyncRedux's `NoDialog` and `UnlimitedRetries` mixins don't exist in Kiss, because Kiss already
+covers them with `checkInternet = { dialog: false }` and `retry = { maxRetries: -1 }`.

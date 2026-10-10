@@ -5,6 +5,8 @@ import {
   declaresCheckInternet,
   extendsOptimisticCommand,
   extendsOptimisticSync,
+  extendsOptimisticSyncWithPush,
+  extendsServerPush,
   inheritedBeforeWithoutSuper,
   isActionClass,
   readsThisMember,
@@ -29,8 +31,9 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  *   }
  *   ```
  *
- * - `reduce()` in a subclass of `OptimisticCommand` or `OptimisticSync`, which must not be
- *   overridden. The optimistic update stops working.
+ * - `reduce()` in a subclass of `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`
+ *   or `ServerPush`, which must not be overridden. The optimistic update (or, in a `ServerPush`,
+ *   the revision checks) stops working.
  *
  * A `before` that reads `this.checkInternet` is assumed to check the internet by itself.
  *
@@ -42,7 +45,8 @@ export default createRule({
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow overrides that turn off `checkInternet`, `OptimisticCommand` or `OptimisticSync`, because they don\'t call `super`.',
+      description: 'Disallow overrides that turn off `checkInternet`, `OptimisticCommand`, `OptimisticSync`, ' +
+        '`OptimisticSyncWithPush` or `ServerPush`, because they don\'t call `super`.',
     },
     hasSuggestions: true,
     schema: [],
@@ -61,6 +65,15 @@ export default createRule({
         'Don\'t override `reduce` in an `OptimisticSync`. Its `reduce` does the optimistic update, and ' +
         'sends the requests to the server, so overriding it turns that off. Implement `valueToApply`, ' +
         '`applyOptimisticValueToState`, `getValueFromState` and `sendValueToServer` instead.',
+      optimisticSyncWithPushReduce:
+        'Don\'t override `reduce` in an `OptimisticSyncWithPush`. Its `reduce` does the optimistic update, ' +
+        'and sends the requests to the server, so overriding it turns that off. Implement `valueToApply`, ' +
+        '`applyOptimisticValueToState`, `getValueFromState`, `sendValueToServer` and ' +
+        '`getServerRevisionFromState` instead.',
+      serverPushReduce:
+        'Don\'t override `reduce` in a `ServerPush`. Its `reduce` ignores the stale pushes, and records ' +
+        'the server revisions, so overriding it turns that off. Implement `associatedAction`, ' +
+        '`pushMetadata`, `applyServerPushToState` and `getServerRevisionFromState` instead.',
       addSuper: 'Call `await super.before()` first.',
     },
   },
@@ -101,6 +114,16 @@ export default createRule({
       // `reduce` in an `OptimisticSync`.
       else if (reduce && extendsOptimisticSync(classNode, context, typeInfo)) {
         context.report({node: reduce.key, messageId: 'optimisticSyncReduce'});
+      }
+
+      // `reduce` in an `OptimisticSyncWithPush`.
+      else if (reduce && extendsOptimisticSyncWithPush(classNode, context, typeInfo)) {
+        context.report({node: reduce.key, messageId: 'optimisticSyncWithPushReduce'});
+      }
+
+      // `reduce` in a `ServerPush`.
+      else if (reduce && extendsServerPush(classNode, context, typeInfo)) {
+        context.report({node: reduce.key, messageId: 'serverPushReduce'});
       }
     };
 

@@ -89,8 +89,9 @@ export default createRule({
 });
 
 /**
- * True if the class is an action that is not an `OptimisticCommand` or an `OptimisticSync`, and that doesn't declare
- * `nonReentrant` or `abortDispatch` (itself, or its superclasses).
+ * True if the class is an action that is not an `OptimisticCommand`, an `OptimisticSync`, an
+ * `OptimisticSyncWithPush` or a `ServerPush`, and that doesn't declare `nonReentrant` or
+ * `abortDispatch` (itself, or its superclasses).
  */
 function isRelevantAction(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
   if (!classNode.superClass) return false;
@@ -99,14 +100,18 @@ function isRelevantAction(classNode: ClassNode, context: Context, typeInfo: Type
     const type = instanceTypeOfClass(classNode, typeInfo);
     if (extendsClassNamed(type, 'OptimisticCommand', typeInfo.checker)) return false;
     if (extendsClassNamed(type, 'OptimisticSync', typeInfo.checker)) return false;
+    if (extendsClassNamed(type, 'OptimisticSyncWithPush', typeInfo.checker)) return false;
+    if (extendsClassNamed(type, 'ServerPush', typeInfo.checker)) return false;
     return !isDeclaredByUser(type, 'nonReentrant') && !isDeclaredByUser(type, 'abortDispatch');
   }
   const chain = classChain(classNode, context);
-  if (chain.end === 'OptimisticCommand' || chain.end === 'OptimisticSync') return false;
-  // Without type information, the superclass may be an `OptimisticCommand` or an `OptimisticSync`
-  // declared in another file.
+  if (chain.end === 'OptimisticCommand' || chain.end === 'OptimisticSync' ||
+    chain.end === 'OptimisticSyncWithPush' || chain.end === 'ServerPush') return false;
+  // Without type information, the superclass may be an `OptimisticCommand`, an `OptimisticSync`,
+  // an `OptimisticSyncWithPush` or a `ServerPush` declared in another file.
   if (findMemberInChain(chain, 'sendCommandToServer') || findMemberInChain(chain, 'optimisticValue')) return false;
   if (findMemberInChain(chain, 'sendValueToServer') || findMemberInChain(chain, 'valueToApply')) return false;
+  if (findMemberInChain(chain, 'applyServerPushToState') || findMemberInChain(chain, 'pushMetadata')) return false;
   // It must be an action: it reaches `KissAction`, or declares `reduce`.
   if (chain.end !== 'KissAction' && !findMemberInChain(chain, 'reduce')) return false;
   return !findMemberInChain(chain, 'nonReentrant') && !findMemberInChain(chain, 'abortDispatch');

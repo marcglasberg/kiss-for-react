@@ -72,6 +72,21 @@ const INCOMPATIBLE_WITH_SYNC: [PropertyFeature, string?][] = [
   ['unlimitedRetryCheckInternet'],
 ];
 
+/** The features a `ServerPush` can't use: all of them, since it should be used alone. */
+const INCOMPATIBLE_WITH_SERVER_PUSH: [PropertyFeature, string?][] = [
+  ['checkInternet', 'Pushed values must be applied as soon as they arrive.'],
+  ['nonReentrant'],
+  ['retry'],
+  ['debounce'],
+  ['throttle'],
+  ['fresh'],
+  ['sequential',
+    'Pushed values must be applied as soon as they arrive, and they tell the in-flight ' +
+    '`OptimisticSyncWithPush` requests that no follow-up is needed.'],
+  ['poll'],
+  ['unlimitedRetryCheckInternet'],
+];
+
 /** How a feature is set in the action: if it's on, and its declaration in the class itself, if any. */
 export interface FeatureState {
   on: boolean;
@@ -101,11 +116,17 @@ export interface FeatureState {
  *   retry = { on: true };  // Error (an `OptimisticSync` can only use `checkInternet`)
  *   ...
  * }
+ *
+ * class PushLike extends ServerPush<State> {
+ *   checkInternet = { dialog: false };  // Error (a `ServerPush` can't use any feature)
+ *   ...
+ * }
  * ```
  *
  * The features are `nonReentrant`, `retry`, `checkInternet`, `debounce`, `throttle`, `fresh`,
- * `sequential`, polling (`poll`), `unlimitedRetryCheckInternet`, `OptimisticCommand` and
- * `OptimisticSync`. It also reports an `OptimisticCommand` that retries forever
+ * `sequential`, polling (`poll`), `unlimitedRetryCheckInternet`, `OptimisticCommand`,
+ * `OptimisticSync`, `OptimisticSyncWithPush` (which can use the same features as an
+ * `OptimisticSync`) and `ServerPush`. It also reports an `OptimisticCommand` that retries forever
  * (`retry = { maxRetries: -1 }` or `retry = { unlimitedRetries: true }`).
  *
  * Features inherited from superclasses count too (in this file, or anywhere with type
@@ -130,7 +151,10 @@ export default createRule({
       incompatibleWithCommand:
         'An `OptimisticCommand` can\'t use `{{feature}}`. Dispatching it throws a `StoreException`.{{reason}}',
       incompatibleWithSync:
-        'An `OptimisticSync` can\'t use `{{feature}}`. Dispatching it throws a `StoreException`.{{reason}}',
+        'An `{{className}}` can\'t use `{{feature}}`. Dispatching it throws a `StoreException`.{{reason}}',
+      incompatibleWithServerPush:
+        'A `ServerPush` can\'t use `{{feature}}`, since it should be used alone. Dispatching it throws a ' +
+        '`StoreException`.{{reason}}',
       commandRetriesForever:
         'An `OptimisticCommand` can\'t retry forever (`{{option}}`), since a command that never finishes ' +
         'would never release its non-reentrant key. Dispatching it throws a `StoreException`. Use a ' +
@@ -174,13 +198,27 @@ export default createRule({
         });
       }
 
-      if (isOptimisticSync(classNode, context, typeInfo)) {
+      const syncClass = optimisticSyncClass(classNode, context, typeInfo);
+      if (syncClass !== null) {
         for (const [feature, reason] of INCOMPATIBLE_WITH_SYNC) {
           const state = features.get(feature)!;
           if (!state.on || !state.own) continue;
           context.report({
             node: keyOf(state.own),
             messageId: 'incompatibleWithSync',
+            data: {className: syncClass, feature, reason: reasonText(reason)},
+            suggest: suggestionsFor([state.own], [feature]),
+          });
+        }
+      }
+
+      if (isServerPush(classNode, context, typeInfo)) {
+        for (const [feature, reason] of INCOMPATIBLE_WITH_SERVER_PUSH) {
+          const state = features.get(feature)!;
+          if (!state.on || !state.own) continue;
+          context.report({
+            node: keyOf(state.own),
+            messageId: 'incompatibleWithServerPush',
             data: {feature, reason: reasonText(reason)},
             suggest: suggestionsFor([state.own], [feature]),
           });
@@ -306,9 +344,9 @@ export function featureState(name: PropertyFeature, classNode: ClassNode, contex
 
 /**
  * True if the class is an action: it extends `KissAction` (with type information), or, without
- * it, its superclasses in this file reach `KissAction`, `OptimisticCommand` or `OptimisticSync`,
- * or it (or one of them) declares `reduce` or the methods of an `OptimisticCommand` or an
- * `OptimisticSync`.
+ * it, its superclasses in this file reach one of Kiss's action classes, or it (or one of them)
+ * declares `reduce` or the methods of an `OptimisticCommand`, an `OptimisticSync`, an
+ * `OptimisticSyncWithPush` or a `ServerPush`.
  */
 export function isAction(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
   if (!classNode.superClass) return false;
@@ -316,18 +354,41 @@ export function isAction(classNode: ClassNode, context: Context, typeInfo: TypeI
   const chain = classChain(classNode, context);
   return chain.end !== null || !!findMemberInChain(chain, 'reduce') ||
     !!findMemberInChain(chain, 'sendCommandToServer') || !!findMemberInChain(chain, 'optimisticValue') ||
-    !!findMemberInChain(chain, 'sendValueToServer') || !!findMemberInChain(chain, 'valueToApply');
+    !!findMemberInChain(chain, 'sendValueToServer') || !!findMemberInChain(chain, 'valueToApply') ||
+    !!findMemberInChain(chain, 'applyServerPushToState') || !!findMemberInChain(chain, 'pushMetadata');
 }
 
 /**
- * True if the class is an `OptimisticSync`. Without type information, its superclasses in this
- * file must reach `OptimisticSync`, or declare its methods.
+ * If the class is an `OptimisticSync` or an `OptimisticSyncWithPush`, returns which one.
+ * Otherwise, returns null. Without type information, its superclasses in this file must reach
+ * one of them, or declare their methods (an `OptimisticSyncWithPush` also declares
+ * `getServerRevisionFromState`).
  */
-function isOptimisticSync(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
-  if (typeInfo) return extendsClassNamed(instanceTypeOfClass(classNode, typeInfo), 'OptimisticSync', typeInfo.checker);
+function optimisticSyncClass(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null):
+  'OptimisticSync' | 'OptimisticSyncWithPush' | null {
+  if (typeInfo) {
+    const type = instanceTypeOfClass(classNode, typeInfo);
+    if (extendsClassNamed(type, 'OptimisticSyncWithPush', typeInfo.checker)) return 'OptimisticSyncWithPush';
+    if (extendsClassNamed(type, 'OptimisticSync', typeInfo.checker)) return 'OptimisticSync';
+    return null;
+  }
   const chain = classChain(classNode, context);
-  return chain.end === 'OptimisticSync' ||
-    !!findMemberInChain(chain, 'sendValueToServer') || !!findMemberInChain(chain, 'valueToApply');
+  if (chain.end === 'OptimisticSyncWithPush') return 'OptimisticSyncWithPush';
+  if (chain.end === 'OptimisticSync') return 'OptimisticSync';
+  if (chain.end !== null) return null;
+  if (!findMemberInChain(chain, 'sendValueToServer') && !findMemberInChain(chain, 'valueToApply')) return null;
+  return findMemberInChain(chain, 'getServerRevisionFromState') ? 'OptimisticSyncWithPush' : 'OptimisticSync';
+}
+
+/**
+ * True if the class is a `ServerPush`. Without type information, its superclasses in this file
+ * must reach `ServerPush`, or declare its methods.
+ */
+function isServerPush(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  if (typeInfo) return extendsClassNamed(instanceTypeOfClass(classNode, typeInfo), 'ServerPush', typeInfo.checker);
+  const chain = classChain(classNode, context);
+  return chain.end === 'ServerPush' || (chain.end === null &&
+    (!!findMemberInChain(chain, 'applyServerPushToState') || !!findMemberInChain(chain, 'pushMetadata')));
 }
 
 /**

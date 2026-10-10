@@ -739,6 +739,14 @@ An error for an override that silently turns off a Kiss feature, because it does
   `valueToApply`, `applyOptimisticValueToState`, `getValueFromState` and `sendValueToServer`
   instead.
 
+- `reduce()` in a subclass of `OptimisticSyncWithPush`, for the same reason. Implement
+  `valueToApply`, `applyOptimisticValueToState`, `getValueFromState`, `sendValueToServer` and
+  `getServerRevisionFromState` instead.
+
+- `reduce()` in a subclass of `ServerPush`. Its `reduce` ignores the stale pushes, and records
+  the server revisions, so overriding it turns that off. Implement `associatedAction`,
+  `pushMetadata`, `applyServerPushToState` and `getServerRevisionFromState` instead.
+
 A `before` that reads `this.checkInternet` is not reported, since it probably checks the
 internet by itself. Without type information, only `checkInternet` and superclasses declared
 in the same file are found. With [type information](#type-information), also the ones in
@@ -871,6 +879,11 @@ class ToggleLike extends OptimisticSync<State, boolean> {
   retry = { on: true }; // Error: an `OptimisticSync` can only use `checkInternet`.
   ...
 }
+
+class PushLike extends ServerPush<State> {
+  checkInternet = { dialog: false }; // Error: a `ServerPush` can't use any feature.
+  ...
+}
 ```
 
 These are the combinations it reports (the same ones the store checks when the action is
@@ -887,8 +900,10 @@ dispatched):
 - An `OptimisticCommand` with `nonReentrant`, `debounce`, `throttle`, `fresh`, `poll` or
   `unlimitedRetryCheckInternet`, or with a `retry` that retries forever
   (`maxRetries: -1` or `unlimitedRetries: true`).
-- An `OptimisticSync` with any feature other than `checkInternet`: `nonReentrant`, `retry`,
-  `debounce`, `throttle`, `fresh`, `sequential`, `poll` or `unlimitedRetryCheckInternet`.
+- An `OptimisticSync` or an `OptimisticSyncWithPush` with any feature other than
+  `checkInternet`: `nonReentrant`, `retry`, `debounce`, `throttle`, `fresh`, `sequential`,
+  `poll` or `unlimitedRetryCheckInternet`.
+- A `ServerPush` with any feature, including `checkInternet`. It should be used alone.
 
 A feature is on when it's set to something other than `false`, `null` or `undefined` (for
 `retry`, also not `{ on: false }`). `poll` also counts as a constructor parameter property,
@@ -1038,8 +1053,8 @@ An opt-in warning for a non-reentrant action with fields, that doesn't override
 the subclasses of `OptimisticCommand`. By default, the non-reentrant key doesn't depend on the fields, so all
 instances share it. For example, `SaveTodo('A')` then blocks `SaveTodo('B')`.
 
-It also warns about a subclass of `OptimisticSync` with fields, that doesn't override
-`optimisticSyncKeyParams` or `computeOptimisticSyncKey`. Then, while `ToggleLike('A')` has a
+It also warns about a subclass of `OptimisticSync` (or `OptimisticSyncWithPush`) with fields,
+that doesn't override `optimisticSyncKeyParams` or `computeOptimisticSyncKey`. Then, while `ToggleLike('A')` has a
 request in flight, `ToggleLike('B')` changes the state, but doesn't send its own request. And
 the follow-up request of `ToggleLike('A')` only checks item A, so item B may never be sent to
 the server:
@@ -1071,8 +1086,8 @@ class ToggleLike extends OptimisticSync<State, boolean> { // OK
 
 It's opt-in, since sharing the key is often intended. Without
 [type information](#type-information), the class must extend `KissAction`,
-`OptimisticCommand` or `OptimisticSync` in the same file (directly, or through its
-superclasses).
+`OptimisticCommand`, `OptimisticSync` or `OptimisticSyncWithPush` in the same file (directly,
+or through its superclasses).
 
 Quick fix (suggestion): override `nonReentrantKeyParams()` (or `optimisticSyncKeyParams()`),
 returning the fields. You may then remove the fields that shouldn't be part of the key.

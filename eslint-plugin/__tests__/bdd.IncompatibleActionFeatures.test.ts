@@ -1,7 +1,17 @@
 import { expect, jest } from '@jest/globals';
 import { Bdd, Feature, FeatureFileReporter, reporter, val } from 'easy-bdd-tool-jest';
 import { lint } from '../testing/lint';
-import { KissAction, OptimisticCommand, OptimisticSync, Poll, Store, StoreException } from '../../src';
+import {
+  KissAction,
+  OptimisticCommand,
+  OptimisticSync,
+  OptimisticSyncWithPush,
+  Poll,
+  PushMetadata,
+  ServerPush,
+  Store,
+  StoreException,
+} from '../../src';
 
 reporter(new FeatureFileReporter());
 
@@ -9,7 +19,7 @@ const feature = new Feature('Lint: incompatible-action-features');
 
 const rule = 'incompatible-action-features';
 
-const prelude = `import { KissAction, OptimisticCommand, OptimisticSync, Poll } from 'kiss-for-react';
+const prelude = `import { KissAction, OptimisticCommand, OptimisticSync, OptimisticSyncWithPush, Poll, PushMetadata, ServerPush } from 'kiss-for-react';
 
 class State {
   constructor(readonly text: string) {}
@@ -30,6 +40,29 @@ const syncMethods = `
   applyOptimisticValueToState(state: State, text: string) { return new State(text); }
   getValueFromState(state: State) { return state.text; }
   async sendValueToServer(text: string) { await saveText(text); }`;
+
+const syncWithPushMethods = `
+  valueToApply() { return 'new'; }
+  applyOptimisticValueToState(state: State, text: string) { return new State(text); }
+  getValueFromState(state: State) { return state.text; }
+  getServerRevisionFromState(state: State, key: any) { return -1; }
+  async sendValueToServer(text: string, localRevision: number, deviceId: number) {
+    await saveText(text);
+    this.informServerRevision(Date.now());
+  }`;
+
+const serverPushMethods = `
+  constructor(readonly text: string, readonly metadata: PushMetadata) { super(); }
+  associatedAction() { return SaveTextWithPush; }
+  pushMetadata() { return this.metadata; }
+  applyServerPushToState(state: State, key: any, serverRevision: number) { return new State(this.text); }
+  getServerRevisionFromState(state: State, key: any) { return -1; }`;
+
+/** The `OptimisticSyncWithPush` associated with the `ServerPush` actions of the tests. */
+const syncWithPushAction = `
+class SaveTextWithPush extends OptimisticSyncWithPush<State, string> {${syncWithPushMethods}
+}
+`;
 
 /** How each feature is turned on, in the code. */
 const DECLARATIONS: Record<string, string> = {
@@ -70,6 +103,9 @@ const INCOMPATIBLE_WITH_COMMAND = ['nonReentrant', 'debounce', 'throttle', 'fres
 
 /** The features an `OptimisticSync` can't use: all but `checkInternet`. */
 const INCOMPATIBLE_WITH_SYNC = ['nonReentrant', 'retry', 'debounce', 'throttle', 'fresh', 'sequential', 'poll', 'unlimitedRetryCheckInternet'];
+
+/** The features a `ServerPush` can't use: all of them. */
+const INCOMPATIBLE_WITH_SERVER_PUSH = ['nonReentrant', 'retry', 'checkInternet', 'debounce', 'throttle', 'fresh', 'sequential', 'poll', 'unlimitedRetryCheckInternet'];
 
 /** An action with both features, the first one declared first. */
 function actionWith(first: string, second: string): string {
@@ -254,6 +290,95 @@ class SaveText extends OptimisticSync<State, string> {
     const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
     expect(result.messages.map((m) => m.text)).toEqual([name]);
     expect(result.messages[0].message).toContain(`An \`OptimisticSync\` can't use \`${name}\`.`);
+    expect(result.messages[0].suggestions).toEqual([`Remove \`${name}\`.`]);
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('The rule reports exactly the features an OptimisticSyncWithPush does not allow.')
+  .given('An OptimisticSyncWithPush with each feature.')
+  .when('The code is linted, and the same action is dispatched.')
+  .then('The lint reports the feature if, and only if, the dispatch throws a StoreException.')
+  .and('It allows the same features as an OptimisticSync.')
+  .run(async (_) => {
+    const reported: string[] = [];
+    const thrown: string[] = [];
+    for (const name of FEATURES) {
+      const code = `${prelude}
+class SaveText extends OptimisticSyncWithPush<State, string> {
+  ${DECLARATIONS[name]}${syncWithPushMethods}
+}
+`;
+      if (lint(rule, code, {types: false}).messages.length > 0) reported.push(name);
+      if (dispatchThrows(new RuntimeSyncWithPush(), [name])) thrown.push(name);
+    }
+    expect(reported).toEqual(thrown);
+    expect(reported).toEqual(INCOMPATIBLE_WITH_SYNC);
+  });
+
+Bdd(feature)
+  .scenario('An OptimisticSyncWithPush with a feature it can\'t use is an error.')
+  .given('An OptimisticSyncWithPush with {Feature}.')
+  .when('The code is linted.')
+  .then('There is an error in {Feature}, saying an OptimisticSyncWithPush can\'t use it, with a suggestion to remove it.')
+  .example(val('Feature', 'retry'), val('Type information', true))
+  .example(val('Feature', 'retry'), val('Type information', false))
+  .example(val('Feature', 'sequential'), val('Type information', true))
+  .example(val('Feature', 'nonReentrant'), val('Type information', false))
+  .run(async (ctx) => {
+    const name = ctx.example.val('Feature') as string;
+    const code = `${prelude}
+class SaveText extends OptimisticSyncWithPush<State, string> {
+  ${DECLARATIONS[name]}${syncWithPushMethods}
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages.map((m) => m.text)).toEqual([name]);
+    expect(result.messages[0].message).toContain(`An \`OptimisticSyncWithPush\` can't use \`${name}\`.`);
+    expect(result.messages[0].suggestions).toEqual([`Remove \`${name}\`.`]);
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('The rule reports exactly the features a ServerPush does not allow.')
+  .given('A ServerPush with each feature.')
+  .when('The code is linted, and the same action is dispatched.')
+  .then('The lint reports the feature if, and only if, the dispatch throws a StoreException.')
+  .and('It does not allow any feature, not even checkInternet.')
+  .run(async (_) => {
+    const reported: string[] = [];
+    const thrown: string[] = [];
+    for (const name of FEATURES) {
+      const code = `${prelude}${syncWithPushAction}
+class PushText extends ServerPush<State> {
+  ${DECLARATIONS[name]}${serverPushMethods}
+}
+`;
+      if (lint(rule, code, {types: false}).messages.length > 0) reported.push(name);
+      if (dispatchThrows(new RuntimeServerPush(), [name])) thrown.push(name);
+    }
+    expect(reported).toEqual(thrown);
+    expect(reported).toEqual(INCOMPATIBLE_WITH_SERVER_PUSH);
+  });
+
+Bdd(feature)
+  .scenario('A ServerPush with a feature is an error.')
+  .given('A ServerPush with {Feature}.')
+  .when('The code is linted.')
+  .then('There is an error in {Feature}, saying a ServerPush can\'t use it, with a suggestion to remove it.')
+  .example(val('Feature', 'checkInternet'), val('Type information', true))
+  .example(val('Feature', 'checkInternet'), val('Type information', false))
+  .example(val('Feature', 'sequential'), val('Type information', true))
+  .run(async (ctx) => {
+    const name = ctx.example.val('Feature') as string;
+    const code = `${prelude}${syncWithPushAction}
+class PushText extends ServerPush<State> {
+  ${DECLARATIONS[name]}${serverPushMethods}
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages.map((m) => m.text)).toEqual([name]);
+    expect(result.messages[0].message).toContain(`A \`ServerPush\` can't use \`${name}\``);
     expect(result.messages[0].suggestions).toEqual([`Remove \`${name}\`.`]);
     expect(result.typeErrors).toEqual([]);
   });
@@ -501,5 +626,54 @@ class RuntimeSync extends OptimisticSync<RuntimeState, string> {
 
   async sendValueToServer() {
     return null;
+  }
+}
+
+class RuntimeSyncWithPush extends OptimisticSyncWithPush<RuntimeState, string> {
+  createPollingAction() {
+    return new RuntimeAction();
+  }
+
+  valueToApply() {
+    return 'new';
+  }
+
+  applyOptimisticValueToState(state: RuntimeState, text: string) {
+    return new RuntimeState(text);
+  }
+
+  getValueFromState(state: RuntimeState) {
+    return state.text;
+  }
+
+  getServerRevisionFromState() {
+    return -1;
+  }
+
+  async sendValueToServer() {
+    this.informServerRevision(1);
+    return null;
+  }
+}
+
+class RuntimeServerPush extends ServerPush<RuntimeState> {
+  createPollingAction() {
+    return new RuntimeAction();
+  }
+
+  associatedAction() {
+    return RuntimeSyncWithPush;
+  }
+
+  pushMetadata(): PushMetadata {
+    return { serverRevision: 1, localRevision: 1, deviceId: 1 };
+  }
+
+  applyServerPushToState(state: RuntimeState) {
+    return state;
+  }
+
+  getServerRevisionFromState() {
+    return -1;
   }
 }

@@ -253,6 +253,16 @@ export function extendsOptimisticSync(classNode: ClassNode, context: Context, ty
   return extendsKissClass(classNode, 'OptimisticSync', context, typeInfo);
 }
 
+/** True if the class extends Kiss's `OptimisticSyncWithPush`, directly or not. */
+export function extendsOptimisticSyncWithPush(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  return extendsKissClass(classNode, 'OptimisticSyncWithPush', context, typeInfo);
+}
+
+/** True if the class extends Kiss's `ServerPush`, directly or not. */
+export function extendsServerPush(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  return extendsKissClass(classNode, 'ServerPush', context, typeInfo);
+}
+
 /** True if the class extends the Kiss class with this name (which extends `KissAction`), directly or not. */
 function extendsKissClass(classNode: ClassNode, name: string, context: Context, typeInfo: TypeInfo | null): boolean {
   if (typeInfo) {

@@ -4257,6 +4257,9 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
  * Note: It's not built for commands that must run once per dispatch (create, delete, submit,
  * upload, checkout...). For those, use `OptimisticCommand`.
  *
+ * Note: If your app receives server pushes (WebSockets, Server-Sent Events, Firebase) that may
+ * change the same value, use `OptimisticSyncWithPush` instead.
+ *
  * ---
  *
  * ## How it works
@@ -4829,23 +4832,939 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
-
-    const incompatible = (feature: string, isUsed: boolean) => {
-      if (isUsed)
-        throw new StoreException(
-          `Action ${this.constructor.name} is an OptimisticSync, which can't use ${feature}. ` +
-          `Remove its \`${feature === 'polling' ? 'poll' : feature}\` property.`);
-    };
-
-    incompatible('nonReentrant', this.nonReentrant);
-    incompatible('unlimitedRetryCheckInternet', this._isUnlimitedRetryCheckInternet);
-    incompatible('retry', this.ifRetryIsOn);
-    incompatible('debounce', this._debounceMillis !== null);
-    incompatible('throttle', this._throttleMillis !== null);
-    incompatible('fresh', this._freshMillis !== null);
-    incompatible('sequential', this.sequential);
-    incompatible('polling', this.poll !== undefined);
+    _checkIncompatibleFeatures(this, 'an OptimisticSync', false);
   }
+}
+
+// The device ID returned by the default `OptimisticSyncWithPush.deviceId`, generated once.
+let _deviceId: number | undefined = undefined;
+
+/**
+ * The `OptimisticSyncWithPush` abstract class is for actions where:
+ *
+ * 1. Your app receives server-pushed updates (WebSockets, Server-Sent Events (SSE), Firebase)
+ *    that may change the same state this action controls. It must be resilient to out-of-order
+ *    delivery, and multiple devices can change the same data.
+ *
+ * 2. Non-blocking user interactions (like toggling a "like" button) should update the UI
+ *    immediately and send the updated value to the server, making sure the server and the UI
+ *    are eventually consistent.
+ *
+ * 3. You want "last write wins" semantics across devices. In other words, with multiple devices,
+ *    that's how we decide what the truth is when two devices disagree.
+ *
+ * In other words, it allows:
+ * - Optimistic UI
+ * - Multi-device writes
+ * - Server push
+ * - Out-of-order delivery
+ *
+ * **IMPORTANT:** If your app does not receive server-pushed updates, use `OptimisticSync`
+ * instead. In any case, please read the documentation of `OptimisticSync` first, as this class
+ * builds upon that behavior, with additional logic to handle server-pushed updates.
+ *
+ * ## How it works
+ *
+ * 1. **Immediate UI feedback**: The action is not throttled or debounced in any way, and every
+ *    dispatch applies an optimistic update to the state immediately. This guarantees a very good
+ *    user experience, because there is immediate feedback on every interaction. Technically,
+ *    every dispatch applies `valueToApply()` to the state immediately, using
+ *    `applyOptimisticValueToState`.
+ *
+ * 2. **Single in-flight request**: The first time the action is dispatched, the updated value is
+ *    immediately sent to the server. However, any other value changes that occur while the first
+ *    request is in flight will NOT be sent, at least not immediately. In other words, only
+ *    **one** request is in flight at a time per key (as defined by `computeOptimisticSyncKey()`
+ *    and `optimisticSyncKeyParams()`), because the first dispatch takes that key, and other
+ *    dispatches don't send requests while the key is taken. This potentially reduces the number
+ *    of requests sent to the server, while coalescing intermediate changes.
+ *
+ * 3. **Follow-up requests**: If the action is dispatched while a request started by
+ *    `sendValueToServer` is in flight (for example, the user tapped a "like" button again while
+ *    the first request was pending), a follow-up request may be automatically sent after the
+ *    current one completes. Whether a follow-up is needed is decided when the current request
+ *    finishes, using a local-revision that is kept for the key, and incremented by each
+ *    dispatch. This process repeats until the state stabilizes.
+ *
+ * 4. **Push handling**: If a server push changes the same state while a request is in flight,
+ *    when the request completes it checks whether the most recent change for this key came from
+ *    a PUSH. If so, no follow-up request is needed, because the push already came from the
+ *    server. This requires server pushes to be applied by an action that extends `ServerPush`,
+ *    with the same key as the corresponding `OptimisticSyncWithPush` action.
+ *
+ * 5. **Fewer intermediate requests**: If the state changes many times while the request is in
+ *    flight, all those changes are coalesced into a single follow-up request. However, since
+ *    `OptimisticSyncWithPush` uses a local-revision to track changes, it can send a follow-up
+ *    request even if the final value is the same as the value that was sent. This is necessary
+ *    because here we assume other devices or users may have changed the value on the server in
+ *    the meantime. Note this is different from `OptimisticSync`, which assumes only the current
+ *    user/device changes the value, and compares the sent value with the current state value to
+ *    decide if a follow-up request is needed.
+ *
+ * 6. **Server response handling**: Your implementation of `sendValueToServer` must call
+ *    `informServerRevision()` after each successful request. If the revision is not informed,
+ *    the action fails with a `StoreException`. This is necessary to handle out-of-order pushes
+ *    correctly. Also, optionally, if `sendValueToServer` returns a value (not `null` or
+ *    `undefined`), it's applied to the state using `applyServerResponseToState` when the state
+ *    stabilizes, unless a newer server revision is already known for this key (for example,
+ *    because of a newer push).
+ *    Note: If the request started by `sendValueToServer` fails, then `sendValueToServer` should
+ *    throw an error, and not call `informServerRevision()`.
+ *
+ * 7. **Completion callback**: When the synchronization for this key finishes, `onFinish` is
+ *    called, allowing you to handle errors or perform side effects, like showing a message or
+ *    reloading data. On success, it runs after the state is stable (no follow-up needed) and the
+ *    key has been released. On failure, it runs right after the request fails and the key is
+ *    released, and then the action fails with the error.
+ *    Note: If the action is dispatched while the key is taken, it still applies the optimistic
+ *    update immediately, but it does not call `onFinish`. Only the dispatch that took the key
+ *    sends the requests and calls `onFinish`.
+ *
+ * 8. **Safety limit**: To avoid infinite loops, there is a maximum number of follow-up requests
+ *    (`maxFollowUpRequests`, default 10000). If exceeded, the action fails with a
+ *    `StoreException`. Change it to use a different limit, or use `-1` for no limit.
+ *
+ * ## Flow example
+ *
+ * ```
+ * State: liked = false
+ *
+ * User taps LIKE:
+ *   → State: liked = true (optimistic).
+ *   → Key taken, Request 1 sends: setLiked(true).
+ *   → Local-revision is 1.
+ *
+ * User taps UNLIKE (Request 1 still in flight):
+ *   → State: liked = false (optimistic).
+ *   → No request sent (key is taken).
+ *   → Local-revision is 2.
+ *
+ * User taps LIKE (Request 1 still in flight):
+ *   → State: liked = true (optimistic).
+ *   → No request sent (key is taken).
+ *   → Local-revision is 3.
+ *
+ * Request 1 completes:
+ *   → The last state change was NOT done by a PUSH.
+ *   → Compares the local-revision of Request 1 (revision 1) with the current
+ *     local-revision (revision 3).
+ *   → They do NOT match, so a follow-up is needed.
+ *   → Request 2 sends: setLiked(true).
+ *
+ * Request 2 completes:
+ *   → The last state change was NOT done by a PUSH.
+ *   → Compares the local-revision of Request 2 (revision 3) with the current
+ *     local-revision (also revision 3).
+ *   → They match, no follow-up needed.
+ *   → Key released.
+ * ```
+ *
+ * ## Flow example with PUSH
+ *
+ * ```
+ * State: liked = false
+ *
+ * User taps LIKE:
+ *   → State: liked = true (optimistic).
+ *   → Key taken, Request 1 sends: setLiked(true).
+ *   → Local-revision is 1.
+ *
+ * User taps UNLIKE (Request 1 still in flight):
+ *   → State: liked = false (optimistic).
+ *   → No request sent (key is taken).
+ *   → Local-revision is 2.
+ *
+ * A PUSH arrives with liked = false.
+ *
+ * Request 1 completes:
+ *   → The last state change was done by a PUSH.
+ *   → So a follow-up is NOT needed.
+ *   → Key released.
+ * ```
+ *
+ * ## How to use it
+ *
+ * Extend `OptimisticSyncWithPush` instead of your base action, and DO NOT implement `reduce()`.
+ * Instead, you must provide:
+ *
+ * - `valueToApply()` returns the value to apply optimistically, and then send to the server.
+ * - `applyOptimisticValueToState(state, optimisticValue)` applies the value to the state.
+ * - `getValueFromState(state)` reads the value from the state (sent by the follow-up requests).
+ * - `sendValueToServer(value, localRevision, deviceId)` sends the value to the server, and calls
+ *   `informServerRevision()` with the server revision of the response.
+ * - `getServerRevisionFromState(state, key)` reads the server revision that `ServerPush` saved
+ *   in the state, or returns `-1`.
+ *
+ * And optionally:
+ *
+ * - `optimisticSyncKeyParams()` so that different items can have concurrent requests.
+ * - `applyServerResponseToState(state, serverResponse)` applies the server response to the state.
+ * - `onFinish(error)` runs when the synchronization finishes, with or without errors.
+ * - `maxFollowUpRequests`, to limit the follow-up requests.
+ *
+ * ```ts
+ * class ToggleLike extends OptimisticSyncWithPush<State, boolean> {
+ *   constructor(readonly itemId: string) { super(); }
+ *
+ *   optimisticSyncKeyParams() { return this.itemId; }
+ *   valueToApply() { return !this.state.isLiked(this.itemId); }
+ *   applyOptimisticValueToState(state: State, liked: boolean) { return state.setLiked(this.itemId, liked); }
+ *   getValueFromState(state: State) { return state.isLiked(this.itemId); }
+ *   getServerRevisionFromState(state: State, key: any) { return state.revisionOf(key) ?? -1; }
+ *
+ *   async sendValueToServer(liked: boolean, localRevision: number, deviceId: number) {
+ *     const response = await api.setLiked(this.itemId, liked, localRevision, deviceId);
+ *     if (!response.ok) throw new Error('Server error');
+ *     this.informServerRevision(response.serverRevision);
+ *     return response.liked;
+ *   }
+ *
+ *   applyServerResponseToState(state: State, liked: boolean) { return state.setLiked(this.itemId, liked); }
+ * }
+ * ```
+ *
+ * The server pushes are applied by a separate action, that extends `ServerPush`, and whose
+ * `associatedAction()` returns `ToggleLike`. See `ServerPush` for details.
+ *
+ * ## Clearing
+ *
+ * `store.clearInternalActionProps()` (which is also called by `store.setShutDown(true)`)
+ * releases all keys, and removes all the revisions kept for them (local-revisions, and the
+ * server revisions that are not in the state), which is useful on logout. An action whose
+ * request was in flight when the keys were released stops when that request finishes: it
+ * doesn't send follow-up requests, doesn't apply the server response, and doesn't call
+ * `onFinish`. It's aborted with an `AbortDispatchException`, so it doesn't fail, and doesn't
+ * show errors.
+ *
+ * Notes:
+ * - It can be combined with `checkInternet`, both `{ dialog: true | false }` and
+ *   `{ abort: true }`. If there is no internet, the optimistic value is not applied, and no
+ *   request is sent.
+ * - It should not be combined with `nonReentrant`, `retry`, `unlimitedRetryCheckInternet`,
+ *   `debounce`, `throttle`, `fresh` or polling. Dispatching it with those throws a
+ *   `StoreException`.
+ * - It should not be combined with `sequential`, which throws a `StoreException` too, for the
+ *   same reasons given in `OptimisticSync`, and also because the revision tracking assumes the
+ *   server pushes can be applied to the state while a request is in flight.
+ * - Apply the server pushes with a separate action that extends `ServerPush`.
+ */
+export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St> {
+
+  /**
+   * The device ID is used to tell apart the revisions of different devices. It's sent to the
+   * server by `sendValueToServer`, and the server pushes must return it (see `ServerPush`), so
+   * that the app can recognize the pushes of its own requests.
+   *
+   * The default is a random integer generated once per app run, but you can change it to
+   * return a persistent unique ID per device:
+   *
+   * ```ts
+   * OptimisticSyncWithPush.deviceId = () => myDeviceId;
+   * ```
+   */
+  static deviceId: () => number = () => {
+    _deviceId ??= Math.floor(Math.random() * 4294967296) + (Math.floor(Math.random() * 10000) * 10000000000);
+    return _deviceId;
+  };
+
+  /**
+   * The optimistic value that was applied to the state by this dispatch. It's set once, when
+   * the reducer starts, to the value returned by `valueToApply()`, and remains available in
+   * `onFinish` for rollback logic.
+   */
+  optimisticValue!: T;
+
+  /**
+   * The most recent value that was passed to `sendValueToServer`. It's updated right before
+   * each server request (including follow-ups), and is `undefined` if this dispatch sent no
+   * request (because another dispatch was already sending them). Useful for debugging, logging,
+   * or implementing custom guards.
+   */
+  lastSentValue: T | undefined = undefined;
+
+  /**
+   * Safety limit for the number of follow-up requests, to avoid infinite loops. If the state is
+   * still changing after this many follow-ups, the action fails with a `StoreException`.
+   * Use `-1` for no limit. The default is 10000.
+   */
+  maxFollowUpRequests: number = 10000;
+
+  // The key of this dispatch, computed once when the reducer starts.
+  private _key: any = undefined;
+
+  // The server revision informed by `informServerRevision()` during the current request, or
+  // `null` if it was not informed. It's reset before each request.
+  private _informedServerRevision: number | null = null;
+
+  /**
+   * Optionally, override `optimisticSyncKeyParams()` to differentiate the coalescing by the
+   * action parameters. For example, if you have a like button per item, return the item ID, so
+   * that different items can have concurrent requests:
+   *
+   * ```ts
+   * optimisticSyncKeyParams() { return this.itemId; }
+   * ```
+   *
+   * You can also return an array of values:
+   *
+   * ```ts
+   * optimisticSyncKeyParams() { return [this.userId, this.itemId]; }
+   * ```
+   *
+   * Params are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents.
+   *
+   * Important: If the action changes a different part of the state depending on its fields,
+   * make the key depend on them too. Otherwise, while `ToggleLike('A')` has a request in flight,
+   * `ToggleLike('B')` changes the state but doesn't send its own request, and the follow-up of
+   * `ToggleLike('A')` only reads item A from the state, so item B may never be sent to the
+   * server.
+   *
+   * The `ServerPush` actions that apply the pushes of this value must return the same params
+   * from their own `optimisticSyncKeyParams()`.
+   *
+   * See also: `computeOptimisticSyncKey()`, which uses this method by default to build the key.
+   */
+  optimisticSyncKeyParams(): any {
+    return null;
+  }
+
+  /**
+   * By default, the coalescing key combines the action class with `optimisticSyncKeyParams()`.
+   * Override this method if you want different action classes to share the same coalescing key.
+   * In this case, override `computeOptimisticSyncKey()` in the `ServerPush` actions too, so
+   * that they compute the same key.
+   *
+   * Keys are compared with `Object.is`, except arrays and plain objects, which are compared by
+   * their contents.
+   */
+  computeOptimisticSyncKey(): any {
+    return [this.constructor, this.optimisticSyncKeyParams()];
+  }
+
+  /**
+   * Return the value that should be applied optimistically to the state, and then sent to the
+   * server. This is called synchronously, and only once per dispatch, when the reducer starts.
+   *
+   * The value to apply can be anything, and is usually constructed from the action fields,
+   * and/or from the current `state`. Valid examples are:
+   *
+   * ```ts
+   * // Set the like button to "liked".
+   * valueToApply() { return true; }
+   *
+   * // Set the like button to "liked" or "not liked", according to
+   * // the field `isLiked` of the action.
+   * valueToApply() { return this.isLiked; }
+   *
+   * // Toggle the current state of the like button.
+   * valueToApply() { return !this.state.items.get(this.itemId).liked; }
+   * ```
+   */
+  abstract valueToApply(): T;
+
+  /**
+   * Return a new state where the given `optimisticValue` is applied to the given `state`.
+   *
+   * Note, Kiss calculates `optimisticValue` by previously calling `valueToApply()`.
+   *
+   * ```ts
+   * applyOptimisticValueToState(state: State, isLiked: boolean) {
+   *   return state.copy({ items: state.items.setLiked(this.itemId, isLiked) });
+   * }
+   * ```
+   */
+  abstract applyOptimisticValueToState(state: St, optimisticValue: T): St;
+
+  /**
+   * Return the value from the given `state`. If a follow-up request is needed, the value
+   * returned by `getValueFromState` is the one that will be sent to the server.
+   *
+   * ```ts
+   * getValueFromState(state: State) { return state.items.get(this.itemId).liked; }
+   * ```
+   */
+  abstract getValueFromState(state: St): T;
+
+  /**
+   * Override `sendValueToServer` to:
+   * - Send the given `value`, the `localRevision`, and the `deviceId` to the server.
+   * - Inform the server revision of the response, by calling `informServerRevision()`.
+   * - Optionally, return the server's response.
+   * - Throw an error if the request fails (in this case, don't call `informServerRevision()`).
+   *
+   * Notes:
+   * - The first request sends the `optimisticValue` (calculated by previously calling
+   *   `valueToApply()`). The follow-up requests send the value from `getValueFromState`.
+   * - The server must return the server revision in the response.
+   * - The server pushes must provide 3 pieces of information: the server revision, the
+   *   `deviceId`, and the `localRevision`. See `ServerPush` for details.
+   *
+   * If `sendValueToServer` returns a value that is not `null` or `undefined`, that value will be
+   * passed to `applyServerResponseToState`, but **only when the state stabilizes** (when there
+   * are no more pending requests and the key is about to be released). This prevents the server
+   * response from overwriting subsequent user interactions that occurred while the request was
+   * in flight.
+   *
+   * The value in the store state may change while the request is in flight, both because of
+   * user interactions and because of server pushes. If the most recent state change was due to
+   * a user interaction (for example, if the user presses a like button once, but then presses
+   * it again before the first request finishes), then `sendValueToServer` will be called again,
+   * to create a follow-up request to sync the updated state with the server. If the most recent
+   * state change was due to a server push, no follow-up request is needed.
+   *
+   * ```ts
+   * async sendValueToServer(isLiked: boolean, localRevision: number, deviceId: number) {
+   *   const response = await api.setLiked(this.itemId, isLiked, localRevision, deviceId);
+   *   if (!response.ok) throw new Error('Server error');
+   *   this.informServerRevision(response.serverRevision);
+   *   return response.liked; // Kiss decides whether to apply this.
+   * }
+   * ```
+   */
+  abstract sendValueToServer(value: T, localRevision: number, deviceId: number): Promise<any>;
+
+  /**
+   * Return the server revision you saved in the given `state` for the given `key`, in
+   * `ServerPush.applyServerPushToState`. Return `-1` when unknown.
+   *
+   * Saving the server revision in the state is what lets the app ignore stale pushes even after
+   * the revisions kept by Kiss are lost, for example, when the app restarts with a persisted
+   * state, or after `store.clearInternalActionProps()`.
+   *
+   * ```ts
+   * getServerRevisionFromState(state: State, key: any) { return state.revisionOf(key) ?? -1; }
+   * ```
+   */
+  abstract getServerRevisionFromState(state: St, key: any): number;
+
+  /**
+   * Override `applyServerResponseToState` to return a new state, where the given
+   * `serverResponse` (previously received from the server when running `sendValueToServer`) is
+   * applied to the current `state`. Example:
+   *
+   * ```ts
+   * applyServerResponseToState(state: State, serverResponse: Response) {
+   *   return state.copy({ items: state.items.setLiked(this.itemId, serverResponse.isLiked) });
+   * }
+   * ```
+   *
+   * Note `serverResponse` is never `null` or `undefined` here, because this method is only
+   * called when `sendValueToServer` returned some value. It's also not called when a newer
+   * server revision is known for the key (for example, because of a newer push), since then the
+   * response is stale.
+   *
+   * If you DO NOT want to apply the server response to the state, return `null`
+   * (which is the default).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  applyServerResponseToState(state: St, serverResponse: any): St | null {
+    return null;
+  }
+
+  /**
+   * You must call `informServerRevision()` from your `sendValueToServer`, to inform the server
+   * revision returned in the response. If you don't, the action fails with a `StoreException`.
+   *
+   * The server must provide a monotonically increasing revision number (for example, a
+   * timestamp, or a version number), comparable across devices and users, that allows the app
+   * to determine the ordering of the updates. You can also pass a `Date`, which is converted to
+   * its milliseconds since the epoch.
+   *
+   * Kiss uses this information to:
+   * - Track the latest known server revision (for "last write wins" ordering).
+   * - Determine whether to apply the server response (stale responses are automatically
+   *   ignored).
+   *
+   * **Usage:** Just call this method with the server revision from the response. Kiss handles
+   * all the logic, so you don't need to check or compare anything yourself. Example:
+   *
+   * ```ts
+   * async sendValueToServer(isLiked: boolean, localRevision: number, deviceId: number) {
+   *   const response = await api.setLiked(this.itemId, isLiked, localRevision, deviceId);
+   *   if (!response.ok) throw new Error('Server error');
+   *   this.informServerRevision(response.serverRevision);
+   *   return response.liked;
+   * }
+   * ```
+   *
+   * **Behavior:** It only updates the server revision kept for this key if `revision` is greater
+   * than the newest known server revision, considering both the revision kept by Kiss, and
+   * `getServerRevisionFromState()`. This prevents regressions from stale or out-of-order
+   * updates. The server response is only applied if this revision is not older than the newest
+   * known revision.
+   */
+  informServerRevision(revision: number | Date): void {
+    const value = (revision instanceof Date) ? revision.getTime() : revision;
+
+    if (typeof value !== 'number' || !Number.isFinite(value))
+      throw new StoreException(
+        `Action ${this.constructor.name} informed an invalid server revision: ` +
+        `it must be a finite number, or a valid Date, but got ${String(revision)}.`);
+
+    this._informedServerRevision = value;
+
+    // Only while this dispatch sends the requests. Otherwise, the key may have been released by
+    // `store.clearInternalActionProps()`, and the revision would belong to the previous user.
+    if (!this.store._hasOptimisticSyncKey(this)) return;
+
+    const known = this._revisionOf(this._key);
+
+    // Only moves forward. Since this revision is newer than any push, the latest change is no
+    // longer from a push.
+    if (value > known.serverRevision)
+      this.store._setOptimisticSyncRevision(this._key, {
+        localRevision: known.localRevision,
+        serverRevision: value,
+        isPush: false,
+      });
+  }
+
+  /**
+   * Optionally, override `onFinish` to run any code after the synchronization completes. For
+   * example, you might want to reload related data from the server, show a confirmation message,
+   * or perform cleanup.
+   *
+   * Note `onFinish` is called in both success and failure scenarios. On success, it runs only
+   * after the state is stable for this key. On failure, it runs immediately after the request
+   * fails (there is no further stabilization or follow-up).
+   *
+   * Important: The key is released *before* `onFinish` runs. This means new dispatches for the
+   * same key may start a new request while `onFinish` is still running.
+   *
+   * The `error` parameter is `null` on success, or contains the error if the request failed.
+   *
+   * If `onFinish` returns a state (not `null`), it will be applied automatically. If it returns
+   * `null`, no state change is made.
+   *
+   * ```ts
+   * async onFinish(error: any) {
+   *   if (error === null) {
+   *     // Success: show a confirmation, log analytics, etc.
+   *     return null;
+   *   } else {
+   *     // Failure: reload data from the server.
+   *     const reloadedInfo = await api.loadInfo();
+   *     return this.state.copy({ info: reloadedInfo });
+   *   }
+   * }
+   * ```
+   *
+   * Important:
+   *
+   * - If `onFinish(error)` throws, the original `error` is lost, and the error thrown by
+   *   `onFinish` becomes the action error. You can handle it in `wrapError`.
+   *
+   * - Same on success: If `onFinish(null)` throws, the whole action fails even though the
+   *   server request succeeded. You can handle it in `wrapError`.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  onFinish(error: any): Promise<St | null> | St | null {
+    return null;
+  }
+
+  /**
+   * Do NOT override this method. Implement `valueToApply`, `applyOptimisticValueToState`,
+   * `getValueFromState`, `sendValueToServer` and `getServerRevisionFromState` instead.
+   */
+  async reduce(): Promise<null> {
+    const key = this._key = this.computeOptimisticSyncKey();
+
+    const value = this.valueToApply();
+    this.optimisticValue = value;
+    const newState = this.applyOptimisticValueToState(this.state, value);
+
+    // Each dispatch is a new local change, so it increments the local-revision of the key.
+    // The latest change is now local, and not from a push.
+    const known = this._revisionOf(key);
+    const localRevision = known.localRevision + 1;
+    this.store._setOptimisticSyncRevision(key, {
+      localRevision,
+      serverRevision: known.serverRevision,
+      isPush: false,
+    });
+
+    // Always applies the optimistic update immediately.
+    this._applyState(newState);
+
+    // If another dispatch has the key, its request is in flight. The optimistic update is
+    // already applied, so we just finish. When that request completes, it checks if a
+    // follow-up is needed.
+    if (!this.store._takeOptimisticSyncKey(key, this)) return null;
+
+    await this._sendAndFollowUp(value, localRevision);
+    return null;
+  }
+
+  /**
+   * Sends the request, and then sends follow-up requests while the latest change of the key is
+   * local (not from a push), and newer than the change that was sent.
+   */
+  private async _sendAndFollowUp(value: T, localRevision: number): Promise<void> {
+    let sentValue = value;
+    let sentLocalRevision = localRevision;
+    let requestCount = 0;
+    let finishError: any = null;
+
+    try {
+      while (true) {
+        requestCount++;
+        this.lastSentValue = sentValue;
+
+        // Reset before each request, to detect if `informServerRevision()` was called.
+        this._informedServerRevision = null;
+
+        // Sends the value, and gets the server response (may be null or undefined).
+        const serverResponse = await this.sendValueToServer(
+          sentValue, sentLocalRevision, OptimisticSyncWithPush.deviceId());
+
+        // The keys were released by `store.clearInternalActionProps()` while the request was
+        // in flight (for example, on logout). So, stop here.
+        if (!this.store._hasOptimisticSyncKey(this)) throw this._clearedError();
+
+        const informedServerRevision = this._informedServerRevision as number | null;
+        if (informedServerRevision === null)
+          throw new StoreException(
+            `Action ${this.constructor.name} is an OptimisticSyncWithPush, which requires calling ` +
+            '`informServerRevision()` inside `sendValueToServer()`. ' +
+            'If you don\'t need server-push handling, use `OptimisticSync` instead.');
+
+        const known = this._revisionOf(this._key);
+
+        // If the latest change was made locally (not by a push), and the local-revision advanced
+        // since this request was sent, the user changed the value while the request was in
+        // flight. So, sends a follow-up request with the current value, without applying the
+        // server response, since the state isn't stable.
+        if (!known.isPush && (known.localRevision > sentLocalRevision)) {
+          if ((this.maxFollowUpRequests !== -1) && (requestCount > this.maxFollowUpRequests))
+            throw new StoreException(
+              `Too many follow-up requests in action ${this.constructor.name} (> ${this.maxFollowUpRequests}).`);
+          sentValue = this.getValueFromState(this.state);
+          sentLocalRevision = known.localRevision;
+          continue;
+        }
+
+        // The state is stable for this key, so we apply the server response, if any, but only
+        // if it's not stale (no newer server revision is known, for example from a push).
+        if (serverResponse !== null && serverResponse !== undefined &&
+          informedServerRevision >= known.serverRevision) {
+          const newState = this.applyServerResponseToState(this.state, serverResponse);
+          if (newState !== null) this._applyState(newState);
+        }
+
+        break;
+      }
+    } catch (error) {
+      if (!this.store._hasOptimisticSyncKey(this)) throw this._clearedError();
+      finishError = error;
+    }
+
+    // Releases the key before `onFinish`, so that new dispatches can send requests.
+    this.store._releaseOptimisticSyncKey(this);
+
+    const newState = await this.onFinish(finishError);
+    if (newState !== null && newState !== undefined) this._applyState(newState);
+
+    // Fails, so that the user can be notified.
+    if (finishError !== null) throw finishError;
+  }
+
+  /**
+   * The revision kept for the given key, where the server revision is the newest of the one
+   * kept by Kiss, and the one in the state.
+   */
+  private _revisionOf(key: any): _OptimisticSyncRevision {
+    return _revisionOf(this.store, key, this.getServerRevisionFromState(this.state, key));
+  }
+
+  private _clearedError(): AbortDispatchException {
+    return new AbortDispatchException(
+      'The internal action props were cleared, so the action stopped syncing.');
+  }
+
+  private _applyState(newState: St): void {
+    this.dispatch(new UpdateStateAction(() => newState));
+  }
+
+  /**
+   * For Kiss internal use only.
+   */
+  _injectStore(_store: Store<St>) {
+    super._injectStore(_store);
+    _checkIncompatibleFeatures(this, 'an OptimisticSyncWithPush', false);
+  }
+}
+
+/**
+ * The information that comes with each server push, used by `ServerPush`:
+ *
+ * - `serverRevision`: The server revision of the pushed value.
+ * - `localRevision`: The local-revision that the device that changed the value sent to the
+ *   server in `OptimisticSyncWithPush.sendValueToServer`.
+ * - `deviceId`: The device ID that the device that changed the value sent to the server in
+ *   `OptimisticSyncWithPush.sendValueToServer`.
+ */
+export type PushMetadata = {
+  serverRevision: number,
+  localRevision: number,
+  deviceId: number,
+};
+
+/**
+ * The revision that `OptimisticSyncWithPush` and `ServerPush` keep for each key. For Kiss
+ * internal use only.
+ */
+export type _OptimisticSyncRevision = {
+  // Incremented by each `OptimisticSyncWithPush` dispatch.
+  localRevision: number,
+  // The newest known server revision, or -1 if unknown.
+  serverRevision: number,
+  // True if the latest change of the key came from a push.
+  isPush: boolean,
+};
+
+/**
+ * The revision kept in the store for the given key, where the server revision is the newest of
+ * the one kept in the store, and the given one (which comes from the state).
+ */
+function _revisionOf(store: Store<any>, key: any, serverRevisionFromState: number): _OptimisticSyncRevision {
+  const kept = store._getOptimisticSyncRevision(key);
+  return {
+    localRevision: kept?.localRevision ?? 0,
+    serverRevision: Math.max(kept?.serverRevision ?? -1, serverRevisionFromState),
+    isPush: kept?.isPush ?? false,
+  };
+}
+
+/**
+ * The `ServerPush` abstract class is for actions that put in the store state the values that
+ * were received by server push, through WebSockets, Server-Sent Events (SSE), Firebase, etc.
+ *
+ * It works together with `OptimisticSyncWithPush`, to make sure out-of-order pushes don't
+ * corrupt the state, and that local optimistic updates are not overwritten by stale pushes.
+ *
+ * ## How it works
+ *
+ * Each push comes with its `PushMetadata` (the server revision, and the local-revision and
+ * device ID that were sent by the device that changed the value). When the action is
+ * dispatched:
+ *
+ * 1. If the push is not newer than the newest known server revision for the key (considering
+ *    both the revision kept by Kiss, and `getServerRevisionFromState()`), it's stale or out of
+ *    order, so it's ignored.
+ *
+ * 2. If the push is the echo of an older request of this same device (the user changed the
+ *    value again after that request was sent), it's not applied, since the state already has a
+ *    newer local value. Its server revision is still recorded, but it doesn't count as a push,
+ *    so the newer local value is still sent in a follow-up request.
+ *
+ * 3. Otherwise (a push from another device, or the echo of the latest request of this device),
+ *    it's applied with `applyServerPushToState`, and recorded as the latest change of the key.
+ *    Then, the `OptimisticSyncWithPush` request in flight for that key doesn't send a follow-up
+ *    request when it finishes, since the push already came from the server.
+ *
+ * ## How to use it
+ *
+ * Extend `ServerPush` instead of your base action, and DO NOT implement `reduce()`. Instead,
+ * you must provide:
+ *
+ * - `associatedAction()` returns the `OptimisticSyncWithPush` class that controls the value.
+ * - `pushMetadata()` returns the `PushMetadata` that came with the push.
+ * - `applyServerPushToState(state, key, serverRevision)` applies the pushed value, and the
+ *   server revision, to the state.
+ * - `getServerRevisionFromState(state, key)` reads the server revision saved in the state, or
+ *   returns `-1`.
+ *
+ * And optionally, `optimisticSyncKeyParams()`, which must return the same as the one of the
+ * associated action.
+ *
+ * ```ts
+ * class PushLikeUpdate extends ServerPush<State> {
+ *   constructor(readonly itemId: string, readonly liked: boolean, readonly metadata: PushMetadata) {
+ *     super();
+ *   }
+ *
+ *   associatedAction() { return ToggleLike; }
+ *   optimisticSyncKeyParams() { return this.itemId; }
+ *   pushMetadata() { return this.metadata; }
+ *
+ *   applyServerPushToState(state: State, key: any, serverRevision: number) {
+ *     return state.setLiked(this.itemId, this.liked).setRevision(key, serverRevision);
+ *   }
+ *
+ *   getServerRevisionFromState(state: State, key: any) { return state.revisionOf(key) ?? -1; }
+ * }
+ *
+ * // When the server pushes a change:
+ * socket.on('like', (msg) => store.dispatch(new PushLikeUpdate(msg.itemId, msg.liked, {
+ *   serverRevision: msg.serverRevision,
+ *   localRevision: msg.localRevision,
+ *   deviceId: msg.deviceId,
+ * })));
+ * ```
+ *
+ * To reset the revisions shared with `OptimisticSyncWithPush` (for example, on logout), call
+ * `store.clearInternalActionProps()`, which is also called by `store.setShutDown(true)`. The
+ * server revisions you saved in the state are kept, and still used.
+ *
+ * Notes:
+ * - This class should be used alone. It can't be combined with any other feature: dispatching
+ *   it with `checkInternet`, `nonReentrant`, `retry`, `unlimitedRetryCheckInternet`, `debounce`,
+ *   `throttle`, `fresh`, `sequential` or polling throws a `StoreException`.
+ * - In particular, it should not be combined with `sequential`. Pushed values must be applied to
+ *   the state as soon as they arrive, and `sequential` would delay them behind unrelated queued
+ *   actions. Worse, a push is also what tells an in-flight `OptimisticSyncWithPush` request that
+ *   no follow-up is needed, and that signal would arrive too late.
+ * - Use it in a separate action from `OptimisticSyncWithPush`, which can't apply pushes itself.
+ */
+export abstract class ServerPush<St> extends KissAction<St> {
+
+  /**
+   * Return the class of the `OptimisticSyncWithPush` action that controls this value, so that
+   * both compute the same key. For example:
+   *
+   * ```ts
+   * associatedAction() { return ToggleLike; }
+   * ```
+   */
+  abstract associatedAction(): abstract new (...args: any[]) => OptimisticSyncWithPush<St, any>;
+
+  /**
+   * Same meaning as in `OptimisticSyncWithPush`: the params that differentiate the keys. It
+   * must return the same as the `optimisticSyncKeyParams()` of the associated action. For
+   * example, if each item has its own key:
+   *
+   * ```ts
+   * optimisticSyncKeyParams() { return this.itemId; }
+   * ```
+   */
+  optimisticSyncKeyParams(): any {
+    return null;
+  }
+
+  /**
+   * Must compute the same key as the `computeOptimisticSyncKey()` of the associated
+   * `OptimisticSyncWithPush` action. By default, it combines `associatedAction()` with
+   * `optimisticSyncKeyParams()`.
+   */
+  computeOptimisticSyncKey(): any {
+    return [this.associatedAction(), this.optimisticSyncKeyParams()];
+  }
+
+  /**
+   * Return the `PushMetadata` that came with the push:
+   *
+   * - The server revision.
+   * - The local-revision.
+   * - The device ID.
+   *
+   * For example:
+   *
+   * ```ts
+   * class PushLikeUpdate extends ServerPush<State> {
+   *   constructor(readonly liked: boolean, readonly metadata: PushMetadata) { super(); }
+   *
+   *   associatedAction() { return ToggleLike; }
+   *   pushMetadata() { return this.metadata; }
+   *
+   *   applyServerPushToState(state: State, key: any, serverRevision: number) {
+   *     return state.copy({ liked: this.liked, revision: serverRevision });
+   *   }
+   *
+   *   getServerRevisionFromState(state: State, key: any) { return state.revision; }
+   * }
+   * ```
+   */
+  abstract pushMetadata(): PushMetadata;
+
+  /**
+   * Return a new state, where:
+   * - The pushed data is applied to the given `state`.
+   * - The given `serverRevision` is saved for the given `key`.
+   *
+   * Return `null` to ignore the push. Note its server revision is still recorded as the newest
+   * known one, so older pushes and responses are ignored.
+   */
+  abstract applyServerPushToState(state: St, key: any, serverRevision: number): St | null;
+
+  /**
+   * Return the server revision you saved in the given `state` for the given `key`, in
+   * `applyServerPushToState`. Return `-1` when unknown.
+   */
+  abstract getServerRevisionFromState(state: St, key: any): number;
+
+  /**
+   * Do NOT override this method. Implement `associatedAction`, `pushMetadata`,
+   * `applyServerPushToState` and `getServerRevisionFromState` instead.
+   */
+  reduce(): St | null {
+    const key = this.computeOptimisticSyncKey();
+    const { serverRevision, localRevision, deviceId } = this.pushMetadata();
+
+    const known = _revisionOf(this.store, key, this.getServerRevisionFromState(this.state, key));
+
+    // Ignores stale and out-of-order pushes.
+    if (serverRevision <= known.serverRevision) return null;
+
+    const isSelf = (deviceId === OptimisticSyncWithPush.deviceId());
+
+    // The echo of an older request of this device: the state already has a newer local value.
+    // So, it only records the server revision. It does NOT apply the push, and does NOT count
+    // as a push, since then the newer local value would not be sent in a follow-up request.
+    if (isSelf && (localRevision < known.localRevision)) {
+      this.store._setOptimisticSyncRevision(key, {
+        localRevision: known.localRevision,
+        serverRevision,
+        isPush: false,
+      });
+      return null;
+    }
+
+    // Safe to apply (a push from another device, or the echo of the latest local value).
+    const newState = this.applyServerPushToState(this.state, key, serverRevision);
+
+    // Always records the newest known server revision, even if the push is ignored by
+    // `applyServerPushToState` (which returned null).
+    this.store._setOptimisticSyncRevision(key, {
+      localRevision: isSelf ? Math.max(known.localRevision, localRevision) : known.localRevision,
+      serverRevision,
+      isPush: true,
+    });
+
+    return newState;
+  }
+
+  /**
+   * For Kiss internal use only.
+   */
+  _injectStore(_store: Store<St>) {
+    super._injectStore(_store);
+    _checkIncompatibleFeatures(this, 'a ServerPush', true);
+  }
+}
+
+/**
+ * Throws a `StoreException` if the given action, which is described by `description` (for
+ * example, "an OptimisticSync"), uses a feature it can't use. It can only use `checkInternet`,
+ * unless `noCheckInternet` is true, in which case it can't use any feature.
+ */
+function _checkIncompatibleFeatures(action: KissAction<any>, description: string, noCheckInternet: boolean): void {
+  const incompatible = (feature: string, isUsed: boolean) => {
+    if (isUsed)
+      throw new StoreException(
+        `Action ${action.constructor.name} is ${description}, which can't use ${feature}. ` +
+        `Remove its \`${feature === 'polling' ? 'poll' : feature}\` property.`);
+  };
+
+  if (noCheckInternet) incompatible('checkInternet', !!action.checkInternet);
+  incompatible('nonReentrant', action.nonReentrant);
+  incompatible('unlimitedRetryCheckInternet', action._isUnlimitedRetryCheckInternet);
+  incompatible('retry', action.ifRetryIsOn);
+  incompatible('debounce', action._debounceMillis !== null);
+  incompatible('throttle', action._throttleMillis !== null);
+  incompatible('fresh', action._freshMillis !== null);
+  incompatible('sequential', action.sequential);
+  incompatible('polling', action.poll !== undefined);
 }
 
 /**

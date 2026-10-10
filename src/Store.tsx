@@ -10,6 +10,7 @@ import {
   Poll,
   ReduxReducer,
   _isSameNonReentrantKey,
+  _OptimisticSyncRevision,
 } from './KissAction';
 import { ProcessPersistence } from './ProcessPersistence';
 import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
@@ -519,9 +520,12 @@ export class Store<St> {
    *   it changes the state as usual). They are aborted with an `AbortDispatchException`, so they
    *   don't fail, and don't show errors. This also releases their non-reentrant keys. Note an
    *   `OptimisticCommand` still finishes its retries, which are always limited.
-   * - Releases all `OptimisticSync` keys, so the next dispatches send their own requests. An
-   *   `OptimisticSync` whose request is in flight stops when that request finishes, without
-   *   sending follow-up requests, and is aborted with an `AbortDispatchException`.
+   * - Releases all `OptimisticSync` and `OptimisticSyncWithPush` keys, so the next dispatches
+   *   send their own requests. An action whose request is in flight stops when that request
+   *   finishes, without sending follow-up requests, and is aborted with an
+   *   `AbortDispatchException`.
+   * - Removes the revisions that `OptimisticSyncWithPush` and `ServerPush` keep for each key.
+   *   The server revisions you saved in the state are kept, and still used.
    *
    * Note:
    * - Actions that are already running keep running, and still change the state when they
@@ -663,9 +667,12 @@ export class Store<St> {
   // action that made them fresh. Expired keys are removed when checking or releasing keys.
   private _freshKeys: Array<{ key: any, expiresAt: number, action: KissAction<St> }> = [];
 
-  // The `OptimisticSync` keys with a request in flight, at most one per key, with the action
-  // that sends the requests for that key.
+  // The `OptimisticSync` and `OptimisticSyncWithPush` keys with a request in flight, at most one
+  // per key, with the action that sends the requests for that key.
   private _optimisticSyncKeys: Array<{ key: any, action: KissAction<St> }> = [];
+
+  // The revisions of the `OptimisticSyncWithPush` and `ServerPush` keys, at most one per key.
+  private _optimisticSyncRevisions: Array<{ key: any, revision: _OptimisticSyncRevision }> = [];
 
   // The `sequential` queues, at most one per key, each with its actions in the order they will
   // run. The first action of each queue is the one running. Each waiting action is released by
@@ -1239,8 +1246,8 @@ export class Store<St> {
 
   /**
    * For Kiss internal use only.
-   * If no other `OptimisticSync` action has the given key, the given action takes it, and this
-   * returns true. Otherwise, returns false.
+   * If no other `OptimisticSync` or `OptimisticSyncWithPush` action has the given key, the given
+   * action takes it, and this returns true. Otherwise, returns false.
    */
   _takeOptimisticSyncKey(key: any, action: KissAction<St>): boolean {
     if (this._optimisticSyncKeys.some(entry => _isSameNonReentrantKey(entry.key, key))) return false;
@@ -1268,6 +1275,26 @@ export class Store<St> {
 
   private _removeAllOptimisticSyncKeys(): void {
     this._optimisticSyncKeys = [];
+    this._optimisticSyncRevisions = [];
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Returns the revision that `OptimisticSyncWithPush` and `ServerPush` keep for the given key,
+   * or `undefined` if there is none.
+   */
+  _getOptimisticSyncRevision(key: any): _OptimisticSyncRevision | undefined {
+    return this._optimisticSyncRevisions.find(entry => _isSameNonReentrantKey(entry.key, key))?.revision;
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Sets the revision that `OptimisticSyncWithPush` and `ServerPush` keep for the given key.
+   */
+  _setOptimisticSyncRevision(key: any, revision: _OptimisticSyncRevision): void {
+    const entry = this._optimisticSyncRevisions.find(entry => _isSameNonReentrantKey(entry.key, key));
+    if (entry) entry.revision = revision;
+    else this._optimisticSyncRevisions.push({ key, revision });
   }
 
   // Puts the sequential action at the end of the queue with its key. This runs synchronously
@@ -1415,30 +1442,24 @@ export class Store<St> {
     // If the action is failable (that is to say, we have once called `isFailed` for this action),
     const failable = this._actionsWeCanCheckFailed.has(action.constructor as new (...args: any[]) => KissAction<St>);
 
-    let theUIHasAlreadyUpdated = false;
-
     // Dispatch is starting, so we always remove the action from the list of failed actions,
     // even if nobody checked it yet. Otherwise, checking it later would show a stale error.
     const wasInTheList = this._failedActions.delete(action.constructor as new (...args: any[]) => KissAction<St>);
 
-    // Then we notify the UI. Note we don't notify if the action was never checked.
-    if (failable && wasInTheList) {
-      theUIHasAlreadyUpdated = true;
-      this._rebuildFromStoreHooks();
-    }
-
     // Add the action to the list of actions in progress.
+    // Note: We do this BEFORE notifying the UI, so that a single rebuild sees both changes.
+    // Otherwise, the `isWaiting` selectors would still see the action as not in progress.
     this._actionsInProgress.add(action);
 
     // The action just entered the set of actions in progress, so we check the wait conditions.
     this._checkAllActionConditions(action);
 
-    // Note: If the UI hasn't updated yet, AND
-    // the action is awaitable (that is to say, we have already called `isWaiting` for this action),
+    // Then we notify the UI, if the action was in the list of failed actions and is failable,
+    // OR if the action is awaitable (that is to say, we have already called `isWaiting` for this action).
+    // Note we don't notify if the action was never checked.
     // Note: We use `instanceof`, like `isWaiting` does, so that waiting for a base class
     // also rebuilds when a subclass action starts.
-    if (!theUIHasAlreadyUpdated && this._isAwaitable(action)) {
-      // Then we notify the UI. Note we don't notify if the action was never checked.
+    if ((failable && wasInTheList) || this._isAwaitable(action)) {
       this._rebuildFromStoreHooks();
     }
   }
