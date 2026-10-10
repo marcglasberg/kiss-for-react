@@ -25,9 +25,9 @@ Bdd(feature)
 
     const store = new Store<State>({
       initialState: new State(1), logger: logger,
-      errorObserver: (error: any) => {
+      errorObserver: ({ error }) => {
         errorInErrorObserver = error;
-        return false;
+        return null;
       },
     });
 
@@ -58,7 +58,7 @@ Bdd(feature)
   .and('It fails with a StoreException saying retry needs an ASYNC reducer, not with the original error.')
   .run(async (_) => {
 
-    const store = new Store<State>({initialState: new State(1), logger: logger, errorObserver: () => false});
+    const store = new Store<State>({initialState: new State(1), logger: logger, errorObserver: () => null});
 
     // With fake timers, the action can only finish without advancing the time if it never
     // waits for a retry delay.
@@ -90,7 +90,7 @@ Bdd(feature)
   .run(async (_) => {
 
     for (const result of ['null', 'unchanged state']) {
-      const store = new Store<State>({initialState: new State(1), logger: logger, errorObserver: () => false});
+      const store = new Store<State>({initialState: new State(1), logger: logger, errorObserver: () => null});
 
       const action = new SyncActionWithRetryThatDoesNotChangeTheState(result === 'null');
       await store.dispatchAndWait(action);

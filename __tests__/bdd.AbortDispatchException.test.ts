@@ -90,23 +90,19 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('An AbortDispatchException is not processed as an error.')
-  .given('A store with a globalWrapError and an errorObserver.')
+  .given('A store with an errorObserver.')
   .and('An action with a wrapError, that throws an AbortDispatchException.')
   .when('The action is dispatched.')
-  .then('The wrapError, globalWrapError and errorObserver are not called.')
+  .then('The wrapError and the errorObserver are not called.')
   .and('The action does not count as failed, and no error is shown to the user.')
   .run(async (_) => {
     const calls: string[] = [];
     const store = new Store<State>({
       initialState: new State(0),
       logger: logger,
-      globalWrapError: (error: any) => {
-        calls.push('globalWrapError');
-        return error;
-      },
-      errorObserver: (_error: any) => {
+      errorObserver: ({ error }) => {
         calls.push('errorObserver');
-        return true;
+        return error;
       },
     });
 

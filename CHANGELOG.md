@@ -104,7 +104,7 @@
 * New `AbortDispatchException`. Throw it from an action's `before` or `reduce` to abort the
   action silently, for example after some async check (`abortDispatch()` must decide
   synchronously). The `after` method still runs, but the exception is not passed to
-  `wrapError`, `globalWrapError` or the `errorObserver`, the action doesn't count as failed
+  `wrapError` or the `errorObserver`, the action doesn't count as failed
   for `isFailed`, it's not retried, and `dispatchAndWait` resolves instead of rejecting.
 
 * New `ActionStatus.isDispatchAborted`. It's `true` when the action threw an
@@ -165,6 +165,19 @@
 
 ### Breaking changes
 
+* `globalWrapError` was removed, and `errorObserver` now does its job too, like the
+  `GlobalErrorObserver` of AsyncRedux. It's now called with
+  `{ error, originalError, action, store }`, and returns the error to use, instead of a
+  boolean: the same one, a different one, or `null` (or nothing) to swallow it. Then, a
+  `UserException` is shown to the user and not thrown, and any other error is thrown by
+  `dispatch`. It also gets the errors of the `Persistor`, with a `null` action. A persistence
+  error that is not a `UserException`, and is not swallowed, is now thrown as an unhandled
+  promise rejection. Before, it was only logged. To migrate, an `errorObserver` that returned
+  `true` should return the error, one that returned `false` should return `null`, and a
+  `globalWrapError` should be moved into the `errorObserver`. Note that returning `null`
+  also means a `UserException` is not shown, and the action doesn't count as failed. To keep
+  that, return the `UserException`.
+
 * A `nonReentrant` action is no longer aborted while an action of one of its subclasses is
   running. The non-reentrant check now uses the exact action class (or the key, see above).
 
@@ -198,8 +211,8 @@
   running, instead of throwing.
 
 * `dispatchAndWait` now rejects with the action's error, for both sync and async actions,
-  unless the error is swallowed (a `UserException` with no `errorObserver`, or when the
-  `errorObserver` returns `false`). Before, a sync action threw synchronously, and an async
+  unless the error is swallowed (a `UserException`, or when `wrapError` or the
+  `errorObserver` returns `null`). Before, a sync action threw synchronously, and an async
   action resolved while its error became an unhandled promise rejection.
 
 * `dispatchAndWaitAll` now lets all actions finish, and then rejects with the error of the

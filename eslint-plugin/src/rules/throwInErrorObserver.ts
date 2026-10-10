@@ -3,11 +3,11 @@ import { createRule, walk } from '../utils.js';
 import { findObjectProperty, FunctionNode, isCaughtInSameFunction, resolveFunction, storeOptions } from '../errors.js';
 
 /**
- * Reports a `throw` in the store's `globalWrapError`:
+ * Reports a `throw` in the store's `errorObserver`:
  *
  * ```ts
  * createStore<State>({
- *   globalWrapError: (error) => {
+ *   errorObserver: ({ error }) => {
  *     throw new UserException('Failed').withHardCause(error);  // Return it instead.
  *   },
  * });
@@ -18,16 +18,16 @@ import { findObjectProperty, FunctionNode, isCaughtInSameFunction, resolveFuncti
  * Fix: change `throw` to `return`.
  */
 export default createRule({
-  name: 'throw-in-global-wrap-error',
+  name: 'throw-in-error-observer',
   meta: {
     type: 'suggestion',
     docs: {
-      description: 'Return the error from `globalWrapError`, instead of throwing it.',
+      description: 'Return the error from `errorObserver`, instead of throwing it.',
     },
     fixable: 'code',
     schema: [],
     messages: {
-      throwInGlobalWrapError: 'Return the error instead of throwing it. `globalWrapError` replaces the error with the one it returns. Kiss also uses a thrown error, but returning it makes this clear.',
+      throwInErrorObserver: 'Return the error instead of throwing it. `errorObserver` replaces the error with the one it returns. Kiss also uses a thrown error, but returning it makes this clear.',
     },
   },
   defaultOptions: [],
@@ -36,7 +36,7 @@ export default createRule({
 
     const checkStore = (node: TSESTree.CallExpression | TSESTree.NewExpression) => {
       const options = storeOptions(node, context);
-      const property = options && findObjectProperty(options, 'globalWrapError');
+      const property = options && findObjectProperty(options, 'errorObserver');
       const fn = property && resolveFunction(property.value, context);
       if (!fn || checked.has(fn)) return;
       checked.add(fn);
@@ -53,7 +53,7 @@ export default createRule({
         const throwToken = context.sourceCode.getFirstToken(inner)!;
         context.report({
           node: inner,
-          messageId: 'throwInGlobalWrapError',
+          messageId: 'throwInErrorObserver',
           fix: canFix ? (fixer) => fixer.replaceText(throwToken, 'return') : null,
         });
       });

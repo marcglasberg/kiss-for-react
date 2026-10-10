@@ -174,7 +174,7 @@ Bdd(feature)
   .then('The reducer runs only once.')
   .and('It fails with a StoreException saying retry needs an ASYNC reducer.')
   .run(async (_) => {
-    const store = new Store<St>({ initialState: { n: 0 }, errorObserver: () => false });
+    const store = new Store<St>({ initialState: { n: 0 }, errorObserver: () => null });
     let reduceCalls = 0;
 
     class WrapCallsSyncReducerLater extends KissAction<St> {

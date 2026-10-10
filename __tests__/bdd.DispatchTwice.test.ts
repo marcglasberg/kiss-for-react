@@ -266,22 +266,18 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('The already-dispatched error is not processed like an action failure.')
-  .given('A store with an errorObserver and a globalWrapError.')
+  .given('A store with an errorObserver.')
   .and('An action that was already dispatched.')
   .when('The same action instance is dispatched again.')
   .then('The StoreException is thrown to the caller.')
-  .and('The errorObserver and the globalWrapError are not called.')
+  .and('The errorObserver is not called.')
   .run(async (_) => {
     // Given
     const seen: any[] = [];
     const store = new Store<State>({
       initialState: new State(0),
       logger,
-      errorObserver: (error) => {
-        seen.push(error);
-        return false;
-      },
-      globalWrapError: (error) => {
+      errorObserver: ({ error }) => {
         seen.push(error);
         return null;
       },

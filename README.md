@@ -802,30 +802,38 @@ test('Selecting an item', async () => {
 If you are the team lead, you can set up the app's infrastructure in one central place,
 so developers can focus on business logic.
 
-You can add a `stateObserver` to collect app metrics, an `errorObserver` to log errors,
-an `actionObserver` to log information to the console during development,
-and a `globalWrapError` to change errors before they are handled.
+You can add a `stateObserver` to collect app metrics, an `actionObserver` to log
+information to the console during development, and an `errorObserver` to log errors,
+and to change them before they are handled.
 
 ```tsx
 const store = createStore<string>({    
   initialState: '',
   stateObserver: (action, prevState, newState, error, count) => { ... },
-  errorObserver: (error, action, store) => { ... },
   actionObserver: (action, count, ini) => { ... },
-  globalWrapError: (error) => { ... }
+  errorObserver: ({ error, originalError, action, store }) => { ... },
 });  
 ```
 
-For example, here we handle `FirestoreError` errors thrown by Firebase.
-We convert them into `UserException` errors, which are built-in types that
-automatically show a message to the user in an error dialog:
+The `errorObserver` gets all errors thrown by your actions, and also the errors of the
+persistor (with a `null` action). It returns the error to use: the same one, a different one,
+or `null` to swallow it. Then, a `UserException` is shown to the user in an error dialog, and
+any other error is thrown.
+
+For example, here we convert the `FirestoreError` errors thrown by Firebase into
+`UserException` errors, which automatically show a message to the user. Other errors are
+logged, and swallowed in production:
 
 ```tsx
-globalWrapError: (error: any) => {
-   return (error instanceof FirestoreError)
-      ? new UserException('Error connecting to Firebase')
-      : error;
-   }  
+errorObserver: ({ error, action }) => {
+  if (error instanceof FirestoreError)
+    return new UserException('Error connecting to Firebase').withHardCause(error);
+
+  if (error instanceof UserException) return error;
+
+  Logger.error(`Got ${error} in ${action ?? 'the persistor'}.`);
+  return inProduction() ? null : error;
+}
 ```
 
 By default, Kiss logs what it does (for example, each dispatched action) to the console.

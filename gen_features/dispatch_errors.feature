@@ -35,15 +35,15 @@ Feature: Dispatch errors
 
   Scenario Outline: The errorObserver decides if waiting for a failed action throws.
     Given An action that throws an error which is not a UserException.
-    And An errorObserver that returns true or false.
+    And An errorObserver that returns the error, or null.
     When The action is dispatched with dispatchAndWait, and awaited.
-    Then The awaited call throws only if the errorObserver returned true.
+    Then The awaited call throws only if the errorObserver returned the error.
     Examples: 
       | Action       | Observer returns |
-      | sync         | true             |
-      | sync         | false            |
-      | async reduce | true             |
-      | async reduce | false            |
+      | sync         | the error        |
+      | sync         | null             |
+      | async reduce | the error        |
+      | async reduce | null             |
 
   Scenario: Dispatching a sync action that fails with an error that is not swallowed throws.
     Given A sync action that throws an error which is not a UserException.

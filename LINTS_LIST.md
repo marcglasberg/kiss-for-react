@@ -25,7 +25,7 @@ Total: the 73 AsyncRedux rules (39 implemented, 34 skipped), and 9 new rules (al
 implemented).
 
 All rules planned here are implemented, except two that turned out not to make sense in Kiss
-(`dispatch-in-global-wrap-error` and `throw-in-read-state`, see below). The sections 3 and 4
+(`dispatch-in-error-observer` and `throw-in-read-state`, see below). The sections 3 and 4
 below are the plan. The final behavior of each rule, which sometimes differs in the details,
 is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 
@@ -62,8 +62,8 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 27 | `missing_super_in_mixin_override`         | [`missing-super-in-override`](#missing-super-in-override)                     | Implemented, adapted: Kiss has no mixins, but `checkInternet`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` and `ServerPush` depend on inherited methods. |
 | 28 | `user_exception_outside_action`           | [`user-exception-outside-action`](#user-exception-outside-action)             | Implemented. |
 | 29 | `user_exception_without_cause`            | [`user-exception-without-cause`](#user-exception-without-cause)               | Implemented. Uses `withHardCause` instead of `addCause`. |
-| 30 | `dispatch_in_global_error_observer`       | [`dispatch-in-global-wrap-error`](#dispatch-in-global-wrap-error)             | Skipped. Checked in Kiss's code and with a test: dispatching from `globalWrapError` (or an action's `wrapError`) works fine. |
-| 31 | `throw_in_global_error_observer`          | [`throw-in-global-wrap-error`](#throw-in-global-wrap-error)                   | Implemented. |
+| 30 | `dispatch_in_global_error_observer`       | [`dispatch-in-error-observer`](#dispatch-in-error-observer)                   | Skipped. Checked in Kiss's code and with a test: dispatching from `errorObserver` (or an action's `wrapError`) works fine. |
+| 31 | `throw_in_global_error_observer`          | [`throw-in-error-observer`](#throw-in-error-observer)                         | Implemented. |
 | 32 | `retry_without_non_reentrant`             | [`retry-without-non-reentrant`](#retry-without-non-reentrant)                 | Implemented. |
 | 33 | `dispatch_and_wait_unlimited_retries`     | [`dispatch-and-wait-unlimited-retries`](#dispatch-and-wait-unlimited-retries) | Implemented. |
 | 34 | `async_mixin_in_sync_action`              | [`async-feature-in-sync-action`](#async-feature-in-sync-action)               | Implemented, adapted: Kiss has features, not mixins. `retry` is already covered by `retry-requires-async-reduce`. |
@@ -304,7 +304,7 @@ dispatch a `UserExceptionAction` instead.
 
 Warning (AsyncRedux: info). A `UserException` that replaces another error without keeping
 it as its `hardCause`. Checks `UserException`s created in a `catch` clause, in the
-`wrapError` of an action or persistor, and in `globalWrapError`:
+`wrapError` of an action or persistor, and in `errorObserver`:
 
 ```ts
 try {
@@ -317,26 +317,26 @@ try {
 
 Not reported in tests. Quick fix (automatic): add `.withHardCause(error)`.
 
-### dispatch-in-global-wrap-error
+### dispatch-in-error-observer
 
-**Skipped.** Checked in Kiss's code, and with a test: dispatching from `globalWrapError`, or
+**Skipped.** Checked in Kiss's code, and with a test: dispatching from `errorObserver`, or
 from an action's `wrapError`, works fine (the dispatched actions run and change the state, and
 nothing breaks). The plan was:
 
-Warning. A dispatch inside `globalWrapError`, or the `wrapError` of an action, which run
+Warning. A dispatch inside `errorObserver`, or the `wrapError` of an action, which run
 while the store is still processing the action that failed. To show the error to the user,
 return a `UserException` instead.
 
 Before implementing it, check how Kiss behaves when these dispatch. If it works fine, skip
 this rule.
 
-### throw-in-global-wrap-error
+### throw-in-error-observer
 
-Warning (AsyncRedux: info). A `throw` in `globalWrapError`. Kiss uses a thrown error just
+Warning (AsyncRedux: info). A `throw` in `errorObserver`. Kiss uses a thrown error just
 like a returned one, but its docs recommend returning it:
 
 ```ts
-globalWrapError: (error) => {
+errorObserver: ({ error }) => {
   throw new UserException('Failed').withHardCause(error);  // Warning
   return new UserException('Failed').withHardCause(error); // OK
 }

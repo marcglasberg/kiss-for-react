@@ -70,16 +70,41 @@ abstract class MyPersistor extends Persistor<State> {
     val('Name', 'error'),
   )
   .example(
-    val('Where', 'in globalWrapError'),
+    val('Where', 'in errorObserver'),
     val('Code', `
 const store = createStore<State>({
   initialState: new State(0),
-  globalWrapError: (error: any) =>
+  errorObserver: ({ error }) =>
     error instanceof TypeError ? new UserException('Something went wrong') : error,
 });
 `),
     val('Fixed', `error instanceof TypeError ? new UserException('Something went wrong').withHardCause(error) : error,`),
     val('Name', 'error'),
+  )
+  .example(
+    val('Where', 'in errorObserver, which renames the error'),
+    val('Code', `
+const store = createStore<State>({
+  initialState: new State(0),
+  errorObserver({ error: e, action }) {
+    return action !== null && e instanceof TypeError ? new UserException('Something went wrong') : e;
+  },
+});
+`),
+    val('Fixed', `return action !== null && e instanceof TypeError ? new UserException('Something went wrong').withHardCause(e) : e;`),
+    val('Name', 'e'),
+  )
+  .example(
+    val('Where', 'in errorObserver, which does not destructure its parameter'),
+    val('Code', `
+function errorObserver(params: { error: any }) {
+  return params.error instanceof TypeError ? new UserException('Something went wrong') : params.error;
+}
+
+const store = createStore<State>({ initialState: new State(0), errorObserver });
+`),
+    val('Fixed', `return params.error instanceof TypeError ? new UserException('Something went wrong').withHardCause(params.error) : params.error;`),
+    val('Name', 'params.error'),
   )
   .run(async (ctx) => {
     const code = prelude + ctx.example.val('Code');

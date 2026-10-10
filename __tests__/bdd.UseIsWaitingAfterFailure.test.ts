@@ -55,8 +55,9 @@ function createStore() {
   return new Store<State>({
     initialState: new State(0),
     logger: () => {},
-    // Swallows all errors, so that dispatching an action that fails doesn't throw.
-    errorObserver: () => false,
+    // Swallows the errors that are not a `UserException`, so that dispatching an action that
+    // fails doesn't throw. A `UserException` is never thrown, and must be kept for `useIsFailed`.
+    errorObserver: ({ error }) => (error instanceof UserException) ? error : null,
     showUserException: () => {},
   });
 }

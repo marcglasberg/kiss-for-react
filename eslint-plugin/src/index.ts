@@ -43,7 +43,7 @@ import storeInSelector from './rules/storeInSelector.js';
 import storeStateInRender from './rules/storeStateInRender.js';
 import testingFeatureInProduction from './rules/testingFeatureInProduction.js';
 import thenOnDispatchAndWait from './rules/thenOnDispatchAndWait.js';
-import throwInGlobalWrapError from './rules/throwInGlobalWrapError.js';
+import throwInErrorObserver from './rules/throwInErrorObserver.js';
 import userExceptionOutsideAction from './rules/userExceptionOutsideAction.js';
 import userExceptionWithoutCause from './rules/userExceptionWithoutCause.js';
 import waitConditionWithoutTimeout from './rules/waitConditionWithoutTimeout.js';
@@ -89,7 +89,7 @@ const rules = {
   'route-in-state': routeInState,
   'user-exception-outside-action': userExceptionOutsideAction,
   'user-exception-without-cause': userExceptionWithoutCause,
-  'throw-in-global-wrap-error': throwInGlobalWrapError,
+  'throw-in-error-observer': throwInErrorObserver,
   'expect-without-waiting': expectWithoutWaiting,
   'testing-feature-in-production': testingFeatureInProduction,
   'action-status-details-in-production': actionStatusDetailsInProduction,
@@ -159,7 +159,7 @@ plugin.configs.recommended = {
     'kiss-for-react/copy-missing-field': 'warn',
     'kiss-for-react/user-exception-outside-action': 'warn',
     'kiss-for-react/user-exception-without-cause': 'warn',
-    'kiss-for-react/throw-in-global-wrap-error': 'warn',
+    'kiss-for-react/throw-in-error-observer': 'warn',
     'kiss-for-react/expect-without-waiting': 'warn',
     'kiss-for-react/testing-feature-in-production': 'warn',
     'kiss-for-react/action-status-details-in-production': 'warn',

@@ -41,8 +41,8 @@ export abstract class Persistor<St> {
    *   message.
    *
    * Note: If an error is thrown by `readState`, Kiss will log it with `Store.log()`, and give
-   * it to the store's `errorObserver` (with a `null` action). The saved state is then deleted,
-   * and the initial-state is saved instead.
+   * it to the store's `errorObserver` (with a `null` action). The saved state is then
+   * deleted, and the initial-state is saved instead.
    *
    * If you prefer to fix the problem yourself, but still let the user know about it, you
    * can report an error with `addError` instead of throwing. For example:
@@ -80,10 +80,12 @@ export abstract class Persistor<St> {
    * yet (first app run).
    *
    * If this method throws an error, it will first be processed by `wrapError`, and then
-   * given to the store's `errorObserver` (with a `null` action). If the resulting error is a
-   * `UserException`, it is shown to the user. Also, `newState` will NOT be considered persisted,
+   * given to the store's `errorObserver` (with a `null` action). If the resulting error is
+   * a `UserException`, it is shown to the user. If it's another error, it's thrown as an
+   * unhandled promise rejection. If it's `null`, it's swallowed. Also, `newState` will NOT be considered persisted,
    * so the next call will receive the same `lastPersistedState`. Note the save is not retried
-   * by itself: it will be tried again the next time the state changes.
+   * by itself: it will be tried again the next time the state changes. Throwing synchronously,
+   * instead of returning a rejected `Promise`, is handled the same way.
    *
    * @param lastPersistedState The last state that was persisted. It may be null.
    * @param newState The new state to be persisted.
@@ -140,7 +142,7 @@ export abstract class Persistor<St> {
   /**
    * Reports an error without throwing it. The error will be given to the store's
    * `errorObserver` (with a `null` action), and if it's a `UserException`, it will be shown
-   * to the user. Errors added here don't go through `wrapError`.
+   * to the user. Other errors are thrown as unhandled promise rejections. Errors added here don't go through `wrapError`.
    *
    * This is useful in `readState`, `deleteState` and `saveInitialState`, when you can fix
    * the problem yourself, but still want to let the user know about it.

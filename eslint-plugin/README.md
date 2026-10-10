@@ -260,7 +260,7 @@ directories.
 
 - [`user-exception-outside-action`](#user-exception-outside-action) warning
 - [`user-exception-without-cause`](#user-exception-without-cause) warning
-- [`throw-in-global-wrap-error`](#throw-in-global-wrap-error) warning
+- [`throw-in-error-observer`](#throw-in-error-observer) warning
 
 **Tests and debugging**
 
@@ -1481,7 +1481,7 @@ try {
 ```
 
 It checks the `UserException`s created in a `catch` clause, in the `wrapError` of an action
-or persistor, and in the store's `globalWrapError`. Not reported: a `UserException` with the
+or persistor, and in the store's `errorObserver`. Not reported: a `UserException` with the
 `hardCause` option, or with a method called on it (like `.withHardCause(error)`), or stored in
 a variable. Also not reported when the error is ignored on purpose: a `catch` without a
 parameter, or a parameter whose name starts with `_`. Not reported in tests.
@@ -1490,26 +1490,26 @@ Quick fix (automatic): add `.withHardCause(error)`.
 
 ---
 
-### throw-in-global-wrap-error
+### throw-in-error-observer
 
-A warning for a `throw` in the store's `globalWrapError`. Kiss uses a thrown error just like
+A warning for a `throw` in the store's `errorObserver`. Kiss uses a thrown error just like
 a returned one, but returning it makes clear that it replaces the original error, as the Kiss
 docs recommend:
 
 ```ts
 createStore<State>({
-  globalWrapError: (error) => {
+  errorObserver: ({ error }) => {
     throw new UserException('Failed').withHardCause(error);  // Warning
     return new UserException('Failed').withHardCause(error); // OK
   },
 });
 ```
 
-It checks the `globalWrapError` given to `createStore` or `new Store`, also when it's a
+It checks the `errorObserver` given to `createStore` or `new Store`, also when it's a
 function declared in the same file. Not reported: throws caught by a `try` in
-`globalWrapError`, and throws in functions declared inside it.
+`errorObserver`, and throws in functions declared inside it.
 
-Quick fix (automatic): change `throw` to `return`. Not offered when `globalWrapError` declares
+Quick fix (automatic): change `throw` to `return`. Not offered when `errorObserver` declares
 a return type, since the returned error may not match it.
 
 ---

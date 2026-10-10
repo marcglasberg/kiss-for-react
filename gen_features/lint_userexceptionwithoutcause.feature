@@ -6,8 +6,8 @@ Feature: Lint: user-exception-without-cause
     Then The UserException is reported.
     And The fix adds .withHardCause with the replaced error, and the fixed code compiles.
     Examples: 
-      | Where                           | Code                                                                                                                                                                                                                                                                        | Fixed                                                                                                | Name  |
-      | in a catch clause of a reducer  | 
+      | Where                                                      | Code                                                                                                                                                                                                                                                                        | Fixed                                                                                                                            | Name         |
+      | in a catch clause of a reducer                             | 
 class SetCount extends KissAction<State> {
   constructor(readonly text: string) { super(); }
   reduce() {
@@ -18,8 +18,8 @@ class SetCount extends KissAction<State> {
     }
   }
 }
- | throw new UserException('Please enter a valid number').withHardCause(error);                         | error |
-      | in the wrapError of an action   | 
+ | throw new UserException('Please enter a valid number').withHardCause(error);                                                     | error        |
+      | in the wrapError of an action                              | 
 class LoadCount extends KissAction<State> {
   async reduce() {
     const count = await load();
@@ -29,21 +29,36 @@ class LoadCount extends KissAction<State> {
     return new UserException('Could not load the count', { title: 'Error' });
   }
 }
-              | return new UserException('Could not load the count', { title: 'Error' }).withHardCause(e);           | e     |
-      | in the wrapError of a persistor | 
+              | return new UserException('Could not load the count', { title: 'Error' }).withHardCause(e);                                       | e            |
+      | in the wrapError of a persistor                            | 
 abstract class MyPersistor extends Persistor<State> {
   wrapError(error: any) {
     return new UserException('Could not save your data.');
   }
 }
-                                                                                                                          | return new UserException('Could not save your data.').withHardCause(error);                          | error |
-      | in globalWrapError              | 
+                                                                                                                          | return new UserException('Could not save your data.').withHardCause(error);                                                      | error        |
+      | in errorObserver                                           | 
 const store = createStore<State>({
   initialState: new State(0),
-  globalWrapError: (error: any) =>
+  errorObserver: ({ error }) =>
     error instanceof TypeError ? new UserException('Something went wrong') : error,
 });
-                                                                               | error instanceof TypeError ? new UserException('Something went wrong').withHardCause(error) : error, | error |
+                                                                                  | error instanceof TypeError ? new UserException('Something went wrong').withHardCause(error) : error,                             | error        |
+      | in errorObserver, which renames the error                  | 
+const store = createStore<State>({
+  initialState: new State(0),
+  errorObserver({ error: e, action }) {
+    return action !== null && e instanceof TypeError ? new UserException('Something went wrong') : e;
+  },
+});
+                                                   | return action !== null && e instanceof TypeError ? new UserException('Something went wrong').withHardCause(e) : e;               | e            |
+      | in errorObserver, which does not destructure its parameter | 
+function errorObserver(params: { error: any }) {
+  return params.error instanceof TypeError ? new UserException('Something went wrong') : params.error;
+}
+
+const store = createStore<State>({ initialState: new State(0), errorObserver });
+                               | return params.error instanceof TypeError ? new UserException('Something went wrong').withHardCause(params.error) : params.error; | params.error |
 
   Scenario Outline: A UserException that keeps the error, or does not replace one, is not reported.
     Given {Case}.

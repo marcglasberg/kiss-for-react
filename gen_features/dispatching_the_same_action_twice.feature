@@ -88,8 +88,8 @@ Feature: Dispatching the same action twice
     Then Both dispatches run the mock, and neither throws.
 
   Scenario: The already-dispatched error is not processed like an action failure.
-    Given A store with an errorObserver and a globalWrapError.
+    Given A store with an errorObserver.
     And An action that was already dispatched.
     When The same action instance is dispatched again.
     Then The StoreException is thrown to the caller.
-    And The errorObserver and the globalWrapError are not called.
+    And The errorObserver is not called.

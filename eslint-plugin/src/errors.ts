@@ -2,7 +2,7 @@ import { AST_NODE_TYPES, ASTUtils, TSESLint, TSESTree } from '@typescript-eslint
 import type * as ts from 'typescript';
 import { isFunction, isKissActionClass, KISS_PACKAGE, kissImportName, memberName, TypeInfo, unwrap } from './utils.js';
 
-// Helpers for the rules about errors: `UserException`, `wrapError`, `globalWrapError`,
+// Helpers for the rules about errors: `UserException`, `wrapError`, `errorObserver`,
 // and the store's debug options.
 
 type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
@@ -130,7 +130,7 @@ export function resolveFunction(node: TSESTree.Node, context: Context): Function
 
 /**
  * If the function is given to a Kiss store as one of its options, returns the option's name.
- * For example, `globalWrapError` for `createStore({ globalWrapError: (error) => ... })`.
+ * For example, `errorObserver` for `createStore({ errorObserver: ({ error }) => ... })`.
  * The function may also be declared in the same file, and given by name.
  */
 export function storeOptionNameOf(fn: FunctionNode, context: Context): string | null {

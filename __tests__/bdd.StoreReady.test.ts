@@ -67,7 +67,10 @@ Bdd(feature)
   .run(async (_) => {
     const persistor = new SlowPersistor(new State(42));
     persistor.readError = new Error('Disk error');
-    const store = new Store<State>({ initialState: new State(0), persistor, logger: () => {} });
+    // Swallows the read error, which would otherwise be thrown as an unhandled rejection.
+    const store = new Store<State>({
+      initialState: new State(0), persistor, logger: () => {}, errorObserver: () => null,
+    });
 
     persistor.finishReading();
     await expect(store.ready()).resolves.toBeUndefined();

@@ -1,6 +1,6 @@
 /* eslint-disable kiss-for-react/user-exception-outside-action */
 /* eslint-disable kiss-for-react/user-exception-without-cause */
-/* eslint-disable kiss-for-react/throw-in-global-wrap-error */
+/* eslint-disable kiss-for-react/throw-in-error-observer */
 /* eslint-disable kiss-for-react/after-throws */
 
 // Demonstrates the "Errors" rules of the Kiss ESLint plugin (eslint-plugin-kiss-for-react).
@@ -246,9 +246,9 @@ abstract class MyPersistor extends Persistor<State> {
 
 const storeWithoutCause = createStore<State>({
   initialState: State.initialState,
-  globalWrapError: (error: any) =>
+  errorObserver: ({ error }) =>
     // kiss-for-react/user-exception-without-cause
-    // (In the store's `globalWrapError`)
+    // (In the store's `errorObserver`)
     // Fix (automatic): Will add `.withHardCause(error)`.
     error instanceof TypeError ? new UserException('Something went wrong') : error,
 });
@@ -303,14 +303,14 @@ function parseWithVariable(text: string): number {
 }
 
 // ---------------------------------------------------------------------------------------------
-// throw-in-global-wrap-error
+// throw-in-error-observer
 
 class NetworkError extends Error {}
 
 const storeWithThrow = createStore<State>({
   initialState: State.initialState,
-  globalWrapError: (error: any) => {
-    // kiss-for-react/throw-in-global-wrap-error
+  errorObserver: ({ error }) => {
+    // kiss-for-react/throw-in-error-observer
     // (Kiss uses it like a returned error, but returning it makes clear that it replaces the error)
     // Fix (automatic): Will change `throw` to `return`.
     if (error instanceof NetworkError) throw new UserException('Offline').withHardCause(error);
@@ -320,8 +320,8 @@ const storeWithThrow = createStore<State>({
 
 const storeWithMethod = new Store<State>({
   initialState: State.initialState,
-  globalWrapError(error: any) {
-    // kiss-for-react/throw-in-global-wrap-error
+  errorObserver({ error }) {
+    // kiss-for-react/throw-in-error-observer
     // (A method, in `new Store`)
     // Fix (automatic): Will change `throw` to `return`.
     if (error instanceof NetworkError) throw new UserException('Offline').withHardCause(error);
@@ -329,8 +329,8 @@ const storeWithMethod = new Store<State>({
   },
 });
 
-function globalWrapError(error: any) {
-  // kiss-for-react/throw-in-global-wrap-error
+function errorObserver({ error }: { error: any }) {
+  // kiss-for-react/throw-in-error-observer
   // (A function declared in the same file, and given to the store below)
   // Fix (automatic): Will change `throw` to `return`.
   if (error instanceof NetworkError) throw new UserException('Offline').withHardCause(error);
@@ -339,14 +339,14 @@ function globalWrapError(error: any) {
 
 const storeWithFunction = createStore<State>({
   initialState: State.initialState,
-  globalWrapError,
+  errorObserver,
 });
 
 const storeWithReturnType = createStore<State>({
   initialState: State.initialState,
-  globalWrapError: (error: any): UserException => {
+  errorObserver: ({ error }): UserException => {
     if (error instanceof UserException) return error;
-    // kiss-for-react/throw-in-global-wrap-error
+    // kiss-for-react/throw-in-error-observer
     // (It declares a return type, which an `Error` doesn't match, so there's no fix)
     throw new Error('Unexpected');
   },
@@ -354,13 +354,13 @@ const storeWithReturnType = createStore<State>({
 
 const storeWithTry = createStore<State>({
   initialState: State.initialState,
-  globalWrapError: (error: any) => {
+  errorObserver: ({ error }) => {
     try {
       if (error === null) throw new Error('No error'); // OK: caught below.
     } catch (e) {
       return e;
     }
-    // OK: a function declared inside `globalWrapError`.
+    // OK: a function declared inside `errorObserver`.
     const check = () => {
       throw new Error('Never called');
     };

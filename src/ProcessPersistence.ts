@@ -20,17 +20,17 @@ export class ProcessPersistence<St> {
   isApplyingReadState = false;
   private readonly _ready: Promise<void>;
   private _resolveReady!: () => void;
-  // The persistence process currently running, if any.
-  private _persisting: Promise<void> | null = null;
-  finishedPersistingCallback: (() => void) | null = null;
+  // Called when the persistence process currently running finishes. See `_waitForPersisting`.
+  private _persistingWaiters: (() => void)[] = [];
 
   /**
    * Called with the persistence errors: the errors thrown by `Persistor.persistDifference`
    * (after `Persistor.wrapError`, and only if it didn't return `null`), the errors thrown
    * while reading the persisted state, and the errors added with `Persistor.addError`.
-   * If not set, the errors are logged with `Store.log()`.
+   * The `originalError` is the error before `Persistor.wrapError` (or the same error, if it
+   * didn't go through `wrapError`). If not set, the errors are logged with `Store.log()`.
    */
-  onError: ((error: any) => void) | null = null;
+  onError: ((error: any, originalError: any) => void) | null = null;
 
   constructor(persistor: Persistor<St>, lastPersistedState: St | null) {
     this.persistor = persistor;
@@ -121,10 +121,10 @@ export class ProcessPersistence<St> {
   /**
    * Gives the error to `onError`, or logs it if `onError` is not set.
    */
-  private reportError(error: any) {
+  private reportError(error: any, originalError: any = error) {
     if (this.onError) {
       try {
-        this.onError(error);
+        this.onError(error, originalError);
       } catch (_error) {
         this.log('Error processing a persistence error:' + _error + '.');
       }
@@ -237,10 +237,7 @@ export class ProcessPersistence<St> {
       // If the state is currently being persisted, we can't delete it right now.
       // Wait until the current persistence finishes. Since the persistor is
       // paused, no new persistence process will start after that.
-      while (this.isPersisting) {
-        await new Promise<void>(resolve => this.finishedPersistingCallback = resolve);
-      }
-      this.finishedPersistingCallback = null;
+      while (this.isPersisting) await this._waitForPersisting();
 
       // Wait for the throttle period to finish.
       await new Promise<void>(resolve => setTimeout(resolve, throttle));
@@ -269,8 +266,6 @@ export class ProcessPersistence<St> {
     }
       //
     finally {
-      this.finishedPersistingCallback = null;
-
       // Restart the store accepting new actions.
       store.setShutDown(false);
 
@@ -352,13 +347,22 @@ export class ProcessPersistence<St> {
     }
   }
 
-  private _persist(now: Date, newState: St): Promise<void> {
-    const persisting = this._doPersist(now, newState);
-    this._persisting = persisting;
-    return persisting;
+  /**
+   * Resolves when the persistence process currently running finishes.
+   * Only call it while `isPersisting` is true.
+   *
+   * Note we use the `isPersisting` flag, and don't keep the promise of the running process.
+   * When `persistDifference` throws synchronously, instead of returning a rejected promise,
+   * `_persist` finishes before it even returns its promise. A kept promise would then never be
+   * cleared, and waiting for it in a loop would freeze the app.
+   */
+  private _waitForPersisting(): Promise<void> {
+    return new Promise<void>(resolve => this._persistingWaiters.push(resolve));
   }
 
-  private async _doPersist(now: Date, newState: St): Promise<void> {
+  // Never rejects. A `persistDifference` that throws synchronously, or returns a rejected
+  // promise, is handled the same way: its error is reported, and the state is not saved.
+  private async _persist(now: Date, newState: St): Promise<void> {
     this.isPersisting = true;
     this.lastPersistTime = now;
     this.isANewStateAvailable = false;
@@ -384,14 +388,15 @@ export class ProcessPersistence<St> {
         // If `wrapError` throws, the thrown error is used instead.
         processedError = _error;
       }
-      if (processedError !== null && processedError !== undefined) this.reportError(processedError);
+      if (processedError !== null && processedError !== undefined) this.reportError(processedError, error);
     }
       //
     finally {
       this.processAddedErrors();
       this.isPersisting = false;
-      this._persisting = null;
-      this.finishedPersistingCallback?.();
+      const waiters = this._persistingWaiters;
+      this._persistingWaiters = [];
+      for (const resolve of waiters) resolve();
 
       // If a new state became available while the present state was saving, save again.
       if (this.isANewStateAvailable) {
@@ -426,6 +431,11 @@ export class ProcessPersistence<St> {
    * not yet persisted, it immediately starts a new persistence process (ignoring `throttle`).
    * The returned promise completes when the current state is persisted.
    *
+   * If the save fails, the returned promise still resolves. It never rejects. This is on
+   * purpose, not a bug: this method is usually called when the app is shutting down or going to
+   * the background, and then the app can't recover from a failed save anyway. The error is not
+   * lost: it's reported (see `onError`) before the promise resolves, so it can be logged.
+   *
    * Then, the Persistor will not start another persistence process, until method `resume` is
    * called.
    *
@@ -443,10 +453,7 @@ export class ProcessPersistence<St> {
 
     // If the state is being persisted, wait until it finishes. Since the persistor
     // is paused, no new persistence process will start after that.
-    while (this._persisting) {
-      await this._persisting.catch(() => {
-      });
-    }
+    while (this.isPersisting) await this._waitForPersisting();
 
     if (this.isInit && (this.lastPersistedState !== this.newestState)) {
       const now = new Date();

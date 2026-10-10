@@ -36,7 +36,7 @@ Bdd(feature)
 Bdd(feature)
   .scenario('A throwing showUserException does not replace the action error, nor skip the errorObserver.')
   .given('A showUserException that always throws.')
-  .and('An errorObserver that records the errors it gets, and swallows them.')
+  .and('An errorObserver that records the errors it gets.')
   .when('An action fails with UserException.')
   .then('dispatch does not throw.')
   .and('The errorObserver gets the UserException, not the showUserException error.')
@@ -47,7 +47,7 @@ Bdd(feature)
     const store = new Store<St>({
       initialState: { n: 0 },
       showUserException: () => { throw new Error('ui'); },
-      errorObserver: (error) => { observed.push(error); return false; },
+      errorObserver: ({ error }) => { observed.push(error); return error; },
     });
     const action = new Fail();
     expect(() => store.dispatch(action)).not.toThrow();

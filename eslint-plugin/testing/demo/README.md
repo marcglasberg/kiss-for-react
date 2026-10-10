@@ -10,7 +10,7 @@ can see them in your IDE, and try their quick fixes. They are not meant to run.
 | `actions.ts`       | Action methods and features: `after`, `before`, `retry`, `nonReentrant`, the base action... |
 | `dispatching.ts`   | Dispatching and waiting: `dispatchSync`, `dispatchAndWait`, `ready()`, `waitCondition`... |
 | `state-classes.ts` | State classes: immutability, collections, objects that are not state...  |
-| `errors.ts`        | Errors: `UserException`, `globalWrapError`                               |
+| `errors.ts`        | Errors: `UserException`, `errorObserver`                           |
 | `debugging.ts`     | Debugging and testing features in production code                        |
 | `user.test.ts`     | A test file, with the rules that are only reported in tests              |
 | `naming.ts`        | The naming rules (opt-in): action names and file names                   |

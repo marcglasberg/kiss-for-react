@@ -35,7 +35,10 @@ Bdd(feature)
     const kind = ctx.example.val('Persisted state');
     const persistor = new SlowPersistor(kind === 'some' ? new State(42) : null);
     if (kind === 'read fails') persistor.readError = new Error('Disk error');
-    const store = new Store<State>({ initialState: new State(0), persistor, logger: () => {} });
+    // Swallows the read error, which would otherwise be thrown as an unhandled rejection.
+    const store = new Store<State>({
+      initialState: new State(0), persistor, logger: () => {}, errorObserver: () => null,
+    });
 
     const results = renderRecording(store);
     await flush();

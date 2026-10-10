@@ -120,28 +120,84 @@ interface ConstructorParams<St> {
   logStateChanges?: boolean;
 
   /**
-   * Global function to wrap errors.
+   * An `errorObserver` can be set during the `Store` creation. It's a global way to
+   * observe, change and swallow errors. It's given all errors thrown by your actions (including
+   * those of type `UserException`), and also the errors of the `Persistor`.
    *
-   * This `globalWrapError` will be given all errors thrown in your actions, including those
-   * of type `UserException`. If and action already has a `wrapError` method, that method will
-   * be called first, and then the `globalWrapError` will be called with the result.
+   * It's called with an object with these fields:
    *
-   * A common use case for this is to have a global place to convert some exceptions into
-   * `UserException`s. For example, Firebase may throw some `PlatformExceptions` in response to
-   * a bad connection to the server. In this case, you may want to show the user a dialog
-   * explaining that the connection is bad, which you can do by converting it to a `UserException`.
-   * While this could also be done in the action's `wrapError`, you'd have to add it to all
-   * actions that use Firebase.
+   * - `error`: The error, AFTER the action's `wrapError` (or the persistor's `wrapError`).
+   * - `originalError`: The error BEFORE `wrapError`.
+   * - `action`: The action that threw the error, or `null` if the error didn't come from an
+   *    action (for example, if it came from the `Persistor`). Always check for `null`.
+   * - `store`: Use it to read the state, if it's relevant to the error. Do NOT use it to
+   *    dispatch actions, as this may have unpredictable results.
    *
-   * IMPORTANT: If instead of RETURNING an error you throw an error inside the `globalWrapError`
-   * function, Kiss will catch this error and use it instead the original error. In other
-   * words, returning an error or throwing an error works the same way. But it's recommended that
-   * you return the error instead of throwing it anyway.
+   * It must return the error to be used:
    *
-   * Note: Don't use the `globalWrapError` to log errors, as you should prefer doing that
-   * in the `errorObserver`.
+   * - If it returns the same `error` unaltered, this original error will be used.
+   * - If it returns something else, that will be used instead of `error`.
+   * - If it returns `null` (or `undefined`, or nothing), the error is disabled (swallowed).
+   *
+   * IMPORTANT: If instead of RETURNING an error you THROW an error inside the
+   * `errorObserver`, Kiss will catch it and use it instead of `error`. In other words,
+   * returning an error or throwing an error works the same way. But it's recommended that you
+   * return the error.
+   *
+   * Then, for the errors thrown by actions:
+   * - A `UserException` is shown to the user (in the `showUserException` UI), and is not thrown.
+   * - Any other error is thrown by `dispatch` (or rejects `dispatchAndWait`).
+   *
+   * And for the errors of the `Persistor` (thrown by `persistDifference` after the persistor's
+   * `wrapError`, thrown while reading the persisted state, or added with `Persistor.addError`):
+   * - A `UserException` is shown to the user.
+   * - Any other error is thrown as an unhandled promise rejection, since there is no `dispatch`
+   *   call to throw it to. Return `null` if you don't want that, for example after logging it.
+   *
+   * Without an `errorObserver`, all errors are used unaltered.
+   *
+   * Note the `errorObserver` is called AFTER the action's `wrapError`. It's not called if
+   * `wrapError` returns `null`.
+   *
+   * Use cases:
+   *
+   * 1. Log errors to services like Sentry or Firebase Crashlytics in production, and print them
+   *    to the console in development and tests. Since this is done in a centralized way, you
+   *    don't have to "pollute" your code with logging calls. You can use the `action` to log the
+   *    action name, and any action properties you may find interesting.
+   *
+   * 2. Have a global place to convert some errors into `UserException`s. For example, Firebase
+   *    may throw some errors in response to a bad connection to the server. In this case, you
+   *    may want to show the user a dialog explaining that the connection is bad, which you can
+   *    do by converting it to a `UserException`. While this could also be done in the action's
+   *    `wrapError`, you'd have to add it to all actions that use Firebase.
+   *
+   * For example:
+   *
+   * ```ts
+   * errorObserver: ({ error, action }) => {
+   *
+   *   // Shows a dialog for connection errors.
+   *   if (error instanceof ConnectionError)
+   *     return new UserException('Please check your connection.').withHardCause(error);
+   *
+   *   // Throws the other errors during development and tests, so that we can see them.
+   *   if (inDevelopment() || inTests() || (error instanceof UserException)) return error;
+   *
+   *   // In production, logs the other errors, and swallows them.
+   *   Logger.error(`Got ${error} in ${action ?? 'the persistor'}.`);
+   *   return null;
+   * }
+   * ```
+   *
+   * Note: Declared as a method so that observers typed with a non-null `action` still compile.
    */
-  globalWrapError?: (error: any) => any;
+  errorObserver?(params: {
+    error: any,
+    originalError: any,
+    action: KissAction<St> | null,
+    store: Store<St>,
+  }): any;
 
   /**
    * An `actionObserver` can be set during the `Store` creation.
@@ -170,7 +226,7 @@ interface ConstructorParams<St> {
    * A `stateObserver`s can be set during the `Store` creation.
    * It's called for all dispatched actions, right after the reducer returns, before
    * the action's `after()` method, before the action's `wrapError()`, and before
-   * the `globalWrapError()`.
+   * the `errorObserver`.
    *
    * The parameters are:
    *
@@ -220,49 +276,6 @@ interface ConstructorParams<St> {
    * ```
    */
   stateObserver?: (action: KissAction<St>, prevState: St, newState: St, error: any, dispatchCount: number) => void;
-
-  /**
-   * An `errorObserver` can be set during the `Store` creation.
-   * This will be given all errors that survive the action's `wrapError` and the `globalWrapError`,
-   * including those of type `UserException`.
-   *
-   * You also get the `action` and a reference to the `store`. IMPORTANT: Don't use the store to
-   * dispatch any actions, as this may have unpredictable results.
-   *
-   * The `errorObserver` is the ideal place to log errors, as you have all the information you may
-   * need, including the `action` that dispatched the error, which you can use to log the action
-   * name, as well as any action properties you may find interesting.
-   *
-   * After you log the error, you may then return `true` to let the error throw,
-   * or `false` to swallow it.
-   *
-   * For example, if you want to disable all errors in production, but log them;
-   * and you want to throw all errors during development and tests, this is how you can do it:
-   *
-   * ```
-   * errorObserver: (error, action) => {
-   *
-   *    // In development, we throw the error so that we can see it in the emulator/console.
-   *    if (inDevelopment() || inTests() || (error instanceof UserException)) return true;
-   *
-   *    // In production, we log the error, and swallow it.
-   *    else {
-   *       Logger.error(`Got ${error} in action ${action}.`);
-   *       return false;
-   *       }
-   * }
-   * ```
-   *
-   * The `errorObserver` is also given the errors of the `Persistor` (errors thrown by
-   * `persistDifference` after the persistor's `wrapError`, errors thrown while reading the
-   * persisted state, and errors added with `Persistor.addError`). For those errors the `action`
-   * is `null`. Since there is no `dispatch` call to throw them to, returning `true` will log
-   * them with `Store.log()`, and returning `false` will swallow them. Note persistence errors of
-   * type `UserException` are always shown to the user, before the `errorObserver` is called.
-   *
-   * Note: Declared as a method so that observers typed with a non-null `action` still compile.
-   */
-  errorObserver?(error: any, action: KissAction<St> | null, store: Store<St>): boolean;
 }
 
 /**
@@ -696,10 +709,9 @@ export class Store<St> {
   // This function is passed to the constructor. If not passed, the `UserException` is ignored.
   private readonly _showUserException: ShowUserException;
 
-  private readonly _globalWrapError?: (error: any, action: KissAction<St>) => any;
+  private readonly _errorObserver?: ConstructorParams<St>['errorObserver'];
   private readonly _actionObserver?: (action: KissAction<St>, dispatchCount: number, ini: boolean) => void;
   private readonly _stateObserver?: (action: KissAction<St>, prevState: St, newState: St, error: any, dispatchCount: number) => void;
-  private readonly _errorObserver?: (error: any, action: KissAction<St> | null, store: Store<St>) => boolean;
 
   /**
    * You can use `store.mocks` to mock actions. You should use this for testing purposes, only.
@@ -794,10 +806,9 @@ export class Store<St> {
                 initialState,
                 showUserException,
                 persistor,
-                globalWrapError,
+                errorObserver,
                 actionObserver,
                 stateObserver,
-                errorObserver,
                 logger,
                 logStateChanges,
               }: ConstructorParams<St>
@@ -805,10 +816,9 @@ export class Store<St> {
     this._state = initialState;
     this._showUserException = showUserException || this._defaultShowUserException;
     this._processPersistence = (persistor === undefined) ? null : new ProcessPersistence(persistor, initialState);
-    this._globalWrapError = globalWrapError;
+    this._errorObserver = errorObserver;
     this._actionObserver = actionObserver;
     this._stateObserver = stateObserver;
-    this._errorObserver = errorObserver;
     this.userExceptionsQueue = [];
     this._actionsInProgress = new Set();
     this._awaitableActions = new Set();
@@ -818,7 +828,8 @@ export class Store<St> {
     this._logStateChanges = logStateChanges ?? true;
 
     if (this._processPersistence != null) {
-      this._processPersistence.onError = (error: any) => this._processPersistorError(error);
+      this._processPersistence.onError =
+        (error: any, originalError: any) => this._processPersistorError(error, originalError);
       this._processPersistence.readInitialState(this, initialState).catch(() => {});
     }
 
@@ -926,9 +937,9 @@ export class Store<St> {
    *
    * Usage: `await store.dispatchAndWait(new MyAction())`.
    *
-   * If the action fails, the error is processed as usual (`wrapError`, `globalWrapError`,
-   * `after`, `errorObserver`, etc). If the error is swallowed (a `UserException` when there is
-   * no `errorObserver`, or when the `errorObserver` returns `false`), the promise resolves
+   * If the action fails, the error is processed as usual (`wrapError`, `after`,
+   * `errorObserver`, etc). If the error is swallowed (a `UserException`, or when
+   * `wrapError` or the `errorObserver` returns `null`), the promise resolves
    * with the action status. Otherwise, the promise REJECTS with the error, for both sync and
    * async actions. So you can use `try { await dispatchAndWait(...) } catch` or `.catch()`.
    *
@@ -1535,14 +1546,14 @@ export class Store<St> {
     action._changeStatus({originalError: error});
 
     // Observe the state with an error here. We use the current state; no new state was applied.
-    // This is before the action's `after()` and `wrapError()` and `globalWrapError`.
+    // This is before the action's `after()` and `wrapError()` and the `errorObserver`.
     this._stateObserver?.(action, this._state, this._state, error, this._dispatchCount);
 
     this._record(action, false, this._state, this._state, error);
 
-    // An `AbortDispatchException` aborts the action silently. It's not processed by `wrapError`,
-    // `globalWrapError` or the `errorObserver`, the action doesn't count as failed, and the
-    // error is swallowed.
+    // An `AbortDispatchException` aborts the action silently. It's not processed by `wrapError`
+    // or the `errorObserver`, the action doesn't count as failed, and the error is
+    // swallowed.
     if (error instanceof AbortDispatchException) {
       action._changeStatus({isDispatchAborted: true});
       return;
@@ -1558,60 +1569,49 @@ export class Store<St> {
       error = thrownError;
     }
 
+    // Any error may optionally be processed by the `errorObserver` passed to the Store
+    // constructor. It may log the error, change it, or swallow it by returning `null`. It's
+    // recommended RETURNING the error, but if it throws an error, that will be used too.
+    if (error !== null && this._errorObserver) {
+      error = this._observeError(error, action.status.originalError, action);
+    }
+
+    // To completely disable the error, `wrapError` or `errorObserver` may return `null`.
+    // But if we got an error, we deal with it here.
     if (error !== null) {
 
-      // The default wrap error does nothing (returns all errors unaltered).
+      action._changeStatus({wrappedError: error});
 
-      // Any error may optionally be processed by the `globalWrapError` passed to the Store
-      // constructor. This is useful to wrap all errors in a common way. It's recommended
-      // RETURNING the new error, but if `globalWrapError` throws an error, that will be used too.
-      if (this._globalWrapError != null) {
-        try {
-          error = this._globalWrapError(error, action);
-        } catch (thrownError) {
-          error = thrownError;
+      // Memorizes the action that failed. We'll remove it when it's dispatched again.
+      this._failedActions.set(action.constructor as new (...args: any[]) => KissAction<St>, action);
+
+      // Memorizes errors of type `UserException` (in the error queue).
+      // These errors are usually shown to the user in a modal dialog, and are not thrown.
+      if (error instanceof UserException) {
+        if (error.ifOpenDialog) {
+          this._addUserException(error);
+          this._openSomeUiToShowUserException();
         }
       }
-
-      // To completely disable the error, `wrapError` or `globalWrapError` may return `null`.
-      // But if we got an error, we deal with it here.
-      if (error !== null) {
-
-        action._changeStatus({wrappedError: error});
-
-        // Memorizes the action that failed. We'll remove it when it's dispatched again.
-        this._failedActions.set(action.constructor as new (...args: any[]) => KissAction<St>, action);
-
-        // Memorizes errors of type `UserException` (in the error queue).
-        // These errors are usually shown to the user in a modal dialog, and are not logged.
-        if (error instanceof UserException) {
-          if (error.ifOpenDialog) {
-            this._addUserException(error);
-            this._openSomeUiToShowUserException();
-          }
-        }
-
-        // If an error-observer WAS NOT defined in the Store constructor, swallows errors
-        // of type `UserExceptions` (which were already shown to the user in some UI)
-        // and rethrows all others. This means the `dispatch()` method will throw this error.
-        if (!this._errorObserver) {
-          if (!(error instanceof UserException)) {
-            throw error;
-          }
-        }
-        // However, if as error-observer WAS defined in the Store constructor,
-        else {
-          // We call the error-observer.
-          // - If it returns `true`, the `dispatch()` method will throw this error.
-          // - If it returns `false`, the error is swallowed.
-          // Note: When the error-observer is defined, we don't make a distinction between
-          // `UserExceptions` and other errors, anymore. We let the error-observer do a
-          // distinction if it wants by returning true or false depending on the error type.
-          const shouldThrow = this._errorObserver(error, action, this);
-          if (shouldThrow) throw error;
-        }
-      }
+      // Throws all other errors. This means the `dispatch()` method will throw this error.
+      else throw error;
     }
+  }
+
+  /**
+   * Gives the error to the `errorObserver`, and returns the error it returns, or the error
+   * it throws. Returns `null` if the error is meant to be swallowed. The `action` is `null` for
+   * the errors of the `Persistor`.
+   */
+  private _observeError(error: any, originalError: any, action: KissAction<St> | null): any {
+    let result: any;
+    try {
+      result = this._errorObserver!({error, originalError, action, store: this});
+    } catch (thrownError) {
+      result = thrownError;
+    }
+    // Returning `undefined` (or nothing) swallows the error, just like returning `null`.
+    return (result === undefined) ? null : result;
   }
 
   private _processWrapsFinally(action: KissAction<St>, failure: { error: any } | null = null) {
@@ -2385,28 +2385,25 @@ export class Store<St> {
 
   private _isUserExceptionUiOpen: boolean = false;
 
-  // Processes the errors of the Persistor. They are never thrown, since there is no `dispatch`
-  // call to throw them to (and in Node an unhandled rejection would kill the process).
-  // - Errors of type `UserException` are shown to the user.
-  // - If there is an `errorObserver`, it's called with a `null` action. If it returns
-  //   `true`, the error is logged.
-  // - If there's no `errorObserver`, errors that are not `UserException` are logged.
-  private _processPersistorError(error: any) {
-    if ((error instanceof UserException) && error.ifOpenDialog) {
-      this._addUserException(error);
-      this._openSomeUiToShowUserException();
-    }
+  // Processes the errors of the Persistor. The `error` was already processed by the persistor's
+  // `wrapError`, and `originalError` is the error before it. The error is given to the
+  // `errorObserver`, with a `null` action. Then:
+  // - If it's a `UserException`, it's shown to the user.
+  // - If it's `null`, it's swallowed.
+  // - Otherwise, it's thrown as an unhandled promise rejection, since there is no `dispatch`
+  //   call to throw it to.
+  private _processPersistorError(error: any, originalError: any) {
+    if (this._errorObserver) error = this._observeError(error, originalError, null);
+    if (error === null) return;
 
-    let ifLog = !(error instanceof UserException);
-    if (this._errorObserver) {
-      try {
-        ifLog = this._errorObserver(error, null, this);
-      } catch (_error) {
-        Store.log(`The errorObserver threw an error: ${_error}.`);
+    if (error instanceof UserException) {
+      if (error.ifOpenDialog) {
+        this._addUserException(error);
+        this._openSomeUiToShowUserException();
       }
     }
-
-    if (ifLog) Store.log(`Persistor error: ${error}`);
+    //
+    else void Promise.reject(error);
   }
 
   private _addUserException(error: UserException) {
@@ -2573,6 +2570,12 @@ export class Store<St> {
    * while a persistence process is running, it waits for them to finish. Then, if the current
    * state is not yet persisted, it immediately starts a new persistence process (ignoring
    * Persistor.throttle). The returned promise completes when the current state is persisted.
+   *
+   * If the save fails, the returned promise still resolves. It never rejects. This is on
+   * purpose, not a bug: this method is usually called when the app is shutting down or going to
+   * the background, and then the app can't recover from a failed save anyway. The error is not
+   * lost: it's given to the `errorObserver` (with a `null` action) before the promise
+   * resolves, so it can be logged.
    *
    * Then, the Persistor will not start another persistence process, until method
    * resumePersistor is called.

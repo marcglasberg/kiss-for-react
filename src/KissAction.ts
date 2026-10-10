@@ -2006,7 +2006,7 @@ export abstract class KissAction<St> {
    * `Poll.runNowAndRestart`: if it fails, the polling is started anyway.
    *
    * The ticks are dispatched like any other action, so their errors are processed as usual
-   * (`wrapError`, `globalWrapError`, `errorObserver`, etc). For example, a `UserException`
+   * (`wrapError`, `errorObserver`, etc). For example, a `UserException`
    * shows an error dialog, and `isFailed` becomes `true` for the tick's action class. An error
    * that is not swallowed is thrown as an unhandled rejection, like the error of any dispatch
    * nobody waits for.
@@ -3507,18 +3507,18 @@ export class ActionStatus {
   /**
    * Holds the error thrown by the action's before/reduce methods, if any.
    * This may or may not be equal to the error thrown by the action, because the original error
-   * will still be processed by the action's `wrapError` and the `globalWrapError`. However,
+   * will still be processed by the action's `wrapError` and the `errorObserver`. However,
    * if `originalError` is non-null, it means the reducer did not finish running.
    *
    * If the action was aborted by throwing an `AbortDispatchException`, this holds that
-   * exception (which is not processed by `wrapError` and `globalWrapError`).
+   * exception (which is not processed by `wrapError` and the `errorObserver`).
    */
   readonly originalError: any;
 
   /**
    * Holds the error thrown by the action. This may or may not be the same as `originalError`,
    * because any errors thrown by the action's before/reduce methods may still be changed or
-   * cancelled by the action's `wrapError` and the `globalWrapError`. This is the final error
+   * cancelled by the action's `wrapError` and the `errorObserver`. This is the final error
    * after all these wraps.
    */
   readonly wrappedError: any;

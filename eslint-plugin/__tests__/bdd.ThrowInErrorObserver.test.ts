@@ -1,11 +1,11 @@
 import { expect } from '@jest/globals';
 import { Bdd, Feature, FeatureFileReporter, reporter, val } from 'easy-bdd-tool-jest';
 import { lint } from '../testing/lint';
-import rule from '../src/rules/throwInGlobalWrapError';
+import rule from '../src/rules/throwInErrorObserver';
 
 reporter(new FeatureFileReporter());
 
-const feature = new Feature('Lint: throw-in-global-wrap-error');
+const feature = new Feature('Lint: throw-in-error-observer');
 
 const prelude = `import { createStore, Store, UserException } from 'kiss-for-react';
 
@@ -17,8 +17,8 @@ class NetworkError extends Error {}
 `;
 
 Bdd(feature)
-  .scenario('A throw in globalWrapError is reported, and fixed by returning the error.')
-  .given('A store whose globalWrapError {How}.')
+  .scenario('A throw in errorObserver is reported, and fixed by returning the error.')
+  .given('A store whose errorObserver {How}.')
   .when('The code is linted.')
   .then('The throw is reported.')
   .and('The fix changes throw to return, and the fixed code compiles.')
@@ -27,7 +27,7 @@ Bdd(feature)
     val('Code', `
 const store = createStore<State>({
   initialState: new State(0),
-  globalWrapError: (error: any) => {
+  errorObserver: ({ error }) => {
     if (error instanceof NetworkError) throw new UserException('No connection').withHardCause(error);
     return error;
   },
@@ -40,7 +40,7 @@ const store = createStore<State>({
     val('Code', `
 const store = new Store<State>({
   initialState: new State(0),
-  globalWrapError(error: any) {
+  errorObserver({ error }) {
     if (error instanceof NetworkError) throw new UserException('No connection').withHardCause(error);
     return error;
   },
@@ -51,18 +51,31 @@ const store = new Store<State>({
   .example(
     val('How', 'is a function declared in the same file, and given by name'),
     val('Code', `
-function globalWrapError(error: any) {
+function errorObserver({ error }: { error: any }) {
   if (error instanceof NetworkError) throw new UserException('No connection').withHardCause(error);
   return error;
 }
 
-const store = createStore<State>({ initialState: new State(0), globalWrapError });
+const store = createStore<State>({ initialState: new State(0), errorObserver });
+`),
+    val('Fixed', `if (error instanceof NetworkError) return new UserException('No connection').withHardCause(error);`),
+  )
+  .example(
+    val('How', 'is a const arrow function declared in the same file, and given by reference'),
+    val('Code', `
+const observeErrors = ({ error }: { error: any }) => {
+  if (error instanceof NetworkError) throw new UserException('No connection').withHardCause(error);
+  return error;
+};
+
+const store = createStore<State>({ initialState: new State(0), errorObserver: observeErrors });
 `),
     val('Fixed', `if (error instanceof NetworkError) return new UserException('No connection').withHardCause(error);`),
   )
   .run(async (ctx) => {
     const code = prelude + ctx.example.val('Code');
     const result = lint(rule, code);
+    expect(result.typeErrors).toEqual([]);
     expect(result.messages.map((m) => m.text)).toEqual(["throw new UserException('No connection').withHardCause(error);"]);
     expect(result.messages[0].message).toContain('Return the error instead of throwing it.');
     expect(result.fixed).toContain(ctx.example.val('Fixed'));
@@ -71,15 +84,15 @@ const store = createStore<State>({ initialState: new State(0), globalWrapError }
   });
 
 Bdd(feature)
-  .scenario('Without type information, a throw in globalWrapError is also reported.')
-  .given('A store whose globalWrapError throws.')
+  .scenario('Without type information, a throw in errorObserver is also reported.')
+  .given('A store whose errorObserver throws.')
   .when('The code is linted without type information.')
   .then('The throw is reported and fixed.')
   .run(async (_) => {
     const code = `${prelude}
 const store = createStore<State>({
   initialState: new State(0),
-  globalWrapError: (error: any) => {
+  errorObserver: ({ error }) => {
     throw new UserException('Failed').withHardCause(error);
   },
 });
@@ -91,7 +104,7 @@ const store = createStore<State>({
 
 Bdd(feature)
   .scenario('If the function declares a return type, the throw is reported but not fixed.')
-  .given('A globalWrapError with the declared return type UserException, which throws an Error.')
+  .given('An errorObserver with the declared return type UserException, which throws an Error.')
   .when('The code is linted.')
   .then('The throw is reported.')
   .and('There is no fix, since returning an Error would not compile.')
@@ -99,28 +112,29 @@ Bdd(feature)
     const code = `${prelude}
 const store = createStore<State>({
   initialState: new State(0),
-  globalWrapError: (error: any): UserException => {
+  errorObserver: ({ error }): UserException => {
     if (error instanceof UserException) return error;
     throw new Error('Unexpected');
   },
 });
 `;
     const result = lint(rule, code);
+    expect(result.typeErrors).toEqual([]);
     expect(result.messages.map((m) => m.text)).toEqual(["throw new Error('Unexpected');"]);
     expect(result.fixed).toBe(code);
   });
 
 Bdd(feature)
-  .scenario('Throws that do not leave globalWrapError, or are not in it, are not reported.')
+  .scenario('Throws that do not leave errorObserver, or are not in it, are not reported.')
   .given('{Where}.')
   .when('The code is linted.')
   .then('There are no reports.')
   .example(
-    val('Where', 'A throw caught by a try in globalWrapError'),
+    val('Where', 'A throw caught by a try in errorObserver'),
     val('Code', `
 const store = createStore<State>({
   initialState: new State(0),
-  globalWrapError: (error: any) => {
+  errorObserver: ({ error }) => {
     try {
       if (error === null) throw new Error('No error');
     } catch (e) {
@@ -131,21 +145,21 @@ const store = createStore<State>({
 });
 `))
   .example(
-    val('Where', 'A throw in a function inside globalWrapError'),
+    val('Where', 'A throw in a function inside errorObserver'),
     val('Code', `
 const store = createStore<State>({
   initialState: new State(0),
-  globalWrapError: (error: any) => {
+  errorObserver: ({ error }) => {
     const check = () => { throw new Error('Never called'); };
     return error;
   },
 });
 `))
   .example(
-    val('Where', 'A throw in a function called globalWrapError, not given to a store'),
+    val('Where', 'A throw in a function called errorObserver, not given to a store'),
     val('Code', `
 const options = {
-  globalWrapError: (error: any) => { throw error; },
+  errorObserver: ({ error }: { error: any }) => { throw error; },
 };
 `))
   .run(async (ctx) => {

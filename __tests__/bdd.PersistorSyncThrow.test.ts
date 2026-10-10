@@ -187,9 +187,9 @@ async function createStore(persistor: Persistor<State>) {
     },
     logStateChanges: false,
     persistor,
-    errorObserver: (error: any) => {
+    errorObserver: ({ error }) => {
       errors.push(error);
-      return false;
+      return null;
     },
   });
   await store.ready();

@@ -23,7 +23,7 @@ export class StoreException extends Error {
  *
  * - The action status has `isDispatchAborted: true`, and the exception as its `originalError`.
  *   So `status.isCompletedOk` is `false`.
- * - The exception is not passed to `wrapError`, `globalWrapError` or the `errorObserver`.
+ * - The exception is not passed to `wrapError` or the `errorObserver`.
  * - The action is not added to the failed actions, so `isFailed` is `false` for it.
  * - It's never thrown by `dispatch`, and `dispatchAndWait` resolves with the action status,
  *   instead of rejecting.

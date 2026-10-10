@@ -7,7 +7,7 @@ Feature: showUserException that throws
 
   Scenario: A throwing showUserException does not replace the action error, nor skip the errorObserver.
     Given A showUserException that always throws.
-    And An errorObserver that records the errors it gets, and swallows them.
+    And An errorObserver that records the errors it gets.
     When An action fails with UserException.
     Then dispatch does not throw.
     And The errorObserver gets the UserException, not the showUserException error.

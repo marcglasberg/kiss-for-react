@@ -140,20 +140,20 @@ Bdd(feature)
 Bdd(feature)
   .scenario('The errorObserver decides if waiting for a failed action throws.')
   .given('An action that throws an error which is not a UserException.')
-  .and('An errorObserver that returns true or false.')
+  .and('An errorObserver that returns the error, or null.')
   .when('The action is dispatched with dispatchAndWait, and awaited.')
-  .then('The awaited call throws only if the errorObserver returned true.')
-  .example(val('Action', 'sync'), val('Observer returns', true))
-  .example(val('Action', 'sync'), val('Observer returns', false))
-  .example(val('Action', 'async reduce'), val('Observer returns', true))
-  .example(val('Action', 'async reduce'), val('Observer returns', false))
+  .then('The awaited call throws only if the errorObserver returned the error.')
+  .example(val('Action', 'sync'), val('Observer returns', 'the error'))
+  .example(val('Action', 'sync'), val('Observer returns', 'null'))
+  .example(val('Action', 'async reduce'), val('Observer returns', 'the error'))
+  .example(val('Action', 'async reduce'), val('Observer returns', 'null'))
   .run(async (ctx) => {
     // Given
-    const observerReturns: boolean = ctx.example.val('Observer returns');
+    const returnsTheError = ctx.example.val('Observer returns') === 'the error';
     const store = new Store<State>({
       initialState: new State(1),
       logger,
-      errorObserver: () => observerReturns,
+      errorObserver: ({ error }) => returnsTheError ? error : null,
     });
     const error = new Error('Custom error');
     const action = createAction(ctx.example.val('Action'), error);
@@ -167,7 +167,7 @@ Bdd(feature)
     }
 
     // Then
-    expect(caught).toBe(observerReturns ? error : null);
+    expect(caught).toBe(returnsTheError ? error : null);
   });
 
 Bdd(feature)
