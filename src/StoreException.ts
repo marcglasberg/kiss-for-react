@@ -14,6 +14,52 @@ export class StoreException extends Error {
   }
 }
 
+/**
+ * If an action throws an `AbortDispatchException` from its `before` or `reduce` methods, the
+ * action aborts immediately, silently. Note the `after` method still runs, as usual.
+ *
+ * This is similar to throwing a `UserException`, but without showing any errors to the user,
+ * and without the action counting as failed:
+ *
+ * - The action status has `isDispatchAborted: true`, and the exception as its `originalError`.
+ *   So `status.isCompletedOk` is `false`.
+ * - The exception is not passed to `wrapError`, `globalWrapError` or the `errorObserver`.
+ * - The action is not added to the failed actions, so `isFailed` is `false` for it.
+ * - It's never thrown by `dispatch`, and `dispatchAndWait` resolves with the action status,
+ *   instead of rejecting.
+ * - It's not retried, if the action uses `retry`.
+ *
+ * You can use it in the `before` method to abort the action before the `reduce` method runs,
+ * after some ASYNC check. This is different from `abortDispatch()`, which must decide
+ * synchronously. For example:
+ *
+ * ```ts
+ * class LoadProfile extends KissAction<State> {
+ *
+ *   async before() {
+ *     if (await isProfileCached()) throw new AbortDispatchException();
+ *   }
+ *
+ *   async reduce() { ... }
+ * }
+ * ```
+ *
+ * See also:
+ * - `abortDispatch()`, which is a way to abort the dispatch synchronously, before the action
+ *   runs.
+ */
+export class AbortDispatchException extends Error {
+  constructor(message: string = 'Dispatch aborted.') {
+    super(message);
+
+    this.name = 'AbortDispatchException';
+
+    // Maintains proper stack trace for where our error was thrown (only available on V8).
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, AbortDispatchException);
+    }
+  }
+}
 
 export class TimeoutException extends Error {
 

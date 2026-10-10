@@ -146,3 +146,67 @@ export const promise = store.dispatchAndWait(new LoadForever());
 `;
     expect(lint(rule, code, {filename: '__tests__/load.test.ts'}).messages).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('dispatchAndWait of an action with unlimitedRetryCheckInternet is a warning.')
+  .given('An action with unlimitedRetryCheckInternet = {Value} {Where}.')
+  .when('It is dispatched with store.dispatchAndWait.')
+  .then('There is a warning in the action, saying it retries forever, even while there is no internet.')
+  .example(val('Value', 'true'), val('Where', 'in the action'), val('Type information', true))
+  .example(val('Value', 'true'), val('Where', 'in the action'), val('Type information', false))
+  .example(val('Value', '{ maxDelay: 1000 }'), val('Where', 'in the action'), val('Type information', true))
+  .example(val('Value', '{ maxDelay: 1000 }'), val('Where', 'in the action'), val('Type information', false))
+  .example(val('Value', 'true'), val('Where', 'in its superclass'), val('Type information', true))
+  .example(val('Value', 'true'), val('Where', 'in its superclass'), val('Type information', false))
+  .run(async (ctx) => {
+    const value = ctx.example.val('Value') as string;
+    const inSuperclass = ctx.example.val('Where') === 'in its superclass';
+    const code = `${prelude}
+abstract class OnlineAction extends KissAction<State> {
+  ${inSuperclass ? `unlimitedRetryCheckInternet = ${value};` : ''}
+}
+
+class LoadOnline extends OnlineAction {
+  ${inSuperclass ? '' : `unlimitedRetryCheckInternet = ${value};`}
+  async reduce() { const text = await loadText(); return () => new State(text); }
+}
+
+export async function run() {
+  await store.dispatchAndWait(new LoadOnline());
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages.map((m) => m.text)).toEqual(['new LoadOnline()']);
+    expect(result.messages[0].message).toBe(
+      '`LoadOnline` uses `unlimitedRetryCheckInternet`, so it retries forever, and the promise of ' +
+      '`dispatchAndWait` never resolves while there is no internet, or while the action keeps failing. ' +
+      'Use `dispatch`.');
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('dispatchAndWait of an action with unlimitedRetryCheckInternet turned off is fine.')
+  .given('An action with unlimitedRetryCheckInternet = false, in a subclass of one that turns it on.')
+  .when('It is dispatched with store.dispatchAndWait.')
+  .then('There are no warnings.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+abstract class OnlineAction extends KissAction<State> {
+  unlimitedRetryCheckInternet = true;
+}
+
+class LoadOffline extends OnlineAction {
+  unlimitedRetryCheckInternet = false;
+  async reduce() { const text = await loadText(); return () => new State(text); }
+}
+
+export async function run() {
+  await store.dispatchAndWait(new LoadOffline());
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages).toEqual([]);
+    expect(result.typeErrors).toEqual([]);
+  });

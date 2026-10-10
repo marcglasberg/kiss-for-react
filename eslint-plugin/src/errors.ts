@@ -177,14 +177,14 @@ const PERSISTOR_CLASSES = ['Persistor', 'ClassPersistor', 'PersistorDummy', 'Per
 
 /**
  * True if the class is a Kiss action: see `isKissActionClass`. Without type information, it's
- * also an action if it directly extends Kiss's `KissAction` or `OptimisticCommand`.
+ * also an action if it directly extends Kiss's `KissAction`, `OptimisticCommand` or `OptimisticSync`.
  */
 export function isActionClass(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
   if (!classNode.superClass) return false;
   if (isKissActionClass(classNode, typeInfo)) return true;
   if (typeInfo) return false;
   const superName = kissImportName(classNode.superClass, context);
-  return superName === 'KissAction' || superName === 'OptimisticCommand';
+  return superName === 'KissAction' || superName === 'OptimisticCommand' || superName === 'OptimisticSync';
 }
 
 /**

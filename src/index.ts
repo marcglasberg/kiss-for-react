@@ -6,11 +6,14 @@ import {
   AsyncReducer,
   AsyncReducerResult,
   OptimisticCommand,
+  OptimisticSync,
   KissAction,
+  Poll,
   UserExceptionAction,
   ReduxReducer,
   Retry,
   RetryOptions,
+  UnlimitedRetryCheckInternet,
   SyncReducer,
   UpdateStateAction,
 } from './KissAction';
@@ -35,7 +38,7 @@ import {
   useSelector,
   useStore,
 } from './Hooks';
-import { StoreException, TimeoutException } from './StoreException';
+import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
 import { UserException } from './UserException';
 
 export {
@@ -49,9 +52,11 @@ export {
   useIsStoreReady, useIsWaiting, useIsFailed, useExceptionFor, useClearExceptionFor,
   useDispatch, UseDispatchOptions, useDispatchAll, useDispatchAndWait, useDispatchAndWaitAll, useDispatchSync, useDispatchWhen, useDispatcher,
   StoreException,
+  AbortDispatchException,
   TimeoutException,
   UserException,
-  OptimisticCommand, Retry, RetryOptions,
+  OptimisticCommand, OptimisticSync, Retry, RetryOptions, UnlimitedRetryCheckInternet,
+  Poll,
 };
 
 

@@ -100,3 +100,55 @@ class Increment extends KissAction<State> {${ctx.example.val('Code')}
     expect(lint(rule, code).messages).toEqual([]);
     expect(lint(rule, code, {types: false}).messages).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('An action with unlimitedRetryCheckInternet and a sync reduce is an error.')
+  .given('An action with unlimitedRetryCheckInternet = {Value}, and a sync reduce.')
+  .when('The code is linted.')
+  .then('There is an error in unlimitedRetryCheckInternet.')
+  .and('There are two suggestions: remove unlimitedRetryCheckInternet, or make reduce async.')
+  .example(val('Value', 'true'), val('Type information', true))
+  .example(val('Value', 'true'), val('Type information', false))
+  .example(val('Value', '{ maxDelayNoInternet: 3000 }'), val('Type information', true))
+  .run(async (ctx) => {
+    const types = ctx.example.val('Type information') as boolean;
+    const code = `${prelude}
+class Increment extends KissAction<State> {
+  unlimitedRetryCheckInternet = ${ctx.example.val('Value')};
+
+  reduce() {
+    return this.state.add(1);
+  }
+}
+`;
+    const result = lint(rule, code, {types});
+    expect(result.messages.map((m) => m.text)).toEqual(['unlimitedRetryCheckInternet']);
+    expect(result.messages[0].message).toContain('`unlimitedRetryCheckInternet` only works with an async `reduce`');
+    expect(result.messages[0].suggestions).toEqual(['Remove `unlimitedRetryCheckInternet`.', 'Make `reduce` async.']);
+
+    const suggested = result.withSuggestion(0, 0);
+    expect(suggested).not.toContain('unlimitedRetryCheckInternet');
+    expect(lint(rule, suggested).typeErrors).toEqual([]);
+    expect(lint(rule, suggested).messages).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('unlimitedRetryCheckInternet with an async reduce, or turned off, is fine.')
+  .given('An action with {Code}.')
+  .when('The code is linted.')
+  .then('There are no errors.')
+  .example(val('Code', 'unlimitedRetryCheckInternet = true, and an async reduce'))
+  .example(val('Code', 'unlimitedRetryCheckInternet = false, and a sync reduce'))
+  .run(async (ctx) => {
+    const isAsync = (ctx.example.val('Code') as string).includes('async');
+    const code = `${prelude}
+class Increment extends KissAction<State> {
+  unlimitedRetryCheckInternet = ${isAsync};
+
+  ${isAsync ? 'async reduce() { return () => this.state.add(1); }' : 'reduce() { return this.state.add(1); }'}
+}
+`;
+    const result = lint(rule, code, {types: true});
+    expect(result.messages).toEqual([]);
+    expect(result.typeErrors).toEqual([]);
+  });

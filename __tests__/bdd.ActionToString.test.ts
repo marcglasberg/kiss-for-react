@@ -141,3 +141,40 @@ Bdd(feature)
     expect(new WithCheckInternet().toString()).toBe('WithCheckInternet()');
     expect(new WithRetry().toString()).toBe('WithRetry()');
   });
+
+class WithDebounce extends KissAction<State> {
+  debounce = 300;
+
+  reduce() { return null; }
+}
+
+class WithThrottle extends KissAction<State> {
+  throttle = 5000;
+  removeThrottleLockOnError = true;
+
+  reduce() { return null; }
+}
+
+class WithFresh extends KissAction<State> {
+  fresh = 5000;
+
+  reduce() { return null; }
+}
+
+class WithSequential extends KissAction<State> {
+  sequential = true;
+
+  reduce() { return null; }
+}
+
+Bdd(feature)
+  .scenario('The "debounce", "throttle", "fresh" and "sequential" configurations are not printed.')
+  .given('An action that sets "debounce", an action that sets "throttle" and "removeThrottleLockOnError", an action that sets "fresh", and an action that sets "sequential".')
+  .when('The actions are turned into strings.')
+  .then('The configurations are not printed.')
+  .run(async (_) => {
+    expect(new WithDebounce().toString()).toBe('WithDebounce()');
+    expect(new WithThrottle().toString()).toBe('WithThrottle()');
+    expect(new WithFresh().toString()).toBe('WithFresh()');
+    expect(new WithSequential().toString()).toBe('WithSequential()');
+  });

@@ -1,4 +1,5 @@
 import { AST_NODE_TYPES, TSESLint, TSESTree } from '@typescript-eslint/utils';
+import { isUnlimitedRetryCheckInternetOn } from '../actionFeatures.js';
 import {
   createRule,
   findMethod,
@@ -12,11 +13,16 @@ import {
 } from '../utils.js';
 
 /**
- * Reports an action with `retry` whose `reduce` is sync:
+ * Reports an action with `retry` or `unlimitedRetryCheckInternet` whose `reduce` is sync:
  *
  * ```ts
  * class LoadText extends Action {
  *   retry = { on: true };          // Error
+ *   reduce() { return ...; }
+ * }
+ *
+ * class LoadText extends Action {
+ *   unlimitedRetryCheckInternet = true; // Error
  *   reduce() { return ...; }
  * }
  * ```
@@ -24,7 +30,7 @@ import {
  * Retry only works with async reducers. Dispatching this action fails with a `StoreException`,
  * even if the reducer succeeds.
  *
- * Suggestions: remove `retry`, or make `reduce` async (each `return x` becomes
+ * Suggestions: remove the property, or make `reduce` async (each `return x` becomes
  * `return () => x`).
  */
 export default createRule({
@@ -32,7 +38,7 @@ export default createRule({
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow `retry` in actions whose `reduce` is sync.',
+      description: 'Disallow `retry` and `unlimitedRetryCheckInternet` in actions whose `reduce` is sync.',
     },
     hasSuggestions: true,
     schema: [],
@@ -40,7 +46,10 @@ export default createRule({
       syncReduce:
         'Retry only works with an async `reduce`, but this `reduce` is sync. Dispatching this action ' +
         'fails with a `StoreException`.',
-      removeRetry: 'Remove `retry`.',
+      syncReduceUnlimitedRetryCheckInternet:
+        '`unlimitedRetryCheckInternet` only works with an async `reduce`, but this `reduce` is sync. ' +
+        'Dispatching this action fails with a `StoreException`.',
+      remove: 'Remove `{{property}}`.',
       makeAsync: 'Make `reduce` async.',
     },
   },
@@ -50,20 +59,29 @@ export default createRule({
 
     const checkClass = (classNode: TSESTree.ClassDeclaration | TSESTree.ClassExpression) => {
       const retry = findProperty(classNode, 'retry');
-      if (!retry || !isRetryOn(retry)) return;
+      const unlimited = findProperty(classNode, 'unlimitedRetryCheckInternet');
+      const properties = [
+        ...(retry && isRetryOn(retry) ? [{property: retry, name: 'retry', messageId: 'syncReduce'}] as const : []),
+        ...(unlimited?.value && isUnlimitedRetryCheckInternetOn(context.sourceCode.getText(unlimited.value))
+          ? [{property: unlimited, name: 'unlimitedRetryCheckInternet', messageId: 'syncReduceUnlimitedRetryCheckInternet'}] as const
+          : []),
+      ];
+      if (properties.length === 0) return;
 
       const reduce = findMethod(classNode, 'reduce');
       if (!reduce || !reduce.value.body) return;
       if (!isKissActionClass(classNode, typeInfo)) return;
       if (isAsyncMethod(reduce, context, typeInfo)) return;
 
-      const suggest: TSESLint.SuggestionReportDescriptor<'removeRetry' | 'makeAsync'>[] = [
-        {messageId: 'removeRetry', fix: (fixer) => removeMember(fixer, retry, context)},
-      ];
-      const makeAsync = makeAsyncFix(reduce, context);
-      if (makeAsync) suggest.push({messageId: 'makeAsync', fix: makeAsync});
+      for (const {property, name, messageId} of properties) {
+        const suggest: TSESLint.SuggestionReportDescriptor<'remove' | 'makeAsync'>[] = [
+          {messageId: 'remove', data: {property: name}, fix: (fixer) => removeMember(fixer, property, context)},
+        ];
+        const makeAsync = makeAsyncFix(reduce, context);
+        if (makeAsync) suggest.push({messageId: 'makeAsync', fix: makeAsync});
 
-      context.report({node: retry.key, messageId: 'syncReduce', suggest});
+        context.report({node: property.key, messageId, suggest});
+      }
     };
 
     return {

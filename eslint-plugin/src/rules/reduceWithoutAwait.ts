@@ -19,8 +19,8 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  * true for a moment, and the component renders one more time.
  *
  * Not reported when the action is async anyway (its `before` is async, or it sets
- * `checkInternet`), when it uses `retry` (which needs an async `reduce`), when it overrides
- * `wrapReduce`, or when `reduce` may return a promise.
+ * `checkInternet`), when it uses `retry` or `unlimitedRetryCheckInternet` (which need an async
+ * `reduce`), when it overrides `wrapReduce`, or when `reduce` may return a promise.
  *
  * Suggestion: make `reduce` sync, turning `return () => x` and `return (state) => x` into
  * `return x` (with `this.state` instead of `state`).

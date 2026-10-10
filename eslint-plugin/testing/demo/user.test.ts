@@ -117,6 +117,7 @@ test('The test-only features of Kiss are OK in tests', async () => {
 
   store.mocks.add(SaveUser, () => null); // OK: testing-feature-in-production.
   store.record.start(); // OK: testing-feature-in-production.
+  store.forceInternetOnOffSimulation = () => true; // OK: testing-feature-in-production.
   store.dispatch(new LoadUser());
   await store.waitActionType(LoadUser); // OK: testing-feature-in-production.
   expect(store.record.result()).toHaveLength(2);

@@ -51,6 +51,102 @@
   per key with `nonReentrantKeyParams()` or `computeNonReentrantKey()`). With `retry`, only
   the server call is retried, so the optimistic value is not rolled back between attempts.
 
+* New `OptimisticSync` abstract class, for rapid toggles like a "like" button. Every dispatch
+  applies its value to the state right away, but only one request per key is in flight. When
+  it finishes, if the state changed, a follow-up request sends the latest value, until the
+  state stabilizes. It can apply the server response, and calls `onFinish` at the end (with
+  the error, if a request failed). Separate keys with `optimisticSyncKeyParams()`, or share
+  them between classes with `computeOptimisticSyncKey()`. It can only be combined with
+  `checkInternet`. `store.clearInternalActionProps()` releases its keys.
+
+* New `debounce` action property. With `debounce = 300` (milliseconds), or `debounce = true`
+  for the default 333 milliseconds, the action waits until it stops being dispatched for that
+  long, and only the last action runs its reducer. Actions of the same class debounce each
+  other, or override `debounceLockBuilder()` to choose the lock. `removeAllDebounceLocks()`
+  removes all locks. It can't be combined with `retry`, nor used in an `OptimisticCommand`.
+
+* New `throttle` action property. With `throttle = 5000` (milliseconds), or `throttle = true`
+  for the default 1000 milliseconds, the action runs at most once per throttle period, and
+  the dispatches inside the period are aborted. Override `ignoreThrottle` to run it anyway.
+  The lock is kept if the action fails, unless `removeThrottleLockOnError = true`. Actions of
+  the same class throttle each other, or override `throttleLockBuilder()` to choose the lock.
+  `removeThrottleLock()` and `removeAllThrottleLocks()` remove the locks. It can't be combined
+  with `nonReentrant`, nor used in an `OptimisticCommand`.
+
+* New `fresh` action property. With `fresh = 5000` (milliseconds), or `fresh = true` for the
+  default 1000 milliseconds, the action's result is fresh for that period, and the dispatches
+  while it's fresh are aborted. Override `ignoreFresh` to run it anyway. If the action fails,
+  its data doesn't stay fresh. Actions of the same class share the fresh period, or override
+  `freshKeyParams()` to separate them by some fields, or `computeFreshKey()` so that different
+  classes share it. `removeFreshKey()` and `removeAllFreshKeys()` remove the keys. It can't be
+  combined with `nonReentrant` or `throttle`, nor used in an `OptimisticCommand`.
+
+* New `sequential` action property. With `sequential = true`, actions run one at a time, in
+  the exact order they were dispatched. All sequential actions share a single queue, or
+  override `sequentialKeyParams()` to have independent queues per key. Override
+  `discardQueueOnError()` to discard the actions waiting in the queue when an action fails.
+  Waiting actions count as in progress for `isWaiting`, and `isWaitingInSequentialQueue` and
+  `wasDiscardedFromSequentialQueue` tell an action's state in the queue. Sequential actions
+  are always async, so they can't be dispatched with `dispatchSync`. It can't be combined
+  with `debounce`.
+
+* New `AbortDispatchException`. Throw it from an action's `before` or `reduce` to abort the
+  action silently, for example after some async check (`abortDispatch()` must decide
+  synchronously). The `after` method still runs, but the exception is not passed to
+  `wrapError`, `globalWrapError` or the `errorObserver`, the action doesn't count as failed
+  for `isFailed`, it's not retried, and `dispatchAndWait` resolves instead of rejecting.
+
+* New `ActionStatus.isDispatchAborted`. It's `true` when the action threw an
+  `AbortDispatchException`, and in the status returned by `dispatchAndWait` when the dispatch
+  was aborted before running: by `abortDispatch()`, `nonReentrant`, `throttle`, `fresh`, a
+  `null` mock, or a shut down store.
+
+* New `checkInternet = { abort: true }` option. When there is no internet, the action aborts
+  silently (with an `AbortDispatchException`), as if it had never been dispatched, instead of
+  failing with a `UserException`. It can't be used together with `dialog`.
+
+* New `store.forceInternetOnOffSimulation`, to simulate the internet connection in tests. Set
+  it to `() => false` (no internet) or `() => true` (internet) for all actions that use
+  `checkInternet` or `unlimitedRetryCheckInternet`, or to `() => null` (the default) to use the
+  real connection. It takes precedence over `hasInternet()`. To simulate it for a single
+  action, override its `internetOnOffSimulation` getter. The ESLint plugin's
+  `testing-feature-in-production` rule reports both outside tests.
+
+* New `unlimitedRetryCheckInternet` action property. With `unlimitedRetryCheckInternet = true`,
+  the internet is checked before each attempt. If there is no internet, the reducer doesn't
+  run, and the action retries unlimited times until there is internet. It also retries
+  unlimited times when there is internet but the action fails. Note `retry` plus
+  `checkInternet` doesn't retry when there is no internet. The action is non-reentrant for the
+  whole time until it succeeds, sharing the keys of `nonReentrant`. Pass an object to change
+  the `initialDelay` (default 350 milliseconds), `multiplier` (default 2), `maxDelay` (default
+  5000 milliseconds) and `maxDelayNoInternet` (default 1000 milliseconds). It needs an async
+  reducer, and can't be combined with `retry`, `checkInternet`, `nonReentrant`, `debounce`,
+  `throttle`, `fresh`, `sequential` or polling, nor used in an `OptimisticCommand`.
+
+* New `poll` action property, to dispatch an action periodically. Dispatch the action with
+  `Poll.start` to run it right away and start polling, with `Poll.stop` to stop, with
+  `Poll.runNowAndRestart` to run it now and restart the timer, or with `Poll.once` to run it
+  once without affecting the polling. Override `createPollingAction()` to return the action
+  each tick dispatches. The interval is `pollInterval` (default 10000 milliseconds). By
+  default, each tick waits for the previous run to finish, so runs never overlap. Set
+  `pollWaitsForRun = false` to tick at a fixed rate instead. Actions of the same class share
+  the polling, or override `pollingKeyParams()` to separate them by some fields, or
+  `computePollingKey()` so that different classes share it. `stopAllPolling()` stops all
+  polling, and so does `store.setShutDown(true)`. It can't be combined with `retry`,
+  `debounce` or `OptimisticCommand`.
+
+* New `store.clearInternalActionProps()`, to call on logout. It clears the information the
+  store keeps for the action features: it removes all `fresh` keys and `throttle` locks, makes
+  the `debounce` actions that are waiting finish without running their reducer, stops all
+  polling, and discards the actions waiting in `sequential` queues. It also stops the actions
+  that retry, with `retry` or `unlimitedRetryCheckInternet`: an action waiting to retry is
+  aborted right away (with an `AbortDispatchException`, so it doesn't fail or show errors), and
+  an action running an attempt is aborted if that attempt fails. Actions already running still
+  finish.
+
+* `store.setShutDown(true)` now calls `clearInternalActionProps()` (before, it only stopped
+  polling), so it also stops the retries. Setting it back to `false` doesn't resume them.
+
 * `nonReentrant` actions can now override `nonReentrantKeyParams()`, so that actions of the
   same class but with different parameters can run in parallel, and `computeNonReentrantKey()`,
   so that different action classes share the same key. These keys are shared with

@@ -38,3 +38,23 @@ Feature: Lint: retry-requires-async-reduce
   reduce() { return this.state.add(1); }                                                                |
       | no retry, and a sync reduce               | 
   reduce() { return this.state.add(1); }                                                                                         |
+
+  Scenario Outline: An action with unlimitedRetryCheckInternet and a sync reduce is an error.
+    Given An action with unlimitedRetryCheckInternet = {Value}, and a sync reduce.
+    When The code is linted.
+    Then There is an error in unlimitedRetryCheckInternet.
+    And There are two suggestions: remove unlimitedRetryCheckInternet, or make reduce async.
+    Examples: 
+      | Value                        | Type information |
+      | true                         | true             |
+      | true                         | false            |
+      | { maxDelayNoInternet: 3000 } | true             |
+
+  Scenario Outline: unlimitedRetryCheckInternet with an async reduce, or turned off, is fine.
+    Given An action with {Code}.
+    When The code is linted.
+    Then There are no errors.
+    Examples: 
+      | Code                                                    |
+      | unlimitedRetryCheckInternet = true, and an async reduce |
+      | unlimitedRetryCheckInternet = false, and a sync reduce  |

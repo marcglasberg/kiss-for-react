@@ -55,3 +55,25 @@ export const promise = store.dispatchAndWait(action);                           
     Given A test file that dispatches an action that retries forever with dispatchAndWait.
     When The code is linted.
     Then There are no warnings.
+
+  Scenario Outline: dispatchAndWait of an action with unlimitedRetryCheckInternet is a warning.
+    Given An action with unlimitedRetryCheckInternet = {Value} {Where}.
+    When It is dispatched with store.dispatchAndWait.
+    Then There is a warning in the action, saying it retries forever, even while there is no internet.
+    Examples: 
+      | Value              | Where             | Type information |
+      | true               | in the action     | true             |
+      | true               | in the action     | false            |
+      | { maxDelay: 1000 } | in the action     | true             |
+      | { maxDelay: 1000 } | in the action     | false            |
+      | true               | in its superclass | true             |
+      | true               | in its superclass | false            |
+
+  Scenario Outline: dispatchAndWait of an action with unlimitedRetryCheckInternet turned off is fine.
+    Given An action with unlimitedRetryCheckInternet = false, in a subclass of one that turns it on.
+    When It is dispatched with store.dispatchAndWait.
+    Then There are no warnings.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

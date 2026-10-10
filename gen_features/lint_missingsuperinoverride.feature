@@ -123,3 +123,19 @@ abstract class MyCommand extends KissAction<State> {}
 class SaveUser extends MyCommand {
   reduce() { return null; }
 }                                                                                                                                                                                                                                                                       |
+
+  Scenario Outline: Overriding reduce in an OptimisticSync is an error.
+    Given An action that extends OptimisticSync {Where}, and overrides reduce.
+    When The code is linted.
+    Then There is an error in reduce.
+    Examples: 
+      | Where                                 | Type information |
+      | directly                              | true             |
+      | directly                              | false            |
+      | through a base class of the same file | true             |
+      | through a base class of the same file | false            |
+
+  Scenario: An OptimisticSync that does not override reduce is fine.
+    Given An OptimisticSync that does not override reduce.
+    When The code is linted.
+    Then There are no errors.

@@ -66,3 +66,26 @@ export function useWait() {
     Given An object that is not a Kiss store, with mocks, record and waitActionType.
     When The app code uses them.
     Then There are no warnings.
+
+  Scenario: The internet simulation of the store is reported outside tests.
+    Given A store created in the same file.
+    When The app code sets store.forceInternetOnOffSimulation.
+    Then There is a warning, saying it is meant for tests.
+    And There is no warning in tests.
+    And Reading store.forceInternetOnOffSimulation is not reported.
+
+  Scenario Outline: An action that overrides internetOnOffSimulation to return true or false is reported.
+    Given A Kiss action that overrides the internetOnOffSimulation getter.
+    When The getter returns {Returns}.
+    Then There is a warning: {Reported}.
+    Examples: 
+      | Returns                                   | Reported |
+      | false                                     | true     |
+      | true                                      | true     |
+      | null                                      | false    |
+      | this.store.forceInternetOnOffSimulation() | false    |
+
+  Scenario: An internetOnOffSimulation getter in a class that is not an action is not reported.
+    Given A class that is not a Kiss action, with an internetOnOffSimulation getter that returns false.
+    When The code is linted.
+    Then There are no warnings.

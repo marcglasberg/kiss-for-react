@@ -21,6 +21,8 @@ import dispatchSameActionTwice from './rules/dispatchSameActionTwice.js';
 import dispatchSyncAsyncAction from './rules/dispatchSyncAsyncAction.js';
 import expectWithoutWaiting from './rules/expectWithoutWaiting.js';
 import extendBaseAction from './rules/extendBaseAction.js';
+import incompatibleActionFeatures from './rules/incompatibleActionFeatures.js';
+import pollingWithCaveat from './rules/pollingWithCaveat.js';
 import missingInitialState from './rules/missingInitialState.js';
 import missingKeyParams from './rules/missingKeyParams.js';
 import missingSuperInOverride from './rules/missingSuperInOverride.js';
@@ -66,6 +68,8 @@ const rules = {
   'retry-requires-async-reduce': retryRequiresAsyncReduce,
   'retry-without-non-reentrant': retryWithoutNonReentrant,
   'async-feature-in-sync-action': asyncFeatureInSyncAction,
+  'incompatible-action-features': incompatibleActionFeatures,
+  'polling-with-caveat': pollingWithCaveat,
   'extend-base-action': extendBaseAction,
   'avoid-abort-dispatch': avoidAbortDispatch,
   'avoid-wrap-reduce': avoidWrapReduce,
@@ -139,6 +143,8 @@ plugin.configs.recommended = {
     'kiss-for-react/retry-requires-async-reduce': 'error',
     'kiss-for-react/retry-without-non-reentrant': 'warn',
     'kiss-for-react/async-feature-in-sync-action': 'warn',
+    'kiss-for-react/incompatible-action-features': 'error',
+    'kiss-for-react/polling-with-caveat': 'error',
     'kiss-for-react/extend-base-action': 'warn',
     'kiss-for-react/dispatch-sync-async-action': 'error',
     'kiss-for-react/dispatch-same-action-twice': 'error',

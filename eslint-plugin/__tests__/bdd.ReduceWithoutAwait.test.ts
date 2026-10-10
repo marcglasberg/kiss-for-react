@@ -199,3 +199,22 @@ class Reducer extends Base {
 `;
     expect(lint(rule, code).messages).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('An async reduce without await, in an action with unlimitedRetryCheckInternet, is fine.')
+  .given('An action with unlimitedRetryCheckInternet = true, and an async reduce without await.')
+  .when('The code is linted.')
+  .then('There are no warnings, since unlimitedRetryCheckInternet needs an async reduce.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+class Increment extends KissAction<State> {
+  unlimitedRetryCheckInternet = true;
+  async reduce() { return (state: State) => state.add(1); }
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages).toEqual([]);
+    expect(result.typeErrors).toEqual([]);
+  });

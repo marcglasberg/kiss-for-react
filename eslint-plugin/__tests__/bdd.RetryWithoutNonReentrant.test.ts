@@ -7,7 +7,7 @@ reporter(new FeatureFileReporter());
 
 const feature = new Feature('Lint: retry-without-non-reentrant');
 
-const prelude = `import { KissAction, OptimisticCommand } from 'kiss-for-react';
+const prelude = `import { KissAction, OptimisticCommand, OptimisticSync } from 'kiss-for-react';
 
 class State {
   constructor(readonly text: string) {}
@@ -116,6 +116,15 @@ class SaveText extends OptimisticCommand<State, string> {
   applyValueToState(state: State, value: string) { return new State(value); }
   async sendCommandToServer(value: string) { return value; }
 }`))
+  .example(val('Case', 'it is an OptimisticSync, which can\'t use retry nor nonReentrant'), val('Code', `
+class SaveText extends OptimisticSync<State, string> {
+  constructor(readonly text: string) { super(); }
+  retry = { maxRetries: 5 };
+  valueToApply() { return this.text; }
+  applyOptimisticValueToState(state: State, value: string) { return new State(value); }
+  getValueFromState(state: State) { return state.text; }
+  async sendValueToServer(value: string) { return value; }
+}`))
   .run(async (ctx) => {
     const code = `${prelude}${ctx.example.val('Code')}
 `;
@@ -167,4 +176,33 @@ class LoadText extends KissAction<State> {
 }
 `;
     expect(lint(rule, code, {filename: '__tests__/loadText.test.ts'}).messages).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('An action with retry and throttle or fresh is not reported.')
+  .given('An action with retry = { on: true }, and {Feature} {Where}.')
+  .when('The code is linted.')
+  .then('There are no warnings, since nonReentrant can not be combined with {Feature}.')
+  .example(val('Feature', 'throttle = 1000'), val('Where', 'in the action'), val('Type information', true))
+  .example(val('Feature', 'throttle = 1000'), val('Where', 'in the action'), val('Type information', false))
+  .example(val('Feature', 'fresh = 1000'), val('Where', 'in the action'), val('Type information', false))
+  .example(val('Feature', 'fresh = 1000'), val('Where', 'in its superclass'), val('Type information', true))
+  .example(val('Feature', 'fresh = 1000'), val('Where', 'in its superclass'), val('Type information', false))
+  .run(async (ctx) => {
+    const declaration = `${ctx.example.val('Feature')};`;
+    const inSuperclass = ctx.example.val('Where') === 'in its superclass';
+    const code = `${prelude}
+abstract class BaseAction extends KissAction<State> {
+  ${inSuperclass ? declaration : ''}
+}
+
+class LoadText extends BaseAction {
+  retry = { on: true };
+  ${inSuperclass ? '' : declaration}
+  async reduce() { const text = await loadText(); return () => new State(text); }
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages).toEqual([]);
+    expect(result.typeErrors).toEqual([]);
   });

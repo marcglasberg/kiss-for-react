@@ -48,3 +48,8 @@ Feature: Action toString
     Given An action that sets "checkInternet", and an action that sets "retry".
     When The actions are turned into strings.
     Then The configurations are not printed.
+
+  Scenario: The "debounce", "throttle", "fresh" and "sequential" configurations are not printed.
+    Given An action that sets "debounce", an action that sets "throttle" and "removeThrottleLockOnError", an action that sets "fresh", and an action that sets "sequential".
+    When The actions are turned into strings.
+    Then The configurations are not printed.

@@ -109,16 +109,18 @@ export function declaresCheckInternet(classNode: ClassNode): TSESTree.PropertyDe
 
 /**
  * True if retry may be on: the action sets `retry` (in the class, or inherited), to something
- * other than `{ on: false }`, `null` or `undefined`.
+ * other than `{ on: false }`, `null` or `undefined`, or sets `unlimitedRetryCheckInternet` to
+ * something other than `false`, `null` or `undefined`.
  */
 export function mayRetry(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
-  let text: string | null = null;
-  if (typeInfo) {
-    text = propertyInitializer(instanceTypeOf(classNode, typeInfo), 'retry')?.getText() ?? null;
-  } else {
-    const property = sameFileProperty(classNode, 'retry', context);
-    if (property?.value) text = context.sourceCode.getText(property.value);
-  }
+  const textOf = (name: string): string | null => {
+    if (typeInfo) return propertyInitializer(instanceTypeOf(classNode, typeInfo), name)?.getText() ?? null;
+    const property = sameFileProperty(classNode, name, context);
+    return property?.value ? context.sourceCode.getText(property.value) : null;
+  };
+  const unlimited = textOf('unlimitedRetryCheckInternet');
+  if (unlimited !== null && !isUnsetText(unlimited) && unlimited.trim() !== 'false') return true;
+  const text = textOf('retry');
   if (text === null || isUnsetText(text)) return false;
   return !/\bon\s*:\s*false\b/.test(text);
 }
@@ -243,6 +245,16 @@ export function inheritedBeforeWithoutSuper(classNode: ClassNode, context: Conte
 
 /** True if the class extends Kiss's `OptimisticCommand`, directly or not. */
 export function extendsOptimisticCommand(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  return extendsKissClass(classNode, 'OptimisticCommand', context, typeInfo);
+}
+
+/** True if the class extends Kiss's `OptimisticSync`, directly or not. */
+export function extendsOptimisticSync(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  return extendsKissClass(classNode, 'OptimisticSync', context, typeInfo);
+}
+
+/** True if the class extends the Kiss class with this name (which extends `KissAction`), directly or not. */
+function extendsKissClass(classNode: ClassNode, name: string, context: Context, typeInfo: TypeInfo | null): boolean {
   if (typeInfo) {
     const {checker} = typeInfo;
     const seen = new Set<ts.Type>();
@@ -250,7 +262,7 @@ export function extendsOptimisticCommand(classNode: ClassNode, context: Context,
       if (seen.has(type)) return false;
       seen.add(type);
       const target = (type as ts.TypeReference).target ?? type;
-      if (!isClassItself && target.getSymbol()?.getName() === 'OptimisticCommand' &&
+      if (!isClassItself && target.getSymbol()?.getName() === name &&
         checker.getBaseTypes(target as ts.InterfaceType).some((base) =>
           ((base as ts.TypeReference).target ?? base).getSymbol()?.getName() === 'KissAction')) return true;
       const bases = target.isClassOrInterface() ? checker.getBaseTypes(target) : [];
@@ -259,7 +271,7 @@ export function extendsOptimisticCommand(classNode: ClassNode, context: Context,
     return visit(instanceTypeOf(classNode, typeInfo), true);
   }
   for (const node of sameFileClassChain(classNode, context)) {
-    if (node.superClass && kissImportName(node.superClass, context) === 'OptimisticCommand') return true;
+    if (node.superClass && kissImportName(node.superClass, context) === name) return true;
   }
   return false;
 }

@@ -4,7 +4,7 @@ import { classDeclarationOf } from './actions.js';
 import { findMethod, isAsyncMethod, isThenable, kissImportName, memberName, TypeInfo, unwrap, isAnyOrUnknown } from './utils.js';
 
 // Helpers for the rules about action features: `nonReentrant`, `retry`, `checkInternet`,
-// `OptimisticCommand`, and the base action.
+// `unlimitedRetryCheckInternet`, `OptimisticCommand`, `OptimisticSync`, and the base action.
 
 type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 
@@ -14,19 +14,22 @@ export type ClassNode = TSESTree.ClassDeclaration | TSESTree.ClassExpression;
 const SYMBOL_FLAGS_ALIAS = 2097152; // ts.SymbolFlags.Alias
 
 /** Kiss's own classes. Their members are the defaults, not overrides. */
-const KISS_CLASSES = ['KissAction', 'OptimisticCommand'];
+const KISS_CLASSES = ['KissAction', 'OptimisticCommand', 'OptimisticSync'];
+
+/** Kiss's own action classes, that the actions of the app extend. */
+export type KissClassName = 'KissAction' | 'OptimisticCommand' | 'OptimisticSync';
 
 // ---------------------------------------------------------------------------------------------
 // The class and its superclasses, without type information.
 
 /**
  * The class, and its superclasses declared in this file, in order. `end` is the Kiss class the
- * chain reaches (`KissAction` or `OptimisticCommand`), or `null` if it leaves the file (or the
- * last class doesn't extend anything).
+ * chain reaches (`KissAction`, `OptimisticCommand` or `OptimisticSync`), or `null` if it leaves
+ * the file (or the last class doesn't extend anything).
  */
 export interface ClassChain {
   classes: ClassNode[];
-  end: 'KissAction' | 'OptimisticCommand' | null;
+  end: KissClassName | null;
 }
 
 export function classChain(classNode: ClassNode, context: Context): ClassChain {
@@ -45,12 +48,13 @@ export function classChain(classNode: ClassNode, context: Context): ClassChain {
   return {classes, end: null};
 }
 
-// `KissAction` or `OptimisticCommand`, imported from Kiss (or, when not declared in this file, by name).
-function kissClassName(node: TSESTree.Node, context: Context): 'KissAction' | 'OptimisticCommand' | null {
+// `KissAction`, `OptimisticCommand` or `OptimisticSync`, imported from Kiss (or, when not
+// declared in this file, by name).
+function kissClassName(node: TSESTree.Node, context: Context): KissClassName | null {
   const imported = kissImportName(node, context);
-  if (imported === 'KissAction' || imported === 'OptimisticCommand') return imported;
+  if (imported !== null && KISS_CLASSES.includes(imported)) return imported as KissClassName;
   if (node.type === AST_NODE_TYPES.Identifier && KISS_CLASSES.includes(node.name) &&
-    !classDeclarationOf(node, context)) return node.name as 'KissAction' | 'OptimisticCommand';
+    !classDeclarationOf(node, context)) return node.name as KissClassName;
   return null;
 }
 
@@ -135,7 +139,8 @@ export function reduceKind(classNode: ClassNode, context: Context, typeInfo: Typ
     if (own?.value.async) return 'async';
     const type = instanceTypeOfClass(classNode, typeInfo);
     const symbol = type.getProperty('reduce');
-    if (!symbol || !isDeclaredByUser(type, 'reduce') && !symbol.getDeclarations()?.some((d) => ownerName(d) === 'OptimisticCommand')) {
+    if (!symbol || !isDeclaredByUser(type, 'reduce') &&
+      !symbol.getDeclarations()?.some((d) => ['OptimisticCommand', 'OptimisticSync'].includes(ownerName(d) ?? ''))) {
       return 'unknown';
     }
     const location = typeInfo.services.esTreeNodeToTSNodeMap.get(classNode);
@@ -191,6 +196,27 @@ export function retryOfClass(classNode: ClassNode, context: Context, typeInfo: T
   }
   const retry = findPropertyInChain(classChain(classNode, context), 'retry');
   return retry?.value ? retryOf(context.sourceCode.getText(retry.value)) : null;
+}
+
+/**
+ * From the text of an `unlimitedRetryCheckInternet` value: if it turns it on. It's on for `true`
+ * and for an object with the retry options, and off for `false`, `null` and `undefined`.
+ */
+export function isUnlimitedRetryCheckInternetOn(text: string): boolean {
+  return !['false', 'null', 'undefined'].includes(text.trim());
+}
+
+/**
+ * True if the class turns on `unlimitedRetryCheckInternet`, itself or with its superclasses (in
+ * this file, or with type information).
+ */
+export function unlimitedRetryCheckInternetOfClass(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  if (typeInfo) {
+    const text = initializerTextOf(instanceTypeOfClass(classNode, typeInfo), 'unlimitedRetryCheckInternet');
+    return text !== null && isUnlimitedRetryCheckInternetOn(text);
+  }
+  const property = findPropertyInChain(classChain(classNode, context), 'unlimitedRetryCheckInternet');
+  return !!property?.value && isUnlimitedRetryCheckInternetOn(context.sourceCode.getText(property.value));
 }
 
 // ---------------------------------------------------------------------------------------------

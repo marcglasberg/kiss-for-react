@@ -93,3 +93,12 @@ Feature: Lint: reduce-without-await
     Given A class that is not a Kiss action, with an async reduce without await.
     When The code is linted.
     Then There are no warnings.
+
+  Scenario Outline: An async reduce without await, in an action with unlimitedRetryCheckInternet, is fine.
+    Given An action with unlimitedRetryCheckInternet = true, and an async reduce without await.
+    When The code is linted.
+    Then There are no warnings, since unlimitedRetryCheckInternet needs an async reduce.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

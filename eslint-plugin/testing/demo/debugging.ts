@@ -89,6 +89,26 @@ function WaitsInComponent() {
   return { onSave };
 }
 
+function simulatesTheInternet() {
+  // kiss-for-react/testing-feature-in-production
+  // (`forceInternetOnOffSimulation` makes the actions ignore the real internet connection)
+  store.forceInternetOnOffSimulation = () => false;
+
+  return store.forceInternetOnOffSimulation() === null; // OK: only reads it.
+}
+
+class LoadPricesOffline extends Action {
+  checkInternet = { dialog: true };
+
+  get internetOnOffSimulation() {
+    // kiss-for-react/testing-feature-in-production
+    // (The action ignores the real internet connection)
+    return false;
+  }
+
+  async reduce() { return null; }
+}
+
 // =================================================================================================
 // action-status-details-in-production
 // =================================================================================================

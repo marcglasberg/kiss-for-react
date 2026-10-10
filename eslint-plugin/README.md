@@ -231,6 +231,8 @@ directories.
 - [`retry-requires-async-reduce`](#retry-requires-async-reduce) error
 - [`retry-without-non-reentrant`](#retry-without-non-reentrant) warning
 - [`async-feature-in-sync-action`](#async-feature-in-sync-action) warning
+- [`incompatible-action-features`](#incompatible-action-features) error
+- [`polling-with-caveat`](#polling-with-caveat) error
 - [`extend-base-action`](#extend-base-action) warning
 - [`avoid-abort-dispatch`](#avoid-abort-dispatch) opt-in warning
 - [`avoid-wrap-reduce`](#avoid-wrap-reduce) opt-in warning
@@ -606,7 +608,8 @@ the `async` makes the action async for nothing: `dispatchSync` throws, `isWaitin
 for a moment, and the component renders one more time.
 
 Not reported when the action is async anyway (its `before` is async, or it sets
-`checkInternet`), when it uses `retry` (which needs an async `reduce`), when it overrides
+`checkInternet`), when it uses `retry` or `unlimitedRetryCheckInternet` (which need an async
+`reduce`), when it overrides
 `wrapReduce`, or when `reduce` may return a promise, like `return loadReducer()`. An `await`
 inside a nested function doesn't count. With [type information](#type-information), it also
 finds `before`, `checkInternet` and `retry` inherited from superclasses in other files, and
@@ -731,6 +734,11 @@ An error for an override that silently turns off a Kiss feature, because it does
   so overriding it turns that off. Implement `optimisticValue`, `getValueFromState`,
   `applyValueToState` and `sendCommandToServer` instead.
 
+- `reduce()` in a subclass of `OptimisticSync`. Its `reduce` does the optimistic update, and
+  sends the requests to the server, so overriding it turns that off. Implement
+  `valueToApply`, `applyOptimisticValueToState`, `getValueFromState` and `sendValueToServer`
+  instead.
+
 A `before` that reads `this.checkInternet` is not reported, since it probably checks the
 internet by itself. Without type information, only `checkInternet` and superclasses declared
 in the same file are found. With [type information](#type-information), also the ones in
@@ -744,11 +752,16 @@ not a `Promise`.
 
 ### retry-requires-async-reduce
 
-An error for an action with `retry` whose `reduce` is sync:
+An error for an action with `retry` or `unlimitedRetryCheckInternet` whose `reduce` is sync:
 
 ```ts
 class LoadText extends Action {
   retry = { on: true }; // Error
+  reduce() { ... }
+}
+
+class LoadText extends Action {
+  unlimitedRetryCheckInternet = true; // Error
   reduce() { ... }
 }
 
@@ -763,9 +776,9 @@ it fails once, it fails again. Dispatching this action fails with a `StoreExcept
 the reducer succeeds.
 
 Any `retry` options turn retry on, like `retry = { maxRetries: 5 }`. Not reported for
-`retry = { on: false }`.
+`retry = { on: false }`, or for `unlimitedRetryCheckInternet = false`.
 
-Quick fixes (suggestions): remove `retry`, or make `reduce` async. The second one adds
+Quick fixes (suggestions): remove the property, or make `reduce` async. The second one adds
 `async`, and turns each `return x` into `return () => x`, since an async reducer returns a
 function:
 
@@ -797,7 +810,8 @@ class LoadText extends Action {
 
 Not reported when the action (or its superclass) declares `nonReentrant`, even as `false`,
 or overrides `abortDispatch`. Also not reported for `OptimisticCommand`, which is always
-non-reentrant, for `retry = { on: false }`, for a sync `reduce` (see
+non-reentrant, for `OptimisticSync`, which can't use `retry` nor `nonReentrant` (see
+[`incompatible-action-features`](#incompatible-action-features)), for `retry = { on: false }`, for a sync `reduce` (see
 [`retry-requires-async-reduce`](#retry-requires-async-reduce)), or in tests. With
 [type information](#type-information), it also checks the superclasses of other files.
 
@@ -833,6 +847,110 @@ may make it async, or in tests. `nonReentrant` is also not reported when the act
 [type information](#type-information), it also checks the superclasses of other files.
 
 Quick fix (suggestion): remove the property.
+
+---
+
+### incompatible-action-features
+
+An error for action features that can't be combined in the same action, since dispatching it
+throws a `StoreException`:
+
+```ts
+class LoadText extends Action {
+  throttle = 1000;
+  nonReentrant = true; // Error
+  async reduce() { ... }
+}
+
+class SaveText extends OptimisticCommand<State, string> {
+  nonReentrant = true; // Error: an `OptimisticCommand` is already non-reentrant.
+  ...
+}
+
+class ToggleLike extends OptimisticSync<State, boolean> {
+  retry = { on: true }; // Error: an `OptimisticSync` can only use `checkInternet`.
+  ...
+}
+```
+
+These are the combinations it reports (the same ones the store checks when the action is
+dispatched):
+
+- `debounce` with `retry` or `sequential`.
+- `throttle` with `nonReentrant`.
+- `fresh` with `nonReentrant` or `throttle`.
+- Polling (`poll`) with `retry` or `debounce`. Add them to the action returned by
+  `createPollingAction()` instead.
+- `unlimitedRetryCheckInternet` with any of `retry`, `checkInternet`, `nonReentrant`,
+  `debounce`, `throttle`, `fresh`, `sequential` or `poll`. It already retries, checks the
+  internet, and is non-reentrant.
+- An `OptimisticCommand` with `nonReentrant`, `debounce`, `throttle`, `fresh`, `poll` or
+  `unlimitedRetryCheckInternet`, or with a `retry` that retries forever
+  (`maxRetries: -1` or `unlimitedRetries: true`).
+- An `OptimisticSync` with any feature other than `checkInternet`: `nonReentrant`, `retry`,
+  `debounce`, `throttle`, `fresh`, `sequential`, `poll` or `unlimitedRetryCheckInternet`.
+
+A feature is on when it's set to something other than `false`, `null` or `undefined` (for
+`retry`, also not `{ on: false }`). `poll` also counts as a constructor parameter property,
+like `constructor(readonly poll = Poll.once)`. Features inherited from superclasses count
+too, so a subclass that turns one off (like `retry = { on: false }`) is fine. The problem is
+reported in the class that declares at least one of the two features. Without
+[type information](#type-information), only the superclasses declared in the same file are
+known. Also reported in tests.
+
+Quick fixes (suggestions): remove one of the two features (the ones declared in the class).
+
+---
+
+### polling-with-caveat
+
+An error for `checkInternet`, `nonReentrant`, `throttle`, `fresh` or `sequential` in an action
+with polling (`poll`), the one that starts and stops the polling. These features can be
+combined with polling, but only if you add them to the action returned by
+`createPollingAction()`, and not to the action with `poll`. They can abort, fail or delay a
+dispatch, and can't tell a `Poll.stop` apart from a regular tick. So in the action with `poll`,
+they may block the `Poll.stop` itself, and you'd be unable to stop the polling:
+
+- With `checkInternet`, a `Poll.stop` dispatched while there is no internet fails (or is
+  aborted, with `{ abort: true }`).
+- With `nonReentrant`, a `Poll.stop` dispatched while a run is in progress is ignored.
+- With `throttle`, a `Poll.stop` dispatched inside the throttle period is ignored.
+- With `fresh`, a `Poll.stop` dispatched while the data is fresh is ignored.
+- With `sequential`, a `Poll.stop` has to wait for its turn in the queue.
+
+```ts
+class PollPrices extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+  throttle = 5000; // Error
+  createPollingAction() { return new LoadPrices(); }
+  ...
+}
+```
+
+Instead, add them to the tick action:
+
+```ts
+class PollPrices extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+  createPollingAction() { return new LoadPrices(); }
+  ...
+}
+
+class LoadPrices extends Action {
+  throttle = 5000; // OK
+  ...
+}
+```
+
+`poll` counts as a property or as a constructor parameter property. Features inherited from
+superclasses count too. The problem is reported in the class that declares the feature or
+`poll`: in the feature, if the class declares it, or else in `poll`. Without
+[type information](#type-information), only the superclasses declared in the same file are
+known. Also reported in tests. The features that can't be combined with polling at all, like
+`retry`, are reported by [`incompatible-action-features`](#incompatible-action-features).
+
+Quick fix (suggestion): remove the feature, when the class declares it. Then add it to the
+tick action.
 
 ---
 
@@ -916,9 +1034,15 @@ Not reported in tests.
 
 An opt-in warning for a non-reentrant action with fields, that doesn't override
 `nonReentrantKeyParams` or `computeNonReentrantKey`. Non-reentrant actions are the ones with
-`nonReentrant = true` (in the action or a superclass), and the subclasses of
-`OptimisticCommand`. By default, the non-reentrant key doesn't depend on the fields, so all
-instances share it. For example, `SaveTodo('A')` then blocks `SaveTodo('B')`:
+`nonReentrant = true` or `unlimitedRetryCheckInternet` (in the action or a superclass), and
+the subclasses of `OptimisticCommand`. By default, the non-reentrant key doesn't depend on the fields, so all
+instances share it. For example, `SaveTodo('A')` then blocks `SaveTodo('B')`.
+
+It also warns about a subclass of `OptimisticSync` with fields, that doesn't override
+`optimisticSyncKeyParams` or `computeOptimisticSyncKey`. Then, while `ToggleLike('A')` has a
+request in flight, `ToggleLike('B')` changes the state, but doesn't send its own request. And
+the follow-up request of `ToggleLike('A')` only checks item A, so item B may never be sent to
+the server:
 
 ```ts
 class SaveTodo extends OptimisticCommand<State> { // Warning
@@ -930,18 +1054,28 @@ class LoadTodo extends Action { // Warning
   constructor(readonly todoId: string) { super(); }
 }
 
+class ToggleLike extends OptimisticSync<State, boolean> { // Warning
+  constructor(readonly itemId: string) { super(); }
+}
+
 class SaveTodo extends OptimisticCommand<State> { // OK
   constructor(readonly todoId: string) { super(); }
   nonReentrantKeyParams() { return this.todoId; }
 }
+
+class ToggleLike extends OptimisticSync<State, boolean> { // OK
+  constructor(readonly itemId: string) { super(); }
+  optimisticSyncKeyParams() { return this.itemId; }
+}
 ```
 
 It's opt-in, since sharing the key is often intended. Without
-[type information](#type-information), the class must extend `KissAction` or
-`OptimisticCommand` in the same file (directly, or through its superclasses).
+[type information](#type-information), the class must extend `KissAction`,
+`OptimisticCommand` or `OptimisticSync` in the same file (directly, or through its
+superclasses).
 
-Quick fix (suggestion): override `nonReentrantKeyParams()`, returning the fields. You may
-then remove the fields that shouldn't be part of the key.
+Quick fix (suggestion): override `nonReentrantKeyParams()` (or `optimisticSyncKeyParams()`),
+returning the fields. You may then remove the fields that shouldn't be part of the key.
 
 ---
 
@@ -1036,8 +1170,9 @@ Quick fix (suggestion): add `await store.ready();` before the dispatch, when the
 ### dispatch-and-wait-unlimited-retries
 
 A warning for `dispatchAndWait` or `dispatchAndWaitAll` with an action that retries forever,
-with `retry = { maxRetries: -1 }` or `retry = { unlimitedRetries: true }`. The promise never
-resolves while the action keeps failing:
+with `retry = { maxRetries: -1 }`, `retry = { unlimitedRetries: true }`, or
+`unlimitedRetryCheckInternet`. The promise never resolves while the action keeps failing (or,
+with `unlimitedRetryCheckInternet`, while there is no internet):
 
 ```ts
 class LoadText extends Action {
@@ -1051,8 +1186,8 @@ store.dispatch(new LoadText());              // OK
 
 It checks any call to a method or function called `dispatchAndWait` or `dispatchAndWaitAll`,
 like `store.dispatchAndWait(...)`, `this.dispatchAndWait(...)`, or the functions returned by
-`useDispatchAndWait()` and `useDispatchAndWaitAll()`. It also checks the `retry` the action
-inherits from its superclasses. Not reported in tests.
+`useDispatchAndWait()` and `useDispatchAndWaitAll()`. It also checks the `retry` and
+`unlimitedRetryCheckInternet` the action inherits from its superclasses. Not reported in tests.
 
 The rule only reports when the action's class is known. With
 [type information](#type-information), that's whenever the action's type is a specific
@@ -1418,6 +1553,23 @@ you dispatch, and `record` records every state change. Waiting for actions that 
 dispatches, or for all actions, can easily deadlock. The wait methods are also checked in the
 store returned by `useStore()`, and in actions, like `this.waitActionType(...)`.
 
+It also reports simulating the internet connection, which makes the actions that use
+`checkInternet` ignore the real connection: setting `store.forceInternetOnOffSimulation`, and
+an `internetOnOffSimulation` getter in an action that returns `true` or `false`:
+
+```ts
+store.forceInternetOnOffSimulation = () => false;  // Warning
+
+class LoadPrices extends Action {
+  checkInternet = { dialog: true };
+  get internetOnOffSimulation() { return false; }  // Warning
+  ...
+}
+```
+
+Reading `store.forceInternetOnOffSimulation`, and getters that return `null` or a value that
+is not a literal, are not reported.
+
 Not reported in tests. The store must clearly be a Kiss store. With
 [type information](#type-information), its type tells. Without it, the store must be created in
 the same file, with `createStore` or `new Store`, or come from `useStore()`.
@@ -1490,7 +1642,7 @@ There are 3 ways to name actions, and one rule for each. Turn on only one of the
 
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
-`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`. With
+`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand` or `OptimisticSync`. With
 it, any class that extends `KissAction` is an action.
 
 Quick fix (suggestion): rename the action, like `LoadUser` to `LoadUserAction`, in the
@@ -1520,7 +1672,7 @@ There are 3 ways to name actions, and one rule for each. Turn on only one of the
 
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
-`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`. With
+`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand` or `OptimisticSync`. With
 it, any class that extends `KissAction` is an action.
 
 Quick fix (suggestion): rename the action, like `LoadUser` to `LoadUser_Action`, in the
@@ -1552,7 +1704,7 @@ Names that only contain `Action` elsewhere, like `ActionLog`, are fine.
 
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
-`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`. With
+`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand` or `OptimisticSync`. With
 it, any class that extends `KissAction` is an action.
 
 Quick fix (suggestion): rename the action, like `LoadUserAction` to `LoadUser`, in the

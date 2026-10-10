@@ -183,3 +183,75 @@ export async function run() {
       expect(result.messages).toEqual([]);
     }
   });
+
+Bdd(feature)
+  .scenario('The internet simulation of the store is reported outside tests.')
+  .given('A store created in the same file.')
+  .when('The app code sets store.forceInternetOnOffSimulation.')
+  .then('There is a warning, saying it is meant for tests.')
+  .and('There is no warning in tests.')
+  .and('Reading store.forceInternetOnOffSimulation is not reported.')
+  .run(async (_) => {
+    const code = `${prelude}
+store.forceInternetOnOffSimulation = () => false;
+`;
+    for (const types of [true, false]) {
+      const result = lint(rule, code, {types, filename: 'src/app.ts'});
+      expect(result.messages.map((m) => m.text)).toEqual(['store.forceInternetOnOffSimulation']);
+      expect(result.messages[0].message).toContain('`forceInternetOnOffSimulation` is meant for tests');
+      if (types) expect(result.typeErrors).toEqual([]);
+    }
+    expect(lint(rule, code, {filename: '__tests__/app.test.ts'}).messages).toEqual([]);
+
+    const reads = `${prelude}
+export const isSimulated = store.forceInternetOnOffSimulation() !== null;
+`;
+    expect(lint(rule, reads, {filename: 'src/app.ts'}).messages).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('An action that overrides internetOnOffSimulation to return true or false is reported.')
+  .given('A Kiss action that overrides the internetOnOffSimulation getter.')
+  .when('The getter returns {Returns}.')
+  .then('There is a warning: {Reported}.')
+  .example(val('Returns', 'false'), val('Reported', true))
+  .example(val('Returns', 'true'), val('Reported', true))
+  .example(val('Returns', 'null'), val('Reported', false))
+  .example(val('Returns', 'this.store.forceInternetOnOffSimulation()'), val('Reported', false))
+  .run(async (ctx) => {
+    const returns = ctx.example.val('Returns') as string;
+    const code = `${prelude}
+export class LoadUser extends KissAction<State> {
+  checkInternet = { dialog: true };
+  get internetOnOffSimulation(): boolean | null { return ${returns}; }
+  async reduce() { return null; }
+}
+`;
+    for (const types of [true, false]) {
+      const result = lint(rule, code, {types, filename: 'src/app.ts'});
+      if (ctx.example.val('Reported')) {
+        expect(result.messages.map((m) => m.text)).toEqual([returns]);
+        expect(result.messages[0].message).toContain(`returns \`${returns}\`, so the action ignores the real internet`);
+      } else {
+        expect(result.messages).toEqual([]);
+      }
+      if (types) expect(result.typeErrors).toEqual([]);
+    }
+    expect(lint(rule, code, {filename: '__tests__/app.test.ts'}).messages).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('An internetOnOffSimulation getter in a class that is not an action is not reported.')
+  .given('A class that is not a Kiss action, with an internetOnOffSimulation getter that returns false.')
+  .when('The code is linted.')
+  .then('There are no warnings.')
+  .run(async (_) => {
+    const code = `
+export class Settings {
+  get internetOnOffSimulation() { return false; }
+}
+`;
+    for (const types of [true, false]) {
+      expect(lint(rule, code, {types, filename: 'src/app.ts'}).messages).toEqual([]);
+    }
+  });

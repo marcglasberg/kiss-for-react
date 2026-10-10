@@ -7,7 +7,7 @@ reporter(new FeatureFileReporter());
 
 const feature = new Feature('Lint: missing-super-in-override');
 
-const prelude = `import { KissAction, OptimisticCommand } from 'kiss-for-react';
+const prelude = `import { KissAction, OptimisticCommand, OptimisticSync } from 'kiss-for-react';
 
 class State {
   constructor(readonly user: string | null) {}
@@ -251,6 +251,52 @@ class SaveUser extends MyCommand {
 }`))
   .run(async (ctx) => {
     const code = `${prelude}${ctx.example.val('Code')}
+`;
+    const result = lint(rule, code);
+    expect(result.typeErrors).toEqual([]);
+    expect(result.messages).toEqual([]);
+    expect(lint(rule, code, {types: false}).messages).toEqual([]);
+  });
+
+const optimisticSync = (name: string, superclass: string, reduce: string) => `
+class ${name} extends ${superclass}<State, string | null> {
+  constructor(readonly user: string | null) { super(); }
+  valueToApply() { return this.user; }
+  applyOptimisticValueToState(state: State, user: string | null) { return new State(user); }
+  getValueFromState(state: State) { return state.user; }
+  async sendValueToServer(user: string | null) { await saveUser(user); }${reduce}
+}`;
+
+Bdd(feature)
+  .scenario('Overriding reduce in an OptimisticSync is an error.')
+  .given('An action that extends OptimisticSync {Where}, and overrides reduce.')
+  .when('The code is linted.')
+  .then('There is an error in reduce.')
+  .example(val('Where', 'directly'), val('Type information', true))
+  .example(val('Where', 'directly'), val('Type information', false))
+  .example(val('Where', 'through a base class of the same file'), val('Type information', true))
+  .example(val('Where', 'through a base class of the same file'), val('Type information', false))
+  .run(async (ctx) => {
+    const direct = ctx.example.val('Where') === 'directly';
+    const base = direct ? '' : `
+abstract class Sync<St, T> extends OptimisticSync<St, T> {}
+`;
+    const code = `${prelude}${base}${optimisticSync('SaveUser', direct ? 'OptimisticSync' : 'Sync', `
+  async reduce(): Promise<null> { await saveUser(this.user); return null; }`)}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.typeErrors).toEqual([]);
+    expect(result.messages.map((m) => m.text)).toEqual(['reduce']);
+    expect(result.messages[0].message).toContain('Don\'t override `reduce` in an `OptimisticSync`');
+  });
+
+Bdd(feature)
+  .scenario('An OptimisticSync that does not override reduce is fine.')
+  .given('An OptimisticSync that does not override reduce.')
+  .when('The code is linted.')
+  .then('There are no errors.')
+  .run(async (_) => {
+    const code = `${prelude}${optimisticSync('SaveUser', 'OptimisticSync', '')}
 `;
     const result = lint(rule, code);
     expect(result.typeErrors).toEqual([]);

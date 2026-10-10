@@ -1,5 +1,5 @@
 import { Store } from "./Store";
-import { StoreException } from "./StoreException";
+import { AbortDispatchException, StoreException } from "./StoreException";
 import { UserException } from "./UserException";
 
 /**
@@ -31,10 +31,47 @@ export type AsyncReducer<St> = Promise<((state: St) => (St | null)) | null>;
 
 export type AsyncReducerResult<St> = ((state: St) => (St | null)) | null;
 
-// Interface for the checkInternet property.
-interface CheckInternetOptions {
-  /** Whether to show a dialog when no internet connection is available. */
-  dialog: boolean;
+// The options of the `checkInternet` property: `dialog`, or `abort`. Setting `dialog` together
+// with `abort: true` makes the dispatch throw. Note the literal type `abort: true` can't be used
+// here, because TypeScript widens `checkInternet = { abort: true }` to `{ abort: boolean }`.
+type CheckInternetOptions =
+  | {
+    /** Whether to show a dialog when no internet connection is available. */
+    dialog: boolean,
+    abort?: boolean,
+  }
+  | {
+    /** Whether to abort the action silently when no internet connection is available. */
+    abort: boolean,
+    dialog?: boolean,
+  };
+
+/**
+ * The values of the `poll` property of an action that uses polling.
+ * See the documentation of `KissAction.poll` for details.
+ */
+export enum Poll {
+  /**
+   * Start polling.
+   * If polling is already active, does nothing.
+   * Otherwise, runs the action immediately and starts periodic polling.
+   */
+  start = 'start',
+
+  /** Stop polling (cancels the timer and does not run the action). */
+  stop = 'stop',
+
+  /**
+   * Run the action immediately and restart polling from now.
+   * If polling is not active, behaves like `Poll.start`.
+   */
+  runNowAndRestart = 'runNowAndRestart',
+
+  /**
+   * Run the action once immediately.
+   * Does not start, stop, cancel, or restart polling.
+   */
+  once = 'once',
 }
 
 /** Base action. All other actions should extend this one. */
@@ -66,17 +103,20 @@ export abstract class KissAction<St> {
    * 
    * For example, the default `before()` method checks if the `checkInternet` property was set.
    * If it was set, it checks if the device has an internet connection. If the connection is not
-   * present, it throws a `UserException`, preventing the reducer from running.
+   * present, it throws a `UserException` (or an `AbortDispatchException`, with
+   * `checkInternet = { abort: true }`), preventing the reducer from running.
    *
    * Note the `after()` method always runs, even if the `before()` method throws an exception.
    */
   before(): void | Promise<void> {
     if (this.checkInternet) {
-      const dialog = this.checkInternet.dialog;
+      const { dialog, abort } = this.checkInternet;
 
-      return this.hasInternet().then((isConnected: boolean) => {
+      return this._hasInternet().then((isConnected: boolean) => {
         if (!isConnected) {
-          if (dialog) {
+          if (abort) {
+            throw new AbortDispatchException('No Internet');
+          } else if (dialog) {
             throw new UserException("Please, verify your connection.").withTitle("There is no Internet");
           } else {
             throw new UserException("No Internet").withDialog(false);
@@ -129,6 +169,9 @@ export abstract class KissAction<St> {
   * 
   * Note: Instead of adding this to every action, you can create a base class 
   * that extends `KissAction` and implement the `hasInternet()` method there.
+  *
+  * Note: This method is not called while the internet connection is being simulated with
+  * `internetOnOffSimulation` or `store.forceInternetOnOffSimulation`.
   */
   protected hasInternet(): Promise<boolean> {
 
@@ -136,6 +179,29 @@ export abstract class KissAction<St> {
     // `navigator` but no `navigator.onLine`), assume connected.
     const hasOnLine = typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean';
     return Promise.resolve(hasOnLine ? navigator.onLine : true);
+  }
+
+  /**
+   * If you are running tests, you can override this getter to simulate the internet connection
+   * as on or off, for actions that use `checkInternet` or `unlimitedRetryCheckInternet`:
+   *
+   * - Return `true` if there IS internet.
+   * - Return `false` if there is NO internet.
+   * - Return `null` to use the real internet connection status (default).
+   *
+   * If you want to change this for all actions that check the internet, you can do that at
+   * the store level:
+   *
+   * ```ts
+   * store.forceInternetOnOffSimulation = () => false;
+   * ```
+   *
+   * Using `store.forceInternetOnOffSimulation` is also useful during tests, for testing what
+   * happens when you have no internet connection. And since it's tied to the store, it
+   * automatically resets when the store is recreated.
+   */
+  get internetOnOffSimulation(): boolean | null {
+    return this.store.forceInternetOnOffSimulation();
   }
 
   /**
@@ -180,10 +246,35 @@ export abstract class KissAction<St> {
   };
 
   /**
-   * If the action should check for internet connection or not.
-   * - If `checkInternet = { dialog: true }`, throw a UserException with a dialog.
-   * - If `checkInternet = { dialog: false }`, throw a UserException without a dialog.
+   * If the action should check for internet connection or not. If there is no internet:
+   *
+   * - If `checkInternet = { dialog: true }`, the action fails with a `UserException`, and
+   *   shows a dialog to the user with title "There is no Internet", and content "Please, verify
+   *   your connection.".
+   *
+   * - If `checkInternet = { dialog: false }`, the action fails with a `UserException`, without
+   *   a dialog. You can still display some information in your components, since the action
+   *   failed: `if (isFailed(LoadText)) return <p>No Internet connection</p>;`
+   *
+   * - If `checkInternet = { abort: true }`, the action aborts silently, as if it had never been
+   *   dispatched. It throws an `AbortDispatchException`, so it doesn't fail, and doesn't show
+   *   any errors. Its status has `isDispatchAborted: true`.
+   *
    * - If `checkInternet` is undefined/null, don't check for internet.
+   *
+   * For example:
+   *
+   * ```ts
+   * class LoadText extends KissAction<State> {
+   *   checkInternet = { abort: true };
+   *
+   *   async reduce() { ... }
+   * }
+   * ```
+   *
+   * IMPORTANT: It only checks if the internet is on or off on the device, not if the internet
+   * provider is really providing the service or if the server is available. So, it is possible
+   * that the check succeeds but internet requests still fail.
    * 
    * The default is checking for internet connectivity with `navigator.onLine`. To customize how 
    * internet connectivity is checked, you may override the `hasInternet()` method:
@@ -203,6 +294,21 @@ export abstract class KissAction<St> {
    * 
    * By default, the `hasInternet()` method uses `navigator.onLine` in web environments 
    * and returns true for other environments.
+   *
+   * Notes:
+   * - The internet check runs in the default `before()` method. If you override `before()`,
+   *   you must call `super.before()` (and await it), or the internet won't be checked.
+   * - It can be combined with `sequential`. The internet check then happens when the action
+   *   gets its turn in the queue. Note that with `{ abort: true }`, aborting the action releases
+   *   the queue, so the next action runs normally (unless `discardQueueOnError()` returns
+   *   `true` for the `AbortDispatchException`).
+   * - With `retry`, the internet is only checked once, since `before()` is not retried. So,
+   *   `retry` plus `checkInternet` doesn't retry when there is no internet. It only retries if
+   *   there IS internet but the action fails for some other reason. To retry indefinitely until
+   *   internet is available, use `unlimitedRetryCheckInternet` instead.
+   * - It should not be combined with `unlimitedRetryCheckInternet`, which already checks the
+   *   internet. Doing so throws a `StoreException`.
+   * - Setting both `dialog` and `abort: true` makes the dispatch throw a `StoreException`.
    */
   declare checkInternet?: CheckInternetOptions;
 
@@ -421,6 +527,10 @@ export abstract class KissAction<St> {
    * ```
    *
    * Note: If `abortDispatch()` throws an error, the error is logged and the action is aborted.
+   *
+   * When the dispatch is aborted, `dispatchAndWait` returns a status with
+   * `isDispatchAborted: true`. Note `abortDispatch()` must decide synchronously. To abort the
+   * action after some ASYNC check, throw an `AbortDispatchException` from `before` instead.
    */
   abortDispatch(): boolean {
     return false;
@@ -573,6 +683,12 @@ export abstract class KissAction<St> {
    *   check, and doesn't take the key.
    * - It should not be used in an `OptimisticCommand`, which is already non-reentrant.
    *   Dispatching it with `nonReentrant` throws a `StoreException`.
+   * - It should not be combined with `throttle` or `fresh`. Doing so throws a `StoreException`.
+   * - It should not be combined with `unlimitedRetryCheckInternet`, which is already
+   *   non-reentrant. Doing so throws a `StoreException`.
+   * - It can be combined with `sequential`. Duplicates are then dropped while the original
+   *   action is waiting in the queue or running, and the actions that do get through still
+   *   run one at a time.
    */
   nonReentrant: boolean = false;
 
@@ -643,6 +759,1442 @@ export abstract class KissAction<St> {
   _nonReentrantKey: any = undefined;
 
   /**
+   * For Kiss internal use only.
+   * How many times `store.clearInternalActionProps()` had been called when this action was
+   * dispatched. If it's called again later, the action stops retrying.
+   */
+  _clearCountAtDispatch: number = 0;
+
+  /**
+   * Set `debounce` to delay the execution of the action until after a certain period of
+   * inactivity. Each time the action is dispatched, the period of inactivity (or wait time)
+   * is reset.
+   *
+   * The action will only run its reducer after it stops being dispatched for the duration of
+   * the wait time. Debouncing is useful in situations where you want to ensure that an action
+   * does not run too frequently, and only runs after some "quiet time".
+   *
+   * For example, it's commonly used for handling input validation in text fields, or for
+   * searching while the user types, where you might not want to run the action every time the
+   * user presses a key, but rather after they've stopped typing for a certain amount of time.
+   *
+   * Set `debounce` to `true` to use the default wait time of 333 milliseconds (1/3 of a
+   * second), or set it to the wait time you want, in milliseconds:
+   *
+   * ```ts
+   * class SearchText extends KissAction<State> {
+   *   constructor(readonly searchTerm: string) { super(); }
+   *
+   *   debounce = 1000; // Here!
+   *
+   *   async reduce() {
+   *     let result = await loadJson('https://example.com/?q=', this.searchTerm);
+   *     return (state: State) => state.copy({ searchResult: result });
+   *   }
+   * }
+   * ```
+   *
+   * The wait time starts after the `before()` method finishes, and the action is in progress
+   * while it waits. So, `isWaiting(SearchText)` is `true` during the wait time.
+   *
+   * When another action with the same lock is dispatched during the wait time, the previous
+   * action finishes right away, without running its reducer (it doesn't change the state, and
+   * doesn't fail). Its `before()` and `after()` methods still run. Only the last action runs
+   * its reducer, after the wait time.
+   *
+   * To turn off a debounce that a base class turned on, use `debounce = false`. Note: For
+   * TypeScript to accept that, the base class must declare it as `debounce: number | boolean`.
+   *
+   * ## Advanced usage
+   *
+   * The debounce is, by default, based on the action class. This means it will reset the
+   * debounce period when another action of the same class is dispatched within the debounce
+   * period. In other words, the class is the "lock". Note subclasses are different classes,
+   * so they don't debounce each other. If you want to debounce based on a different lock,
+   * you can override the `debounceLockBuilder()` method. For example, here we debounce two
+   * different actions based on the same lock:
+   *
+   * ```ts
+   * class MyAction1 extends KissAction<State> {
+   *   debounce = true;
+   *   debounceLockBuilder() { return 'myLock'; }
+   *   ...
+   * }
+   *
+   * class MyAction2 extends KissAction<State> {
+   *   debounce = true;
+   *   debounceLockBuilder() { return 'myLock'; }
+   *   ...
+   * }
+   * ```
+   *
+   * Another example is to debounce based on some field of the action:
+   *
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   debounce = true;
+   *   constructor(readonly lock: string) { super(); }
+   *   debounceLockBuilder() { return this.lock; }
+   *   ...
+   * }
+   * ```
+   *
+   * To remove all debounce locks at once, call `removeAllDebounceLocks()`. Alternatively,
+   * `store.clearInternalActionProps()` removes them together with the information kept for the
+   * other action features, which is useful during logout.
+   *
+   * Notes:
+   * - It should not be combined with `retry`, nor used in an `OptimisticCommand`.
+   *   Dispatching it with those throws a `StoreException`.
+   * - It works with both SYNC and ASYNC reducers, but the action is always ASYNC, since it
+   *   waits for the debounce period. So, it can't be dispatched with `dispatchSync`.
+   *   Doing so throws a `StoreException`.
+   * - It should not be combined with `sequential`, because the debounce period would only
+   *   start when the action gets its turn in the queue, which defeats the purpose of
+   *   debouncing. Doing so throws a `StoreException`.
+   * - An invalid value (for example, a negative number) makes the dispatch throw a
+   *   `StoreException`.
+   */
+  declare debounce?: number | boolean;
+
+  /**
+   * The default lock for debouncing is the action class, meaning it will debounce the dispatch
+   * of actions of the same class. Override this method to customize the lock to any value.
+   * For example, you can return a string, and actions with the same lock value will debounce
+   * each other:
+   *
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   debounce = true;
+   *   debounceLockBuilder() { return 'myLock'; }
+   *   ...
+   * }
+   * ```
+   *
+   * Locks are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents. For example, `[this.constructor, this.userId]` is a valid lock.
+   */
+  debounceLockBuilder(): any {
+    return this.constructor;
+  }
+
+  /**
+   * Removes all debounce locks. Actions that are still waiting for their debounce period
+   * finish right away, without running their reducer.
+   * You generally don't need to call this method.
+   */
+  removeAllDebounceLocks(): void {
+    this.store._removeAllDebounceLocks();
+  }
+
+  /**
+   * For Kiss internal use only.
+   * The debounce wait time in milliseconds, or `null` if the action doesn't debounce.
+   */
+  get _debounceMillis(): number | null {
+    if (this.debounce === true) return 333;
+    if (typeof this.debounce === 'number') return this.debounce;
+    return null;
+  }
+
+  /**
+   * Set `throttle` to make sure the action will be dispatched at most once in the specified
+   * throttle period. It acts as a simple rate limit, so the action does not run too often.
+   *
+   * If an action is dispatched multiple times within a throttle period, only the first dispatch
+   * runs and the others are aborted. After the throttle period has passed, the next dispatch is
+   * allowed to run again, which starts a new throttle period.
+   *
+   * This is useful when an action may be triggered many times in a short time, for example by
+   * fast user input or component re-renders, but you only want it to run from time to time
+   * instead of on every dispatch.
+   *
+   * For example, if you have a component that needs to load some information, you can dispatch
+   * the loading action when the component mounts, and specify a throttle period so that it does
+   * not reload that information too often:
+   *
+   * ```tsx
+   * function MyScreen() {
+   *   useDispatch({ onMount: (store) => store.dispatch(new LoadInformation()) }); // Here!
+   *   const information = useSelect((state: State) => state.information);
+   *
+   *   return <div>Information: {information}</div>;
+   * }
+   * ```
+   *
+   * and then:
+   *
+   * ```ts
+   * class LoadInformation extends KissAction<State> {
+   *
+   *   throttle = 5000;
+   *
+   *   async reduce() {
+   *     let information = await loadInformation();
+   *     return (state: State) => state.copy({ information });
+   *   }
+   * }
+   * ```
+   *
+   * The `throttle` value is given in milliseconds. Set it to `true` to use the default of 1000
+   * milliseconds (1 second):
+   *
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   throttle = true; // Here!
+   *   ...
+   * }
+   * ```
+   *
+   * You can also override `ignoreThrottle` if you want the action to ignore the throttle period
+   * under some conditions. For example, suppose you want the action to provide a flag called
+   * `force` that will ignore the throttle period:
+   *
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   constructor(readonly force = false) { super(); }
+   *
+   *   get ignoreThrottle() { return this.force; } // Here!
+   *
+   *   throttle = 500;
+   *   ...
+   * }
+   * ```
+   *
+   * To turn off a throttle that a base class turned on, use `throttle = false`. Note: For
+   * TypeScript to accept that, the base class must declare it as `throttle: number | boolean`.
+   *
+   * ## If the action fails
+   *
+   * The throttle lock is NOT removed if the action fails. This means that if the action throws
+   * and you dispatch it again within the throttle period, it will not run a second time.
+   *
+   * If you want, you can specify a different behavior by making `removeThrottleLockOnError`
+   * true, like this:
+   *
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   throttle = 500;
+   *   removeThrottleLockOnError = true; // Here!
+   *   ...
+   * }
+   * ```
+   *
+   * Now, if the action fails, it will remove the lock and allow the action to be dispatched
+   * again right away. If you need more control, you can instead call `removeThrottleLock()`
+   * yourself, for example in the `after()` method:
+   *
+   * ```ts
+   * after() {
+   *   if (this.status.originalError instanceof SomeSpecificError) this.removeThrottleLock();
+   * }
+   * ```
+   *
+   * ## Advanced usage
+   *
+   * The throttle is, by default, based on the action class. This means it will throttle an
+   * action if another action of the same class was previously dispatched within the throttle
+   * period. In other words, the class is the "lock". Note subclasses are different classes,
+   * so they don't throttle each other. If you want to throttle based on a different lock, you
+   * can override the `throttleLockBuilder()` method. For example, here we throttle two
+   * different actions based on the same lock:
+   *
+   * ```ts
+   * class MyAction1 extends KissAction<State> {
+   *   throttle = 500;
+   *   throttleLockBuilder() { return 'myLock'; }
+   *   ...
+   * }
+   *
+   * class MyAction2 extends KissAction<State> {
+   *   throttle = 500;
+   *   throttleLockBuilder() { return 'myLock'; }
+   *   ...
+   * }
+   * ```
+   *
+   * Another example is to throttle based on some field of the action:
+   *
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   throttle = 500;
+   *   constructor(readonly lock: string) { super(); }
+   *   throttleLockBuilder() { return this.lock; }
+   *   ...
+   * }
+   * ```
+   *
+   * Note: Expired locks are removed, to prevent memory leaks.
+   *
+   * To remove all throttle locks at once, call `removeAllThrottleLocks()`. Alternatively,
+   * `store.clearInternalActionProps()` removes them together with the information kept for the
+   * other action features, which is useful during logout.
+   *
+   * Notes:
+   * - The throttle period starts when the action is dispatched, not when it finishes.
+   * - It works with both SYNC and ASYNC actions, and can be combined with `retry`,
+   *   `checkInternet` and `debounce`.
+   * - It should not be combined with `nonReentrant` or `fresh`, nor used in an
+   *   `OptimisticCommand`. Dispatching it with those throws a `StoreException`.
+   * - It can be combined with `sequential`. Note the throttle period then starts when the
+   *   action is dispatched, and not when it gets its turn in the queue.
+   * - An invalid value (for example, a negative number) makes the dispatch throw a
+   *   `StoreException`.
+   */
+  declare throttle?: number | boolean;
+
+  /**
+   * Override this getter if you want the action to ignore the throttle period under some
+   * conditions. When it returns `true`, the action runs even inside the throttle period, and
+   * starts a new throttle period. For example:
+   *
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   constructor(readonly force = false) { super(); }
+   *   get ignoreThrottle() { return this.force; } // Here!
+   *   throttle = 500;
+   *   ...
+   * }
+   * ```
+   */
+  get ignoreThrottle(): boolean {
+    return false;
+  }
+
+  /**
+   * The throttle lock is NOT removed if the action fails. This means that if the action throws
+   * and you dispatch it again within the throttle period, it will not run a second time.
+   * Set `removeThrottleLockOnError` to `true` so that, if the action fails, it removes the lock
+   * and allows the action to be dispatched again right away.
+   */
+  declare removeThrottleLockOnError?: boolean;
+
+  /**
+   * The default lock for throttling is the action class, meaning it will throttle the dispatch
+   * of actions of the same class. Override this method to customize the lock to any value.
+   * For example, you can return a string, and actions with the same lock value will throttle
+   * each other:
+   *
+   * ```ts
+   * class MyAction extends KissAction<State> {
+   *   throttle = 500;
+   *   throttleLockBuilder() { return 'myLock'; }
+   *   ...
+   * }
+   * ```
+   *
+   * Locks are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents. For example, `[this.constructor, this.userId]` is a valid lock.
+   *
+   * Note: Expired locks are removed, to prevent memory leaks.
+   */
+  throttleLockBuilder(): any {
+    return this.constructor;
+  }
+
+  /**
+   * Removes the throttle lock of this action, allowing an action with the same lock to be
+   * dispatched again right away. You generally don't need to call this method.
+   */
+  removeThrottleLock(): void {
+    this.store._removeThrottleLock(this.throttleLockBuilder());
+  }
+
+  /**
+   * Removes all throttle locks, allowing all actions to be dispatched again right away.
+   * You generally don't need to call this method.
+   */
+  removeAllThrottleLocks(): void {
+    this.store._removeAllThrottleLocks();
+  }
+
+  /**
+   * For Kiss internal use only.
+   * The throttle period in milliseconds, or `null` if the action doesn't throttle, or if its
+   * `throttle` value is invalid (in which case the dispatch throws).
+   */
+  get _throttleMillis(): number | null {
+    const throttle: any = this.throttle;
+    if (throttle === true) return 1000;
+    if (typeof throttle === 'number' && Number.isFinite(throttle) && throttle >= 0) return throttle;
+    return null;
+  }
+
+  /**
+   * Set `fresh` to treat the result of an action as fresh for a given time period. While the
+   * information is fresh, repeated dispatches of the same action (or other actions with the
+   * same "fresh-key") are aborted, because that information is assumed to still be valid in
+   * the state.
+   *
+   * After the fresh period ends, the information is considered "stale". The next dispatch of
+   * an action with the same fresh-key is allowed to run again, update the state, and start a
+   * new fresh period.
+   *
+   * In short, `fresh` helps you avoid reloading the same information too often.
+   *
+   * ## Basic usage
+   *
+   * This is often used for actions that load information from a server. You can think of the
+   * fresh period as the time during which the loaded data is still good to use. After that
+   * time, a new dispatch will reload it.
+   *
+   * A simple example in a component that loads information when it mounts:
+   *
+   * ```tsx
+   * function MyScreen() {
+   *   useDispatch({ onMount: (store) => store.dispatch(new LoadInformation()) }); // Here!
+   *   const information = useSelect((state: State) => state.information);
+   *
+   *   return <div>Information: {information}</div>;
+   * }
+   * ```
+   *
+   * Use `fresh` on the loading action, so that it does not run again while its data is still
+   * fresh:
+   *
+   * ```ts
+   * class LoadInformation extends KissAction<State> {
+   *
+   *   fresh = true; // Here!
+   *
+   *   async reduce() {
+   *     let information = await loadInformation();
+   *     return (state: State) => state.copy({ information });
+   *   }
+   * }
+   * ```
+   *
+   * ## How fresh-keys work
+   *
+   * - Dispatched actions with different fresh-keys are not affected.
+   *
+   * - Dispatched actions with the same fresh-key:
+   *   - Are aborted while the data is fresh (the fresh period has not passed).
+   *   - Run again when the data is stale (after the fresh period has passed).
+   *
+   * In other words, freshness is tracked per fresh-key. Any two dispatches that share the same
+   * fresh-key share the same fresh period.
+   *
+   * By default, the key is based on:
+   * - The action class, and
+   * - The value returned by `freshKeyParams()`.
+   *
+   * In the previous example, the fresh-key of the `LoadInformation` action is simply the
+   * action class, since it did not override `freshKeyParams()`. Note subclasses are different
+   * classes, so they don't share the fresh period.
+   *
+   * If you dispatch `LoadInformation` many times in a short period, only the first one runs
+   * while the data is fresh. The others are aborted. Later, when the fresh period ends, the
+   * next dispatch will run the action again.
+   *
+   * The default `freshKeyParams()` returns `null`, so the key is only the action class. This
+   * means all actions of the same class share the same fresh period, and different action
+   * classes do not affect each other.
+   *
+   * ### Using `freshKeyParams()` to separate instances
+   *
+   * Many actions need a separate fresh period per id, url, or some other field. In that case,
+   * override `freshKeyParams()`. Actions of the same class but with different
+   * `freshKeyParams()` values do not affect each other.
+   *
+   * ```ts
+   * class LoadUserCart extends KissAction<State> {
+   *   fresh = true;
+   *   constructor(readonly userId: string) { super(); }
+   *
+   *   // The fresh-key parameter here is the `userId`, which means
+   *   // each different `(LoadUserCart, userId)` has its own fresh period.
+   *   freshKeyParams() { return this.userId; }
+   *   ...
+   * }
+   * ```
+   *
+   * You can also return more than one field by using an array:
+   *
+   * ```ts
+   * // Each different `(LoadUserCart, userId, cartId)` has its own fresh period.
+   * freshKeyParams() { return [this.userId, this.cartId]; }
+   * ```
+   *
+   * ## Configuring how long data stays fresh
+   *
+   * The `fresh` value is given in milliseconds. Set it to `true` to use the default of 1000
+   * milliseconds (1 second).
+   *
+   * To keep the data fresh for 5 seconds:
+   *
+   * ```ts
+   * class LoadInformation extends KissAction<State> {
+   *   fresh = 5000; // Here!
+   *   ...
+   * }
+   * ```
+   *
+   * To turn off a fresh period that a base class turned on, use `fresh = false`. Note: For
+   * TypeScript to accept that, the base class must declare it as `fresh: number | boolean`.
+   *
+   * ## Forcing the action to run
+   *
+   * Sometimes you want to run the action even if the data is still fresh. For that, you can
+   * override `ignoreFresh`. When `ignoreFresh` is `true`, the action always runs, and also
+   * starts a new fresh period for its key.
+   *
+   * A common pattern is to add a `force` flag:
+   *
+   * ```ts
+   * class LoadInformation extends KissAction<State> {
+   *   constructor(readonly force = false) { super(); }
+   *
+   *   get ignoreFresh() { return this.force; } // Here!
+   *
+   *   fresh = 5000;
+   *   ...
+   * }
+   * ```
+   *
+   * With this setup:
+   * - `new LoadInformation()` runs only when its key is stale.
+   * - `new LoadInformation(true)` always runs, and also refreshes the key.
+   *
+   * ## When the action fails
+   *
+   * If an action that uses `fresh` throws an error, it behaves as if that failing run did not
+   * make the key fresh. In practice:
+   *
+   * - The key the action made fresh is removed, so you can dispatch the action again right
+   *   away. This is also true for a forced run (`ignoreFresh`): if it fails, the key becomes
+   *   stale, even if it was fresh before the forced run.
+   * - If another action using the same key started after this one (for example, a forced run),
+   *   that newer fresh period is kept as is.
+   *
+   * This means:
+   * - Errors never extend the fresh period by themselves.
+   * - A failure from an older action does not cancel a newer successful action that used
+   *   the same fresh-key.
+   *
+   * You can also control this by hand:
+   *
+   * - Call `removeFreshKey()` from your action (for example inside `reduce()` or `before()`)
+   *   to remove the key used by that action, so the next dispatch for that key can run
+   *   immediately.
+   * - Call `removeAllFreshKeys()` from your action to clear all keys, and let all actions run
+   *   again as if nothing was fresh. This is probably useful during logout or similar
+   *   scenarios. Alternatively, `store.clearInternalActionProps()` clears them together with
+   *   the information kept for the other action features.
+   *
+   * Expired keys are removed automatically, so you usually do not need to worry about old
+   * entries.
+   *
+   * ## Using `computeFreshKey()` to share keys across actions
+   *
+   * If you want different action classes to share the same key, override `computeFreshKey()`.
+   * This is useful when several actions read or write the same logical resource, and should
+   * respect the same fresh period.
+   *
+   * For example, two actions that work on the same user data:
+   *
+   * ```ts
+   * class LoadUserProfile extends KissAction<State> {
+   *   fresh = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   computeFreshKey() { return this.userId; } // Key is only userId
+   *   ...
+   * }
+   *
+   * class LoadUserSettings extends KissAction<State> {
+   *   fresh = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   computeFreshKey() { return this.userId; } // Same key as above
+   *   ...
+   * }
+   * ```
+   *
+   * Here:
+   * - `new LoadUserProfile('123')` and `new LoadUserSettings('123')` share one fresh period,
+   *   because they use the same key.
+   * - Any value can be a key, for example an enum value or a constant string.
+   *
+   * Notes:
+   * - The fresh period starts when the action is dispatched, not when it finishes.
+   * - If `abortDispatch()` returns `true`, the action is aborted before the fresh check, and
+   *   doesn't make its key fresh.
+   * - It works with both SYNC and ASYNC actions, and can be combined with `retry`,
+   *   `checkInternet` and `debounce`. With `retry`, the key is only removed if the last
+   *   attempt fails.
+   * - It should not be combined with `nonReentrant` or `throttle`, nor used in an
+   *   `OptimisticCommand`. Dispatching it with those throws a `StoreException`.
+   * - It can be combined with `sequential`. Note the fresh period then starts when the action
+   *   is dispatched, and not when it gets its turn in the queue. If the action is discarded
+   *   from the queue (see `discardQueueOnError()`), its key is removed, since it never ran.
+   * - An invalid value (for example, a negative number) makes the dispatch throw a
+   *   `StoreException`.
+   */
+  declare fresh?: number | boolean;
+
+  /**
+   * Override this getter if you want the action to run even while its data is still fresh.
+   * When it returns `true`, the action always runs, and also starts a new fresh period for
+   * its key. For example:
+   *
+   * ```ts
+   * class LoadInformation extends KissAction<State> {
+   *   constructor(readonly force = false) { super(); }
+   *   get ignoreFresh() { return this.force; } // Here!
+   *   fresh = 5000;
+   *   ...
+   * }
+   * ```
+   *
+   * Note: If a forced run fails, its key becomes stale, even if it was fresh before.
+   */
+  get ignoreFresh(): boolean {
+    return false;
+  }
+
+  /**
+   * By default the fresh-key is based on the action class. For example, all actions of class
+   * `LoadText` share the same freshness:
+   *
+   * ```ts
+   * // This action runs.
+   * dispatch(new LoadText('https://example.com'));
+   *
+   * // This does NOT run, because the previous LoadText is still fresh.
+   * dispatch(new LoadText('https://another-url.com'));
+   * ```
+   *
+   * You can override `freshKeyParams()` so that actions of the SAME CLASS but with different
+   * parameters do not affect each other's freshness. In this example, the `url` field becomes
+   * part of the fresh-key:
+   *
+   * ```ts
+   * class LoadText extends KissAction<State> {
+   *   fresh = true;
+   *   constructor(readonly url: string) { super(); }
+   *
+   *   // The fresh-key includes the url.
+   *   freshKeyParams() { return this.url; }
+   *   ...
+   * }
+   * ```
+   *
+   * Now, dispatching two `LoadText` actions with different `url` values allows both of them
+   * to run, because each one uses a different fresh-key:
+   *
+   * ```ts
+   * // This action runs.
+   * dispatch(new LoadText('https://example.com'));
+   *
+   * // This also runs, because the url is different, so it has a different fresh-key.
+   * dispatch(new LoadText('https://another-url.com'));
+   * ```
+   *
+   * ## In more detail
+   *
+   * The default fresh-key, as returned by `computeFreshKey()`, combines the action class with
+   * the value returned by `freshKeyParams()`.
+   *
+   * Most of the time you override `freshKeyParams()` to return one field, or an array of
+   * fields:
+   *
+   * ```ts
+   * // Fresh-key is the action class + url
+   * freshKeyParams() { return this.url; }
+   *
+   * // Fresh-key is the action class + userId + cartId
+   * freshKeyParams() { return [this.userId, this.cartId]; }
+   * ```
+   *
+   * When `freshKeyParams()` returns `null`, the key is just the action class. In that case all
+   * actions of that class share the same freshness.
+   *
+   * Params are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents. For example, `[1, 'A']` and `{ id: 1 }` are valid params.
+   *
+   * See also:
+   * - `computeFreshKey()` if you want full control over how the key is built.
+   */
+  freshKeyParams(): any {
+    return null;
+  }
+
+  /**
+   * In most cases you want to use the default fresh-key computation, which combines the
+   * action class with the value returned by `freshKeyParams()`:
+   *
+   * ```ts
+   * computeFreshKey() { return [this.constructor, this.freshKeyParams()]; }
+   * ```
+   *
+   * However, if you want different action classes to share the same fresh period, you must
+   * override `computeFreshKey()` and return any key you want. Some examples:
+   *
+   * ```ts
+   * // The fresh-key is only the url, without the action class.
+   * computeFreshKey() { return this.url; }
+   *
+   * // The fresh-key is a pair of values, without the action class.
+   * computeFreshKey() { return [this.userId, this.cartId]; }
+   *
+   * // The fresh-key is a constant string.
+   * computeFreshKey() { return 'myKey'; }
+   *
+   * // The fresh-key is an enum value.
+   * computeFreshKey() { return MyFreshnessKey.myKey; }
+   * ```
+   *
+   * For example, suppose you have two different actions, and you want them to share the same
+   * fresh-key:
+   *
+   * ```ts
+   * class LoadUserProfile extends KissAction<State> {
+   *   fresh = true;
+   *   constructor(readonly userId: string) { super(); }
+   *
+   *   // The key is the userId only, without the action class.
+   *   computeFreshKey() { return this.userId; }
+   *   ...
+   * }
+   *
+   * class LoadUserSettings extends KissAction<State> {
+   *   fresh = true;
+   *   constructor(readonly userId: string) { super(); }
+   *
+   *   // The key is the userId only, without the action class.
+   *   computeFreshKey() { return this.userId; }
+   *   ...
+   * }
+   * ```
+   *
+   * With this setup, if you dispatch `new LoadUserProfile('123')`, then
+   * `new LoadUserSettings('123')` will be aborted if dispatched within the fresh period of the
+   * first action.
+   *
+   * Keys are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents.
+   *
+   * See also:
+   * - `freshKeyParams()` when you want to differentiate fresh-keys by some of the fields of
+   *   the action.
+   */
+  computeFreshKey(): any {
+    return [this.constructor, this.freshKeyParams()];
+  }
+
+  /**
+   * Removes the fresh-key used by this action, allowing an action using the same fresh-key to
+   * be dispatched and run again, right away. Calling this method will make the action stale
+   * immediately. You generally do not need to call this method, but if you do, use it only
+   * from your action's `reduce()` or `before()` methods.
+   */
+  removeFreshKey(): void {
+    this.store._removeFreshKey(this.computeFreshKey());
+  }
+
+  /**
+   * Removes all fresh-keys, allowing all actions to be dispatched and run again right away.
+   * Calling this method will make all actions stale immediately. You generally do not need to
+   * call this method, but if you do, use it only from your action's `reduce()` or `before()`
+   * methods.
+   */
+  removeAllFreshKeys(): void {
+    this.store._removeAllFreshKeys();
+  }
+
+  /**
+   * For Kiss internal use only.
+   * The fresh period in milliseconds, or `null` if the action doesn't use `fresh`, or if its
+   * `fresh` value is invalid (in which case the dispatch throws).
+   */
+  get _freshMillis(): number | null {
+    const fresh: any = this.fresh;
+    if (fresh === true) return 1000;
+    if (typeof fresh === 'number' && Number.isFinite(fresh) && fresh >= 0) return fresh;
+    return null;
+  }
+
+  /**
+   * Set `sequential` to `true` to make actions run one at a time, in the exact order they were
+   * dispatched. For example:
+   *
+   * ```ts
+   * class SaveItem extends KissAction<State> {
+   *   sequential = true;
+   *   constructor(readonly item: Item) { super(); }
+   *
+   *   async reduce() {
+   *     await fetch('https://myapi.com/items', { method: 'PUT', body: JSON.stringify(this.item) });
+   *     return null;
+   *   }
+   * }
+   * ```
+   *
+   * All actions with `sequential = true` share a single FIFO queue (first in, first out). When
+   * an action is dispatched, it takes its place at the end of the queue, and then waits until
+   * every action dispatched before it has finished. Only then does it run its `before`,
+   * `reduce` and `after` methods.
+   *
+   * This works across all sequential action classes: if `SaveItem` and `DeleteItem` are both
+   * sequential, they wait for each other. Two actions of the same class also enter the queue
+   * and run one after the other.
+   *
+   * The queue position is reserved synchronously, at the moment `dispatch` is called. This
+   * guarantees the run order is the dispatch order, even if the actions are dispatched from
+   * different places or in quick succession.
+   *
+   * When an action finishes, the next action in the queue is released. This happens regardless
+   * of how the action finished:
+   *
+   * - It completed successfully.
+   * - It threw an error (from `before` or `reduce`).
+   * - It was aborted by throwing an `AbortDispatchException` (from `before` or `reduce`).
+   *
+   * Note that when the dispatch is aborted (for example, when `abortDispatch()` returns `true`),
+   * the action never enters the queue.
+   *
+   * ## Keys: multiple independent queues
+   *
+   * By default, all sequential actions share ONE queue, whose key is `null`. If you want
+   * independent queues, override `sequentialKeyParams()` to return any value. Actions with the
+   * same key wait for each other, while actions with different keys run in parallel. For
+   * example, here each user has its own queue, so the actions of different users don't block
+   * each other:
+   *
+   * ```ts
+   * class SaveUser extends KissAction<State> {
+   *   sequential = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   sequentialKeyParams() { return this.userId; }
+   *   ...
+   * }
+   *
+   * class DeleteUser extends KissAction<State> {
+   *   sequential = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   sequentialKeyParams() { return this.userId; }
+   *   ...
+   * }
+   * ```
+   *
+   * With this setup, `SaveUser('A')` and `DeleteUser('A')` run one after the other, but
+   * `SaveUser('A')` and `SaveUser('B')` may run at the same time.
+   *
+   * Keys are removed from memory as soon as their queue becomes empty.
+   *
+   * ## Discarding the queue when an action fails
+   *
+   * Actions are often queued because each one depends on the previous ones. For example, an
+   * action that creates an item, followed by one that updates it. In that case, if the first
+   * action fails, running the rest makes no sense. Override `discardQueueOnError()` to return
+   * `true` when you want a failure to abort all the actions that are waiting behind the failed
+   * one:
+   *
+   * ```ts
+   * class SaveItem extends KissAction<State> {
+   *   sequential = true;
+   *   discardQueueOnError(error: any) { return !(error instanceof AbortDispatchException); }
+   *   ...
+   * }
+   * ```
+   *
+   * The discarded actions are aborted: they don't run their `before` and `reduce` methods, and
+   * they finish with an `AbortDispatchException` (which the store treats silently, without
+   * showing any error dialog). Their `status.isDispatchAborted` is `true`. You can check
+   * `wasDiscardedFromSequentialQueue` on those actions, if you need to know. Actions dispatched
+   * after the failure are not affected, and start a fresh queue. The default is `false`, which
+   * means the queue simply continues.
+   *
+   * ## IMPORTANT: Do not wait for an action in the same queue
+   *
+   * An action that is running (and therefore holds the queue) must NOT wait for another action
+   * that uses the same queue. If it does, both actions will wait for each other forever
+   * (a deadlock):
+   *
+   * ```ts
+   * class Parent extends KissAction<State> {
+   *   sequential = true;
+   *
+   *   async reduce() {
+   *     // WRONG: `Child` enters the queue behind `Parent`, and waits for
+   *     // `Parent` to finish. But `Parent` waits for `Child` here. Deadlock!
+   *     await this.dispatchAndWait(new Child());
+   *     return null;
+   *   }
+   * }
+   *
+   * class Child extends KissAction<State> {
+   *   sequential = true;
+   *   ...
+   * }
+   * ```
+   *
+   * The same applies to any other way of waiting for a queued action, such as
+   * `waitActionType(Child)`, `waitAllActions`, or a `waitCondition` that only becomes true
+   * after `Child` runs.
+   *
+   * If you need to dispatch another action of the same queue from inside a running action, you
+   * have these options:
+   *
+   * - Dispatch it without waiting for it: `this.dispatch(new Child())`. The child is queued and
+   *   will run right after the parent finishes.
+   * - Give the child a different key, so it uses a different queue.
+   * - Don't make the child sequential.
+   *
+   * ## Other notes
+   *
+   * - Sequential actions are always ASYNC, even if their `before` and `reduce` methods are
+   *   SYNC. This means you can't dispatch them with `dispatchSync`. Doing so throws a
+   *   `StoreException`.
+   *
+   * - The action only runs its `before` method when it gets its turn. So you can override
+   *   `before`, `reduce` and `after` as usual, and all of them run when it's the action's turn.
+   *
+   * - While an action is waiting in the queue, it counts as being "in progress", so
+   *   `isWaiting(MyAction)` returns `true` for it. This is usually what you want, as it lets
+   *   you show a spinner as soon as the action is dispatched. You can also check
+   *   `isWaitingInSequentialQueue` on the action itself.
+   *
+   * - Calling `store.clearInternalActionProps()` (or `store.setShutDown(true)`) discards the
+   *   actions waiting in all queues, as if a failed action had discarded them. The actions that
+   *   are running keep running, but actions dispatched after that start new queues, and don't
+   *   wait for them.
+   *
+   * ## Combining with other features
+   *
+   * - It can be combined with `retry` and `checkInternet`. Retries happen while the action
+   *   holds the queue, and the internet check happens when the action gets its turn. Note
+   *   that with unlimited retries, a single failing action blocks every action behind it, for
+   *   as long as it keeps failing. To keep the ordering and still retry, prefer a limited
+   *   number of retries, possibly together with `discardQueueOnError()`.
+   *
+   * - It can also be combined with `nonReentrant`, `throttle`, `fresh` and `OptimisticCommand`.
+   *   For example, `nonReentrant` plus `sequential` means duplicates are dropped while the
+   *   original is queued or running, and the ones that get through still run one at a time.
+   *   Note the throttle and fresh periods start when the action is dispatched, not when it
+   *   gets its turn in the queue. And the optimistic value of an `OptimisticCommand` is only
+   *   applied to the state when the action gets its turn, and not as soon as it's dispatched.
+   *
+   * - It should NOT be combined with `debounce`, because the debounce period would only start
+   *   when the action gets its turn in the queue, which defeats the purpose of debouncing.
+   *   Dispatching it with `debounce` throws a `StoreException`.
+   *
+   * - It should NOT be combined with `unlimitedRetryCheckInternet`. That feature aborts the
+   *   dispatch while another action with the same key is in progress (and a queued action does
+   *   count as in progress), so two actions of the same class would never queue behind each
+   *   other. It also retries forever while holding the queue. Dispatching it with
+   *   `unlimitedRetryCheckInternet` throws a `StoreException`.
+   */
+  sequential: boolean = false;
+
+  /**
+   * By default, all sequential actions share a single queue, whose key is `null`. Override
+   * this method to return a different key, so that only actions with the same key wait for
+   * each other. The returned value is used as the queue key itself.
+   *
+   * For example, here each user has its own queue:
+   *
+   * ```ts
+   * class SaveUser extends KissAction<State> {
+   *   sequential = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   sequentialKeyParams() { return this.userId; }
+   *   ...
+   * }
+   * ```
+   *
+   * You may also return the action class, so that only actions of the same class wait for
+   * each other:
+   *
+   * ```ts
+   * sequentialKeyParams() { return this.constructor; }
+   * ```
+   *
+   * Keys are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents. For example, `[1, 'A']` and `{ id: 1 }` are valid keys.
+   */
+  sequentialKeyParams(): any {
+    return null;
+  }
+
+  /**
+   * Called when this sequential action finishes with an error, with that error. Return `true`
+   * to abort all the actions that are currently waiting in the same queue, behind this one.
+   * They will not run their `before` and `reduce` methods, and will finish with an
+   * `AbortDispatchException`. Actions dispatched after this action finished are not affected.
+   *
+   * The default is `false`: the queue continues with the next action.
+   *
+   * Note the `error` is the original error thrown by `before` or `reduce`, before being
+   * processed by `wrapError`. It may be an `AbortDispatchException`, if this action was
+   * aborted. You may want to keep the queue in that case:
+   *
+   * ```ts
+   * discardQueueOnError(error: any) { return !(error instanceof AbortDispatchException); }
+   * ```
+   *
+   * Note: If `discardQueueOnError()` throws an error, the error is logged, and the queue
+   * continues with the next action.
+   */
+  discardQueueOnError(error: any): boolean {
+    return false;
+  }
+
+  /**
+   * Returns `true` while this sequential action is waiting for previous actions in its queue
+   * to finish. Returns `false` before the action is dispatched, once it gets its turn, and
+   * after it finishes.
+   */
+  get isWaitingInSequentialQueue(): boolean {
+    return this._isWaitingInSequentialQueue;
+  }
+
+  /**
+   * Returns `true` if this sequential action was aborted because a previous action in the
+   * same queue failed and returned `true` from `discardQueueOnError()`, or because the queues
+   * were reset with `store.clearInternalActionProps()` (or `store.setShutDown(true)`) while it
+   * was waiting.
+   */
+  get wasDiscardedFromSequentialQueue(): boolean {
+    return this._wasDiscardedFromSequentialQueue;
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Set by the store while this sequential action waits for its turn in the queue.
+   */
+  _isWaitingInSequentialQueue: boolean = false;
+
+  /**
+   * For Kiss internal use only.
+   * Set by the store when this sequential action is discarded from its queue.
+   */
+  _wasDiscardedFromSequentialQueue: boolean = false;
+
+  /**
+   * Set `poll` to periodically dispatch an action at a fixed interval. Usually, you add `poll`
+   * as a constructor parameter of your action. For example:
+   *
+   * ```ts
+   * class PollPrices extends KissAction<State> {
+   *   constructor(readonly poll = Poll.once) { super(); }
+   *
+   *   createPollingAction() { return new PollPrices(); }
+   *
+   *   async reduce() {
+   *     const prices = await api.getPrices();
+   *     return (state: State) => state.copy({ prices });
+   *   }
+   * }
+   * ```
+   *
+   * This is useful when you need to keep data fresh by fetching it from a server at regular
+   * intervals, such as refreshing prices, checking for new messages, or monitoring wallet
+   * balances.
+   *
+   * The `pollInterval` is the delay between polling ticks, in milliseconds. The default is
+   * 10000 (10 seconds). You can change it:
+   *
+   * ```ts
+   * pollInterval = 5 * 60 * 1000; // 5 minutes.
+   * ```
+   *
+   * By default, polling runs never overlap: each tick waits for the previous run to finish
+   * before the `pollInterval` starts counting for the next tick. See `pollWaitsForRun` if you
+   * want ticks at a fixed rate instead.
+   *
+   * To start polling, dispatch the action with `Poll.start`.
+   * To stop, dispatch with `Poll.stop`:
+   *
+   * ```ts
+   * // Start polling (also runs reduce immediately):
+   * dispatch(new PollPrices(Poll.start));
+   *
+   * // Stop polling:
+   * dispatch(new PollPrices(Poll.stop));
+   * ```
+   *
+   * To stop all polling at once (for example, on logout), without dispatching `Poll.stop` for
+   * each key, call `stopAllPolling()` from any action. Polling also stops when you call
+   * `store.clearInternalActionProps()`, or when the store is shut down with
+   * `store.setShutDown(true)`, and is not restarted if you later turn the shutdown off.
+   *
+   * You can display loading states and errors in your components by tracking the action
+   * class that does the work:
+   *
+   * ```tsx
+   * const isWaiting = useIsWaiting(PollPrices);
+   * const isFailed = useIsFailed(PollPrices);
+   * ```
+   *
+   * If you use two separate action classes (see Option 2 below), track the worker action
+   * instead of the polling controller.
+   *
+   * There are two ways to use polling:
+   *
+   * ## Option 1: Single action for everything
+   *
+   * Use one action class that both controls polling and does the work. The
+   * `createPollingAction()` returns the same action class with `Poll.once` (or with no poll
+   * parameter at all, since `Poll.once` is the default), so timer ticks run the action without
+   * restarting the timer:
+   *
+   * ```ts
+   * class LoadBalance extends KissAction<State> {
+   *   constructor(readonly address: string, readonly poll = Poll.once) { super(); }
+   *
+   *   pollInterval = 5 * 60 * 1000;
+   *
+   *   createPollingAction() { return new LoadBalance(this.address); }
+   *
+   *   async reduce() {
+   *     const balance = await api.getBalance(this.address);
+   *     return (state: State) => state.copy({ balance });
+   *   }
+   * }
+   *
+   * // Run immediately without affecting the timer
+   * dispatch(new LoadBalance(address));
+   *
+   * // Start polling
+   * dispatch(new LoadBalance(address, Poll.start));
+   *
+   * // Stop polling
+   * dispatch(new LoadBalance(address, Poll.stop));
+   * ```
+   *
+   * ## Option 2: Separate action classes
+   *
+   * Use one action to control polling, and a different action to do the work. This is useful
+   * when you want `isWaiting` and `isFailed` to track a different class than the polling
+   * controller:
+   *
+   * ```ts
+   * class PollBalance extends KissAction<State> {
+   *   constructor(readonly address: string, readonly poll = Poll.start) { super(); }
+   *
+   *   pollInterval = 5 * 60 * 1000;
+   *
+   *   createPollingAction() { return new LoadBalance(this.address); }
+   *
+   *   async reduce() {
+   *     await this.dispatchAndWait(new LoadBalance(this.address));
+   *     return null;
+   *   }
+   * }
+   *
+   * class LoadBalance extends KissAction<State> {
+   *   constructor(readonly address: string) { super(); }
+   *
+   *   async reduce() {
+   *     const balance = await api.getBalance(this.address);
+   *     return (state: State) => state.copy({ balance });
+   *   }
+   * }
+   *
+   * // Start polling:
+   * dispatch(new PollBalance(address, Poll.start));
+   *
+   * // Check loading state of the worker action:
+   * isWaiting(LoadBalance);
+   *
+   * // Stop polling:
+   * dispatch(new PollBalance(address, Poll.stop));
+   * ```
+   *
+   * ## Polling keys
+   *
+   * By default, each action class gets its own independent polling timer, keyed by its class.
+   * This means all instances of the same action class share one timer. Note subclasses are
+   * different classes, so they get their own timers.
+   *
+   * ### Using `pollingKeyParams()` to separate instances
+   *
+   * If you need separate polling timers per id, address, or some other field, override
+   * `pollingKeyParams()`. Actions of the same class but with different `pollingKeyParams()`
+   * values get independent timers.
+   *
+   * ```ts
+   * class PollBalance extends KissAction<State> {
+   *   constructor(readonly address: string, readonly poll = Poll.once) { super(); }
+   *
+   *   // Each address gets its own independent polling timer.
+   *   pollingKeyParams() { return this.address; }
+   *
+   *   createPollingAction() { return new LoadBalance(this.address); }
+   *
+   *   async reduce() {
+   *     await this.dispatchAndWait(new LoadBalance(this.address));
+   *     return null;
+   *   }
+   * }
+   *
+   * // These start two independent polling timers:
+   * dispatch(new PollBalance(address1, Poll.start));
+   * dispatch(new PollBalance(address2, Poll.start));
+   *
+   * // Stop only address1:
+   * dispatch(new PollBalance(address1, Poll.stop));
+   * ```
+   *
+   * You can also return more than one field by using an array:
+   *
+   * ```ts
+   * // Each (userId, walletId) pair gets its own timer.
+   * pollingKeyParams() { return [this.userId, this.walletId]; }
+   * ```
+   *
+   * ### Using `computePollingKey()` to share timers across action classes
+   *
+   * If you want different action classes to share the same polling timer, override
+   * `computePollingKey()` and return any key you want:
+   *
+   * ```ts
+   * class PollPrices extends KissAction<State> {
+   *   computePollingKey() { return 'market-data'; }
+   *   ...
+   * }
+   *
+   * class PollVolumes extends KissAction<State> {
+   *   computePollingKey() { return 'market-data'; } // Same key
+   *   ...
+   * }
+   * ```
+   *
+   * With this setup, starting `PollPrices` and then `PollVolumes` means `PollVolumes` is a
+   * no-op (the key is already active). Stopping either one cancels the shared timer.
+   *
+   * ## Poll values
+   *
+   * - `Poll.start`: Starts polling and runs `reduce` immediately.
+   *   If polling is already active for this key, does nothing.
+   *
+   * - `Poll.stop`: Cancels the polling for this key and skips `reduce`.
+   *
+   * - `Poll.runNowAndRestart`: Runs `reduce` immediately and restarts the polling timer from
+   *   that moment. If polling is not active, behaves like `Poll.start`.
+   *
+   * - `Poll.once`: Runs `reduce` immediately, without affecting the polling (it does not start
+   *   or stop the polling).
+   *
+   * Note that, even when `reduce` is skipped, the action's `before` and `after` methods still
+   * run, and the action completes without changing the state.
+   *
+   * ## Overlapping runs
+   *
+   * Instead of using a periodic timer, each run schedules the next one.
+   *
+   * By default (`pollWaitsForRun` is `true`), the action returned by `createPollingAction()`
+   * is dispatched with `dispatchAndWait`, and the next tick is only scheduled when it
+   * finishes. This means the polling interval is measured from the END of each run, runs never
+   * overlap, and the actual period is `runDuration + pollInterval`. If a run takes longer than
+   * the interval, ticks simply happen less often, instead of piling up.
+   *
+   * If you want ticks at a fixed rate instead, set `pollWaitsForRun` to `false`. Then the
+   * action is dispatched with `dispatch`, the next tick is scheduled immediately, and the
+   * interval is measured from the START of each run. In this case runs may overlap when they
+   * take longer than the interval, so consider adding `nonReentrant`, `throttle` or
+   * `sequential` to the action returned by `createPollingAction()`:
+   *
+   * ```ts
+   * pollWaitsForRun = false;
+   * ```
+   *
+   * ## Errors
+   *
+   * Errors don't stop the polling. If a run fails, the next tick is scheduled anyway, as if
+   * the run had succeeded. This is also true for the immediate run of `Poll.start` and
+   * `Poll.runNowAndRestart`: if it fails, the polling is started anyway.
+   *
+   * The ticks are dispatched like any other action, so their errors are processed as usual
+   * (`wrapError`, `globalWrapError`, `errorObserver`, etc). For example, a `UserException`
+   * shows an error dialog, and `isFailed` becomes `true` for the tick's action class. An error
+   * that is not swallowed is thrown as an unhandled rejection, like the error of any dispatch
+   * nobody waits for.
+   *
+   * ## Add the other features to the TICK action, not to the controller
+   *
+   * IMPORTANT: Polling can be combined with `checkInternet`, `nonReentrant`, `throttle`,
+   * `fresh` and `sequential`, but you should add those to the action returned by
+   * `createPollingAction()`, and NOT to the action that starts and stops the polling.
+   *
+   * The reason is that all of those features can abort or fail a dispatch, and they can't tell
+   * a `Poll.stop` apart from a regular tick. So, if you add them to the polling controller, a
+   * `Poll.stop` dispatch may itself be aborted or fail, and you'd be unable to stop the
+   * polling. For example:
+   *
+   * - With `throttle`, a `Poll.stop` dispatched inside the throttle period is silently
+   *   ignored, and the polling keeps going.
+   *
+   * - With `nonReentrant`, a `Poll.stop` dispatched while a run is still in progress is
+   *   silently ignored.
+   *
+   * - With `fresh`, a `Poll.stop` dispatched inside the fresh period is silently ignored.
+   *
+   * - With `checkInternet`, a `Poll.stop` dispatched while there is no internet fails in
+   *   `before`, so it never reaches the reducer.
+   *
+   * - With `sequential`, a `Poll.stop` has to wait for its turn in the queue, so you could be
+   *   unable to stop the polling while the queue is busy.
+   *
+   * Adding them to the tick action instead is both safe and more useful:
+   *
+   * ```ts
+   * class PollBalance extends KissAction<State> {
+   *   constructor(readonly poll = Poll.once) { super(); }
+   *
+   *   // The tick action is the one that checks the internet.
+   *   createPollingAction() { return new LoadBalance(); }
+   *   ...
+   * }
+   *
+   * class LoadBalance extends KissAction<State> {
+   *   checkInternet = { dialog: false };
+   *   ...
+   * }
+   * ```
+   *
+   * Notes:
+   * - The action must override `createPollingAction()`. Otherwise, dispatching it throws a
+   *   `StoreException`.
+   * - It can be combined with a custom `wrapReduce()`, which wraps the action's own reducer
+   *   (when it runs).
+   * - It should not be combined with `retry` or `debounce`, nor used in an
+   *   `OptimisticCommand`. Dispatching it with those throws a `StoreException`.
+   * - With the default `pollWaitsForRun` of `true`, ticks can't pile up, since a tick is only
+   *   scheduled after the previous one finishes. Adding `nonReentrant`, `throttle` or
+   *   `sequential` to the tick action only matters when `pollWaitsForRun` is `false`.
+   * - An invalid `poll` or `pollInterval` value makes the dispatch throw a `StoreException`.
+   * - When `poll` is `undefined` (the default), the action doesn't use polling.
+   *
+   * See also:
+   * - `throttle` - If you want to limit how often an action runs, but don't need periodic
+   *   repetition.
+   * - `debounce` - If you want to wait for a pause in activity before running the action.
+   * - `nonReentrant` - If you want to prevent overlapping executions of the same action.
+   */
+  declare poll?: Poll;
+
+  /**
+   * The delay between polling ticks, in milliseconds. The default is 10000 (10 seconds).
+   * This is only used by actions that use polling (see `poll`).
+   *
+   * How this delay is measured depends on `pollWaitsForRun`:
+   *
+   * - When `pollWaitsForRun` is `true` (the default), the delay is measured from the moment
+   *   the previous run FINISHES.
+   *
+   * - When `pollWaitsForRun` is `false`, the delay is measured from the moment the previous
+   *   run STARTS.
+   */
+  declare pollInterval?: number;
+
+  /**
+   * Whether each polling tick must wait for the previous run to finish, before the next tick
+   * is scheduled. The default is `true`. This is only used by actions that use polling (see
+   * `poll`).
+   *
+   * - When `true` (the default), runs never overlap. The action returned by
+   *   `createPollingAction()` is dispatched with `dispatchAndWait`, and only when it finishes
+   *   does the `pollInterval` start counting for the next tick. In other words, the interval is
+   *   measured from the END of each run, and the actual period is
+   *   `runDuration + pollInterval`. This is what you usually want, as it prevents piling up
+   *   requests when the server is slow.
+   *
+   * - When `false`, the next tick is scheduled as soon as the current one is dispatched,
+   *   without waiting for it to finish. The action is dispatched with `dispatch`, the interval
+   *   is measured from the START of each run, and the period is a fixed `pollInterval`. Use
+   *   this only when you want ticks at a fixed rate, and you are fine with runs overlapping
+   *   when they take longer than `pollInterval`. Consider adding `nonReentrant`, `throttle` or
+   *   `sequential` to the action returned by `createPollingAction()`, to control what happens
+   *   when runs overlap.
+   *
+   * Note this also applies to the immediate run done by `Poll.start` and
+   * `Poll.runNowAndRestart`: when `true`, the first tick is only scheduled after that
+   * immediate run finishes.
+   */
+  declare pollWaitsForRun?: boolean;
+
+  /**
+   * Must return a new action instance that the timer will dispatch on each tick. This can be
+   * the same action class with `Poll.once`, or a completely different action class (see the
+   * documentation of `poll` for both patterns).
+   *
+   * Every action that uses polling must override this method. Otherwise, dispatching it throws
+   * a `StoreException`.
+   */
+  createPollingAction(): KissAction<St> {
+    throw new StoreException(
+      `Action ${this.constructor.name} uses polling, but doesn't override createPollingAction().`);
+  }
+
+  /**
+   * By default, the polling key is based on the action class. All instances of the same action
+   * class share one polling timer.
+   *
+   * Override this to give each instance its own timer based on some field:
+   *
+   * ```ts
+   * // Each address gets its own polling timer.
+   * pollingKeyParams() { return this.address; }
+   *
+   * // Each (userId, walletId) pair gets its own timer.
+   * pollingKeyParams() { return [this.userId, this.walletId]; }
+   * ```
+   *
+   * When `pollingKeyParams()` returns `null` (the default), the key is just the action class.
+   *
+   * Params are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents. For example, `[1, 'A']` and `{ id: 1 }` are valid params.
+   */
+  pollingKeyParams(): any {
+    return null;
+  }
+
+  /**
+   * Returns the key used to identify this action's polling timer.
+   *
+   * The default combines the action class with `pollingKeyParams()`:
+   *
+   * ```ts
+   * computePollingKey() { return [this.constructor, this.pollingKeyParams()]; }
+   * ```
+   *
+   * Override this for full control, for example to share a timer across different action
+   * classes:
+   *
+   * ```ts
+   * computePollingKey() { return 'shared-market-data'; }
+   * ```
+   *
+   * Keys are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents.
+   */
+  computePollingKey(): any {
+    return [this.constructor, this.pollingKeyParams()];
+  }
+
+  /**
+   * Stops all polling at once, for all polling keys, as if `Poll.stop` was dispatched for each
+   * of them. This is probably useful during logout or similar scenarios. Runs that are already
+   * in progress still finish, but no new ticks are dispatched.
+   */
+  stopAllPolling(): void {
+    this.store._stopAllPolling();
+  }
+
+  /**
+   * For Kiss internal use only.
+   * The delay between polling ticks in milliseconds, or `null` if the `pollInterval` value is
+   * invalid (in which case the dispatch throws).
+   */
+  get _pollIntervalMillis(): number | null {
+    const pollInterval: any = this.pollInterval;
+    if (pollInterval === undefined) return 10000;
+    if (typeof pollInterval === 'number' && Number.isFinite(pollInterval) && pollInterval >= 0) return pollInterval;
+    return null;
+  }
+
+  /**
    * To retry the `reduce` method when it throws an error:
    *
    * ```ts
@@ -695,7 +2247,16 @@ export abstract class KissAction<St> {
    * - If you `await dispatchAndWait(action)` and the action uses unlimited retries,
    *   it may never finish if it keeps failing. So, be careful when using it.
    *
+   * - Calling `store.clearInternalActionProps()` (for example, on logout), or shutting down the
+   *   store with `store.setShutDown(true)`, stops the retries. The action is then aborted with
+   *   an `AbortDispatchException`, so it doesn't fail.
+   *
    * - If the `before` method throws an error, the retry will NOT happen.
+   *
+   * - Combining `retry` with `checkInternet` will not retry when there is no internet. It will
+   *   only retry if there IS internet but the action fails for some other reason. To retry
+   *   indefinitely until internet is available, use `unlimitedRetryCheckInternet` instead,
+   *   which can't be combined with `retry`.
    *
    * - The retry delay only starts after the reducer finishes executing. For example, if the
    *   reducer takes 1 second to fail, and the retry delay is 350 millis, the first retry will
@@ -719,6 +2280,9 @@ export abstract class KissAction<St> {
    *   reducer fails with a `StoreException`, even if the reducer itself succeeds.
    *
    * - If necessary, you can know the current "attempt number" by using `this.attempts`.
+   *
+   * - It can be combined with `sequential`. The retries then happen while the action holds
+   *   the queue, which delays the actions waiting behind it.
    */
   declare retry?: Retry;
 
@@ -740,18 +2304,134 @@ export abstract class KissAction<St> {
   /**
    * For Kiss internal use only.
    * Start with the `initialDelay`, and then increase it by `multiplier` each time this is called.
-   * If the delay exceeds `maxDelay`, it will be set to `maxDelay`.
+   * If the delay exceeds the given `maxDelay` (by default, the retry `maxDelay`), it will be set
+   * to `maxDelay`.
    */
-  _nextRetryDelay(): number {
+  _nextRetryDelay(maxDelay: number = this._retry.maxDelay): number {
     const retry = this._retry;
 
     retry.currentDelay = (retry.currentDelay == null)
       ? retry.initialDelay
       : retry.currentDelay * retry.multiplier;
 
-    if (retry.currentDelay > retry.maxDelay) retry.currentDelay = retry.maxDelay;
+    if (retry.currentDelay > maxDelay) retry.currentDelay = maxDelay;
 
     return retry.currentDelay;
+  }
+
+  /**
+   * Set `unlimitedRetryCheckInternet` to `true` to check if there is internet when you run some
+   * action that needs it. If there is no internet, the action will abort silently, and then retry
+   * the `reduce` method unlimited times, until there is internet. It will also retry if there is
+   * internet but the action failed. For example:
+   *
+   * ```ts
+   * class LoadText extends KissAction<State> {
+   *   unlimitedRetryCheckInternet = true;
+   *
+   *   async reduce() {
+   *     const response = await fetch('https://swapi.dev/api/people/42/');
+   *     const json = await response.json();
+   *     return (state: State) => state.copy({ text: json.name ?? 'Unknown' });
+   *   }
+   * }
+   * ```
+   *
+   * IMPORTANT: This combines `retry` (with unlimited retries), `checkInternet` and
+   * `nonReentrant`, but there is a difference. Combining `retry` with `checkInternet` will not
+   * retry when there is no internet. It will only retry if there IS internet but the action fails
+   * for some other reason. To retry indefinitely until internet is available, you should use
+   * `unlimitedRetryCheckInternet`.
+   *
+   * The action is non-reentrant: while it is running, dispatching another one with the same
+   * non-reentrant key is aborted silently. Since it keeps retrying until it succeeds, this
+   * non-reentrant period lasts the whole time from when the action is dispatched until it
+   * succeeds, including the waits between retries. As with `nonReentrant`, the key is based on
+   * the action class by default. Override `nonReentrantKeyParams()` so that actions of the same
+   * class but with different parameters don't block each other, or `computeNonReentrantKey()`
+   * so that different action classes share the same key. These keys are shared with
+   * `nonReentrant` actions and `OptimisticCommand`s.
+   *
+   * The retry parameters, and their default values, are:
+   *
+   * - `initialDelay`: The delay before the first retry attempt. Default is `350` milliseconds.
+   * - `multiplier`: The factor by which the delay increases for each subsequent retry.
+   *   Default is `2`. A `multiplier` of `1` keeps the delay constant.
+   * - `maxDelay`: The maximum delay between retries to avoid excessively long wait times.
+   *   This is for errors that are not related to the internet. Default is `5000` milliseconds.
+   * - `maxDelayNoInternet`: The maximum delay between retries when there is no internet.
+   *   Default is `1000` milliseconds.
+   *
+   * You can change one or more of the default values. Doing so also turns it on:
+   *
+   * ```ts
+   * class LoadText extends KissAction<State> {
+   *   unlimitedRetryCheckInternet = { initialDelay: 100, maxDelayNoInternet: 3000 };
+   *   ...
+   * }
+   * ```
+   *
+   * Invalid values (for example, a `multiplier` below `1`, or a negative delay) make the
+   * dispatch throw a `StoreException` that explains the problem.
+   *
+   * The internet is checked before each attempt, with the `hasInternet()` method. Override it to
+   * customize how the internet connection is checked, or to simulate the internet as on or off
+   * during tests. IMPORTANT: By default, it only checks if the internet is on or off on the
+   * device, not if the internet provider is really providing the service or if the server is
+   * available. So, it is possible that the check succeeds and the request still fails.
+   *
+   * Notes:
+   * - If you `await dispatchAndWait(action)`, it only finishes when the action succeeds, and
+   *   this may take a long time (or never happen) if there is no internet, or if it keeps failing.
+   * - Calling `store.clearInternalActionProps()` (for example, on logout), or shutting down the
+   *   store with `store.setShutDown(true)`, stops the retries. The action is then aborted with
+   *   an `AbortDispatchException`, so it doesn't fail.
+   * - Make sure your `before` method does not throw an error, or the retry will NOT happen.
+   * - It only works with ASYNC reducers, that return `Promise<(state: St) => St>`, just like
+   *   `retry`. Dispatching it with a SYNC reducer fails with a `StoreException`.
+   * - An action that aborts itself by throwing an `AbortDispatchException` is not retried.
+   * - All retries are logged (see `Store.log`), including the action, the attempt, and if the
+   *   problem was no internet or not.
+   * - If necessary, you can know the current "attempt number" by using `this.attempts`.
+   *   Attempts that found no internet count too.
+   * - It should not be combined with `retry`, `checkInternet` or `nonReentrant`, since it
+   *   already does what they do, nor with `debounce`, `throttle`, `fresh` or polling, nor used in
+   *   an `OptimisticCommand`. Doing so throws a `StoreException`. When polling, add it to the
+   *   action returned by `createPollingAction()` instead.
+   * - It should not be combined with `sequential`. It aborts the dispatch while another action
+   *   with the same key is in progress (and a queued action does count as in progress), so two
+   *   actions of the same class would never queue behind each other. It also retries forever
+   *   while holding the queue. Doing so throws a `StoreException`.
+   */
+  declare unlimitedRetryCheckInternet?: boolean | UnlimitedRetryCheckInternet;
+
+  /**
+   * For Kiss internal use only.
+   * True if `unlimitedRetryCheckInternet` is turned on. Note this doesn't validate it, which
+   * only happens when the action is dispatched.
+   */
+  get _isUnlimitedRetryCheckInternet(): boolean {
+    const value: any = this.unlimitedRetryCheckInternet;
+    return value === true || (typeof value === 'object' && value !== null);
+  }
+
+  /**
+   * For Kiss internal use only.
+   * The maximum delay between retries when there is no internet, for actions that use
+   * `unlimitedRetryCheckInternet`. Set when the action is dispatched.
+   */
+  _maxDelayNoInternet: number = 1000;
+
+  /**
+   * For Kiss internal use only.
+   * Checks the internet connection with the (protected) `hasInternet()` method, unless it's
+   * being simulated with `internetOnOffSimulation`, which takes precedence. Used by
+   * `checkInternet` and `unlimitedRetryCheckInternet`.
+   */
+  _hasInternet(): Promise<boolean> {
+    const simulation = this.internetOnOffSimulation;
+    if (simulation === true || simulation === false) return Promise.resolve(simulation);
+    return this.hasInternet();
   }
 
   /**
@@ -1491,6 +3171,168 @@ export abstract class KissAction<St> {
       this._retry = { ...this._retry, on: true, ...this.retry };
       this.retry = this._retry;
     }
+
+    const debounce: any = this.debounce;
+    if (debounce !== undefined && typeof debounce !== 'boolean' &&
+      !(typeof debounce === 'number' && Number.isFinite(debounce) && debounce >= 0))
+      throw new StoreException(
+        `Action ${this.constructor.name} has an invalid debounce: ` +
+        `it must be a boolean, or a number >= 0 (milliseconds), but got ` +
+        `${typeof debounce === 'string' ? `"${debounce}"` : String(debounce)}.`);
+
+    if (this._debounceMillis !== null && this.ifRetryIsOn)
+      throw new StoreException(
+        `Action ${this.constructor.name} uses both debounce and retry, which can't be combined. ` +
+        'Remove one of them.');
+
+    const throttle: any = this.throttle;
+    if (throttle !== undefined && typeof throttle !== 'boolean' && this._throttleMillis === null)
+      throw new StoreException(
+        `Action ${this.constructor.name} has an invalid throttle: ` +
+        `it must be a boolean, or a number >= 0 (milliseconds), but got ` +
+        `${typeof throttle === 'string' ? `"${throttle}"` : String(throttle)}.`);
+
+    if (this._throttleMillis !== null && this.nonReentrant)
+      throw new StoreException(
+        `Action ${this.constructor.name} uses both throttle and nonReentrant, which can't be combined. ` +
+        'Remove one of them.');
+
+    const fresh: any = this.fresh;
+    if (fresh !== undefined && typeof fresh !== 'boolean' && this._freshMillis === null)
+      throw new StoreException(
+        `Action ${this.constructor.name} has an invalid fresh: ` +
+        `it must be a boolean, or a number >= 0 (milliseconds), but got ` +
+        `${typeof fresh === 'string' ? `"${fresh}"` : String(fresh)}.`);
+
+    if (this._freshMillis !== null && this.nonReentrant)
+      throw new StoreException(
+        `Action ${this.constructor.name} uses both fresh and nonReentrant, which can't be combined. ` +
+        'Remove one of them.');
+
+    if (this._freshMillis !== null && this._throttleMillis !== null)
+      throw new StoreException(
+        `Action ${this.constructor.name} uses both fresh and throttle, which can't be combined. ` +
+        'Remove one of them.');
+
+    const checkInternet: any = this.checkInternet;
+    if (checkInternet && checkInternet.abort === true && checkInternet.dialog !== undefined)
+      throw new StoreException(
+        `Action ${this.constructor.name} has an invalid checkInternet: ` +
+        'it can\'t have both `dialog` and `abort: true`. Remove one of them.');
+
+    if (this.sequential && this._debounceMillis !== null)
+      throw new StoreException(
+        `Action ${this.constructor.name} uses both sequential and debounce, which can't be combined. ` +
+        'Remove one of them.');
+
+    if (this.poll !== undefined) this._validatePolling();
+
+    if (this.unlimitedRetryCheckInternet !== undefined) this._injectUnlimitedRetryCheckInternet();
+  }
+
+  /**
+   * Throws a `StoreException` if this action uses `unlimitedRetryCheckInternet` in a way that is
+   * not allowed. Otherwise, if it's on, sets up its retry options.
+   */
+  private _injectUnlimitedRetryCheckInternet() {
+    const value: any = this.unlimitedRetryCheckInternet;
+    const name = this.constructor.name;
+
+    if (typeof value !== 'boolean' && (typeof value !== 'object' || value === null || Array.isArray(value)))
+      throw new StoreException(
+        `Action ${name} has an invalid unlimitedRetryCheckInternet: ` +
+        `it must be a boolean, or an object with the retry options, but got ` +
+        `${typeof value === 'string' ? `"${value}"` : String(value)}.`);
+
+    if (!this._isUnlimitedRetryCheckInternet) return;
+
+    const options: UnlimitedRetryCheckInternet = (value === true) ? {} : value;
+
+    const isNumber = (v: any) => typeof v === 'number' && Number.isFinite(v);
+    const check = (option: keyof UnlimitedRetryCheckInternet, isValid: (v: any) => boolean, rule: string) => {
+      const optionValue = options[option];
+      if (optionValue !== undefined && !isValid(optionValue))
+        throw new StoreException(
+          `Action ${name} has an invalid unlimitedRetryCheckInternet option: ` +
+          `unlimitedRetryCheckInternet.${option} ${rule}, but got ` +
+          `${typeof optionValue === 'string' ? `"${optionValue}"` : String(optionValue)}.`);
+    };
+
+    check('initialDelay', v => isNumber(v) && v >= 0, 'must be a number >= 0 (milliseconds)');
+    check('maxDelay', v => isNumber(v) && v >= 0, 'must be a number >= 0 (milliseconds)');
+    check('maxDelayNoInternet', v => isNumber(v) && v >= 0, 'must be a number >= 0 (milliseconds)');
+    check('multiplier', v => isNumber(v) && v >= 1, 'must be a number >= 1 (use 1 for a constant delay)');
+
+    const incompatible = (feature: string, isUsed: boolean, hint = 'Remove one of them.') => {
+      if (isUsed)
+        throw new StoreException(
+          `Action ${name} uses both unlimitedRetryCheckInternet and ${feature}, which can't be combined. ` +
+          hint);
+    };
+
+    const already = (feature: string) => `Remove its \`${feature}\` property, since unlimitedRetryCheckInternet already does that.`;
+    incompatible('retry', this.ifRetryIsOn, already('retry'));
+    incompatible('checkInternet', !!this.checkInternet, already('checkInternet'));
+    incompatible('nonReentrant', this.nonReentrant, already('nonReentrant'));
+    incompatible('debounce', this._debounceMillis !== null);
+    incompatible('throttle', this._throttleMillis !== null);
+    incompatible('fresh', this._freshMillis !== null);
+    incompatible('sequential', this.sequential);
+    incompatible('polling', this.poll !== undefined,
+      'Remove one of them, or add unlimitedRetryCheckInternet to the action returned by createPollingAction().');
+
+    if (this instanceof OptimisticCommand)
+      throw new StoreException(
+        `Action ${name} is an OptimisticCommand, which can't use unlimitedRetryCheckInternet. ` +
+        'Remove its `unlimitedRetryCheckInternet` property.');
+
+    const { initialDelay, multiplier, maxDelay, maxDelayNoInternet } = options;
+    this._retry = {
+      ...this._retry,
+      ...(initialDelay !== undefined && { initialDelay }),
+      ...(multiplier !== undefined && { multiplier }),
+      ...(maxDelay !== undefined && { maxDelay }),
+      unlimitedRetries: true,
+    };
+    if (maxDelayNoInternet !== undefined) this._maxDelayNoInternet = maxDelayNoInternet;
+  }
+
+  /**
+   * Throws a `StoreException` if this action uses polling in a way that is not allowed.
+   */
+  private _validatePolling() {
+    const poll: any = this.poll;
+    if (!Object.values(Poll).includes(poll))
+      throw new StoreException(
+        `Action ${this.constructor.name} has an invalid poll: ` +
+        `it must be Poll.start, Poll.stop, Poll.runNowAndRestart or Poll.once, but got ` +
+        `${typeof poll === 'string' ? `"${poll}"` : String(poll)}.`);
+
+    if (this.createPollingAction === KissAction.prototype.createPollingAction)
+      throw new StoreException(
+        `Action ${this.constructor.name} uses polling, but doesn't override createPollingAction().`);
+
+    const pollInterval: any = this.pollInterval;
+    if (this._pollIntervalMillis === null)
+      throw new StoreException(
+        `Action ${this.constructor.name} has an invalid pollInterval: ` +
+        `it must be a number >= 0 (milliseconds), but got ` +
+        `${typeof pollInterval === 'string' ? `"${pollInterval}"` : String(pollInterval)}.`);
+
+    if (this.ifRetryIsOn)
+      throw new StoreException(
+        `Action ${this.constructor.name} uses both polling and retry, which can't be combined. ` +
+        'Remove one of them, or add the retry to the action returned by createPollingAction().');
+
+    if (this._debounceMillis !== null)
+      throw new StoreException(
+        `Action ${this.constructor.name} uses both polling and debounce, which can't be combined. ` +
+        'Remove one of them.');
+
+    if (this instanceof OptimisticCommand)
+      throw new StoreException(
+        `Action ${this.constructor.name} is an OptimisticCommand, which can't use polling. ` +
+        'Remove its `poll` property.');
   }
 
   /**
@@ -1524,6 +3366,7 @@ export abstract class KissAction<St> {
    */
   _changeStatus(params: {
     isDispatched?: boolean,
+    isDispatchAborted?: boolean,
     hasFinishedMethodBefore?: boolean,
     hasFinishedMethodReduce?: boolean,
     hasFinishedMethodAfter?: boolean
@@ -1569,7 +3412,7 @@ export abstract class KissAction<St> {
     // Initialize an array to hold key-value pairs as strings
     const keyValuePairs: string[] = [];
     for (const key of Object.keys(this)) {
-      if (!key.startsWith('_') && (key != 'nonReentrant') && (key != 'retry') && (key != 'checkInternet') && (key != 'wrapReduce')) { // Continue to exclude base class/internal fields
+      if (!key.startsWith('_') && (key != 'nonReentrant') && (key != 'retry') && (key != 'checkInternet') && (key != 'wrapReduce') && (key != 'debounce') && (key != 'throttle') && (key != 'removeThrottleLockOnError') && (key != 'fresh') && (key != 'sequential') && (key != 'pollInterval') && (key != 'pollWaitsForRun') && (key != 'unlimitedRetryCheckInternet')) { // Continue to exclude base class/internal fields
         // For each property, push "key:value" string to the array
         // Note: This simple line assumes that `value` can be meaningfully represented as a string.
         // You might need a more complex handling for objects, arrays, etc.
@@ -1628,6 +3471,21 @@ export class ActionStatus {
   readonly isDispatched: boolean;
 
   /**
+   * Is true if the dispatch of the action was aborted:
+   * - Because `abortDispatch()` returned `true`.
+   * - Because the action is `nonReentrant` (or an `OptimisticCommand`), and another action
+   *   with the same non-reentrant key was running.
+   * - Because of its `throttle` period, or because its `fresh` data was still fresh.
+   * - Because it was mocked as `null`, or the store was shut down.
+   * - Because an `AbortDispatchException` was thrown by the action's `before` or `reduce`
+   *   methods. This includes a `sequential` action discarded from its queue.
+   *
+   * Note in the last case the action was dispatched and finished (the `after` method ran),
+   * but in the other cases it was never dispatched (`isDispatched` is `false`).
+   */
+  readonly isDispatchAborted: boolean;
+
+  /**
    * Is true when the `before` method finished executing normally.
    * Is false if it has not yet finished executing or if it threw an error.
    */
@@ -1651,6 +3509,9 @@ export class ActionStatus {
    * This may or may not be equal to the error thrown by the action, because the original error
    * will still be processed by the action's `wrapError` and the `globalWrapError`. However,
    * if `originalError` is non-null, it means the reducer did not finish running.
+   *
+   * If the action was aborted by throwing an `AbortDispatchException`, this holds that
+   * exception (which is not processed by `wrapError` and `globalWrapError`).
    */
   readonly originalError: any;
 
@@ -1699,6 +3560,9 @@ export class ActionStatus {
    * Returns true only if the action has completed (the 'after' method already ran), but either
    * the 'before' or the 'reduce' methods have thrown an error. If this is true, it indicates that
    * the reducer could NOT complete, and could not return a value to change the state.
+   *
+   * Note this is also true when the action was aborted by throwing an
+   * `AbortDispatchException`. In that case, `isDispatchAborted` is also true.
    */
   get isCompletedFailed(): boolean {
     return this.isCompleted && (this.originalError != null);
@@ -1706,6 +3570,7 @@ export class ActionStatus {
 
   constructor(params: {
     isDispatched?: boolean,
+    isDispatchAborted?: boolean,
     hasFinishedMethodBefore?: boolean,
     hasFinishedMethodReduce?: boolean,
     hasFinishedMethodAfter?: boolean,
@@ -1713,6 +3578,7 @@ export class ActionStatus {
     wrappedError?: any,
   } = {}) {
     this.isDispatched = params.isDispatched ?? false;
+    this.isDispatchAborted = params.isDispatchAborted ?? false;
     this.hasFinishedMethodBefore = params.hasFinishedMethodBefore ?? false;
     this.hasFinishedMethodReduce = params.hasFinishedMethodReduce ?? false;
     this.hasFinishedMethodAfter = params.hasFinishedMethodAfter ?? false;
@@ -1722,6 +3588,7 @@ export class ActionStatus {
 
   copy(params: {
     isDispatched?: boolean,
+    isDispatchAborted?: boolean,
     hasFinishedMethodBefore?: boolean,
     hasFinishedMethodReduce?: boolean,
     hasFinishedMethodAfter?: boolean
@@ -1730,6 +3597,7 @@ export class ActionStatus {
   }) {
     return new ActionStatus({
       isDispatched: params.isDispatched ?? this.isDispatched,
+      isDispatchAborted: params.isDispatchAborted ?? this.isDispatchAborted,
       hasFinishedMethodBefore: params.hasFinishedMethodBefore ?? this.hasFinishedMethodBefore,
       hasFinishedMethodReduce: params.hasFinishedMethodReduce ?? this.hasFinishedMethodReduce,
       hasFinishedMethodAfter: params.hasFinishedMethodAfter ?? this.hasFinishedMethodAfter,
@@ -1951,7 +3819,8 @@ export class ActionStatus {
  *
  * When combined with `checkInternet`, if there is no internet: no optimistic state is
  * applied, no server call is attempted, and the action fails (showing a dialog, if
- * `checkInternet` is `{ dialog: true }`).
+ * `checkInternet` is `{ dialog: true }`), or is silently aborted (if `checkInternet` is
+ * `{ abort: true }`).
  *
  * Notes:
  *
@@ -1959,9 +3828,12 @@ export class ActionStatus {
  *   except that `NaN` is equal to `NaN`). So, make sure `getValueFromState` returns the same
  *   object you applied, or override `shouldRollback`.
  * - It can be combined with `retry` and `checkInternet`.
+ * - It can be combined with `sequential`. Note the optimistic value is then only applied to
+ *   the state when the action gets its turn in the queue, and not as soon as the action is
+ *   dispatched.
  * - It should not be combined with `nonReentrant` (it's already non-reentrant), nor with
  *   unlimited retries (a command that never finishes would never release its non-reentrant
- *   key). Dispatching it with those throws a `StoreException`.
+ *   key), nor with `debounce` or `throttle`. Dispatching it with those throws a `StoreException`.
  */
 export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
 
@@ -2301,6 +4173,8 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
       try {
         return await this.sendCommandToServer(optimistic);
       } catch (error) {
+        // An aborted command is not retried.
+        if (error instanceof AbortDispatchException) throw error;
         this._retry.attempts++;
         if (this._retry.attempts > this._retry.maxRetries) throw error;
         await new Promise(resolve => setTimeout(resolve, this._nextRetryDelay()));
@@ -2319,10 +4193,658 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
         `Action ${this.constructor.name} is an OptimisticCommand, which is always non-reentrant. ` +
         'Remove its `nonReentrant` property.');
 
+    if (this._debounceMillis !== null)
+      throw new StoreException(
+        `Action ${this.constructor.name} is an OptimisticCommand, which can't use debounce. ` +
+        'Remove its `debounce` property.');
+
+    if (this._throttleMillis !== null)
+      throw new StoreException(
+        `Action ${this.constructor.name} is an OptimisticCommand, which can't use throttle. ` +
+        'Remove its `throttle` property.');
+
+    if (this._freshMillis !== null)
+      throw new StoreException(
+        `Action ${this.constructor.name} is an OptimisticCommand, which can't use fresh. ` +
+        'Remove its `fresh` property.');
+
     if (this.ifRetryIsOn && (this._retry.unlimitedRetries || this._retry.maxRetries === -1))
       throw new StoreException(
         `Action ${this.constructor.name} is an OptimisticCommand, which can't use unlimited retries. ` +
         'Use a `retry.maxRetries` of 0 or more.');
+  }
+}
+
+/**
+ * The `OptimisticSync` abstract class is for actions where user interactions (like toggling a
+ * "like" button) should update the UI immediately and send the updated value to the server,
+ * making sure the server and the UI are eventually consistent.
+ *
+ * ---
+ *
+ * The action is not throttled or debounced in any way, and every dispatch applies an optimistic
+ * update to the state immediately. This guarantees a very good user experience, because there
+ * is immediate feedback on every interaction.
+ *
+ * However, while the first updated value (created by the first time the action is dispatched)
+ * is immediately sent to the server, any other value changes that occur while the first request
+ * is in flight will NOT be sent immediately.
+ *
+ * Instead, when the first request completes, it checks if the state is still the same as the
+ * value that was sent. If not, a follow-up request is sent with the latest value. This process
+ * repeats until the state stabilizes.
+ *
+ * Note this guarantees that only **one** request is in flight at a time per key, potentially
+ * reducing the number of requests sent to the server while still coalescing intermediate
+ * changes.
+ *
+ * Optionally:
+ *
+ * - If the server responds with a value, that value is applied to the state. This is useful
+ *   when the server normalizes or modifies values.
+ *
+ * - When the state finally stabilizes and the request finishes, `onFinish` is called, allowing
+ *   you to perform side effects.
+ *
+ * - In special, if the last request fails, the optimistic state remains, but in `onFinish` you
+ *   can then load the current state from the server, or handle the error as you see fit, by
+ *   returning a state that will be applied.
+ *
+ * In other words, it makes it easy for you to maintain perfect UI responsiveness while
+ * minimizing server load, and making sure the server and the UI eventually agree on the same
+ * value.
+ *
+ * Note: It's not built for commands that must run once per dispatch (create, delete, submit,
+ * upload, checkout...). For those, use `OptimisticCommand`.
+ *
+ * ---
+ *
+ * ## How it works
+ *
+ * 1. **Immediate UI feedback**: Every dispatch applies `valueToApply()` to the state
+ *    immediately, using `applyOptimisticValueToState`.
+ *
+ * 2. **Single in-flight request**: Only one request runs at a time per key (see
+ *    `optimisticSyncKeyParams()`). The first dispatch takes the key and calls
+ *    `sendValueToServer` to send a request to the server.
+ *
+ * 3. **Follow-up requests**: If the store state changed while a request started by
+ *    `sendValueToServer` was in flight (for example, the user tapped a "like" button again while
+ *    the first request was pending), a follow-up request is automatically sent after the current
+ *    one completes. The change is detected by comparing `getValueFromState` with the value that
+ *    was sent (see `ifShouldSendAnotherRequest`).
+ *
+ * 4. **No unnecessary requests**: If, while the request is in flight, the state changes but then
+ *    returns to the same value as before (for example, the user tapped a "like" button again
+ *    TWICE while the first request was pending), `getValueFromState` matches the sent value, and
+ *    no follow-up request is needed.
+ *
+ * 5. **Server response handling**: If `sendValueToServer` returns a value (not `null` or
+ *    `undefined`), it's applied to the state using `applyServerResponseToState`, when the state
+ *    stabilizes. This is optional but useful.
+ *
+ * 6. **Completion callback**: When the synchronization for this key finishes, `onFinish` is
+ *    called. On success, it runs after the state is stable (no follow-up needed) and the key has
+ *    been released. On failure, it runs right after the request fails and the key is released,
+ *    and then the action fails with the error.
+ *
+ * ```
+ * State: liked = false (server confirmed)
+ *
+ * User taps LIKE:
+ *   → State: liked = true (optimistic)
+ *   → Key taken, Request 1 sends: setLiked(true)
+ *
+ * User taps UNLIKE (Request 1 still in flight):
+ *   → State: liked = false (optimistic)
+ *   → No request sent (key is taken)
+ *
+ * User taps LIKE (Request 1 still in flight):
+ *   → State: liked = true (optimistic)
+ *   → No request sent (key is taken)
+ *
+ * Request 1 completes:
+ *   → Sent value was `true`, current state is `true`
+ *   → They match, no follow-up needed, key released
+ * ```
+ *
+ * If the state had been `false` when Request 1 completed, a follow-up Request 2 would
+ * automatically be sent with `false`.
+ *
+ * ## How to use it
+ *
+ * Extend `OptimisticSync` instead of your base action, and DO NOT implement `reduce()`.
+ * Instead, you must provide:
+ *
+ * - `valueToApply()` returns the value to apply optimistically, and then send to the server.
+ * - `applyOptimisticValueToState(state, optimisticValue)` applies the value to the state.
+ * - `getValueFromState(state)` reads the value from the state (to detect if a follow-up is needed).
+ * - `sendValueToServer(value)` sends the value to the server.
+ *
+ * And optionally:
+ *
+ * - `optimisticSyncKeyParams()` so that different items can have concurrent requests.
+ * - `applyServerResponseToState(state, serverResponse)` applies the server response to the state.
+ * - `onFinish(error)` runs when the synchronization finishes, with or without errors.
+ * - `ifShouldSendAnotherRequest` and `maxFollowUpRequests`, to customize the follow-ups.
+ *
+ * ```ts
+ * class ToggleLike extends OptimisticSync<State, boolean> {
+ *   constructor(readonly itemId: string) { super(); }
+ *
+ *   // Different items can have concurrent requests.
+ *   optimisticSyncKeyParams() { return this.itemId; }
+ *
+ *   // The new value to apply (toggle the current state).
+ *   valueToApply() { return !this.state.items.get(this.itemId).liked; }
+ *
+ *   // Apply the optimistic value to the state.
+ *   applyOptimisticValueToState(state: State, isLiked: boolean) {
+ *     return state.copy({ items: state.items.setLiked(this.itemId, isLiked) });
+ *   }
+ *
+ *   // Read the current value from the state (used to detect if a follow-up is needed).
+ *   getValueFromState(state: State) { return state.items.get(this.itemId).liked; }
+ *
+ *   // Send the value to the server, and optionally return the server-confirmed value.
+ *   async sendValueToServer(isLiked: boolean) {
+ *     const response = await api.setLiked(this.itemId, isLiked);
+ *     return response.liked; // Or return null if the server doesn't return a value.
+ *   }
+ *
+ *   // Apply the server response to the state (can be different from the optimistic value).
+ *   applyServerResponseToState(state: State, liked: boolean) {
+ *     return state.copy({ items: state.items.setLiked(this.itemId, liked) });
+ *   }
+ *
+ *   // Called when the state stabilizes (optional). Return a state to apply, or null.
+ *   async onFinish(error: any) {
+ *     if (error !== null) {
+ *       // Handle the error: reload from the server to restore the correct state.
+ *       const reloaded = await api.getItem(this.itemId);
+ *       return this.state.copy({ items: this.state.items.update(this.itemId, reloaded) });
+ *     }
+ *     return null; // Success, no state change needed.
+ *   }
+ * }
+ * ```
+ *
+ * ## Server response handling
+ *
+ * `sendValueToServer` can return a value from the server. If it's not `null` or `undefined`,
+ * this value is applied to the state **only when the state stabilizes** (no pending changes).
+ * This is useful when:
+ * - The server normalizes or modifies values.
+ * - You want to confirm the server accepted the change.
+ * - The server returns the current state after the update.
+ *
+ * The server response is applied as is, and doesn't start a follow-up request.
+ *
+ * ## Error handling
+ *
+ * On failure, the optimistic state remains, `onFinish` is called with the error, and then the
+ * action fails with the error. There are no follow-up requests after a failure.
+ *
+ * ## Difference from other features
+ *
+ * - **vs `debounce`**: Debounce waits for inactivity before sending *any* request.
+ *   `OptimisticSync` sends the first request immediately, and only coalesces subsequent changes.
+ *
+ * - **vs `nonReentrant`**: NonReentrant aborts subsequent dispatches entirely. `OptimisticSync`
+ *   applies the optimistic update and, if needed, sends a follow-up request.
+ *
+ * - **vs `OptimisticCommand`**: An `OptimisticCommand` runs once per dispatch, rolls back on
+ *   failure, and is non-reentrant, so it aborts the dispatches made while it's running.
+ *   `OptimisticSync` is designed for rapid toggling, where only the final value matters.
+ *
+ * ## Rollback support
+ *
+ * Two fields help with rollback logic in `onFinish`:
+ *
+ * - `optimisticValue`: The value returned by `valueToApply()` for this dispatch. It's set once
+ *   when the reducer starts, and remains available until the action finishes, including in
+ *   `onFinish`.
+ *
+ * - `lastSentValue`: The most recent value passed to `sendValueToServer`. Updated right before
+ *   each server request. Useful for debugging and logging.
+ *
+ * Example rollback guard using `optimisticValue`:
+ *
+ * ```ts
+ * async onFinish(error: any) {
+ *   if (error !== null) {
+ *     // Only roll back if the state still reflects our optimistic update.
+ *     // If the user made another change, don't overwrite it.
+ *     if (this.getValueFromState(this.state) === this.optimisticValue) {
+ *       return this.applyOptimisticValueToState(this.state, this.getValueFromState(this.initialState));
+ *     }
+ *   }
+ *   return null;
+ * }
+ * ```
+ *
+ * Note `initialState` is the state when the action that sends the requests was dispatched.
+ * If some of its requests succeeded before one failed, the server may already have a newer
+ * value. That's why reloading is usually a safer choice than rolling back.
+ *
+ * Another possibility is to use `onFinish` to reload the value from the server. For example:
+ *
+ * ```ts
+ * async onFinish(error: any) {
+ *   try {
+ *     const fresh = await api.fetchValue(this.itemId);
+ *     return this.applyServerResponseToState(this.state, fresh);
+ *   } catch (_) {
+ *     return null; // Ignore reload failures and keep the current state.
+ *   }
+ * }
+ * ```
+ *
+ * ## Which dispatch sends the requests
+ *
+ * Only the dispatch that took the key sends the requests (including the follow-ups), and only
+ * it waits for them: `dispatchAndWait` waits until the state stabilizes, and `isWaiting` is
+ * `true` meanwhile. The dispatches made while the key is taken apply their optimistic value,
+ * and then finish right away.
+ *
+ * ## Clearing
+ *
+ * `store.clearInternalActionProps()` (which is also called by `store.setShutDown(true)`)
+ * releases all keys at once, which is useful on logout. The dispatches made from then on take
+ * the key again, and send their own requests. An action whose request was in flight when the
+ * keys were released stops when that request finishes: it doesn't send follow-up requests,
+ * doesn't apply the server response, and doesn't call `onFinish`. It's aborted with an
+ * `AbortDispatchException`, so it doesn't fail, and doesn't show errors.
+ *
+ * Notes:
+ * - It can be combined with `checkInternet`, both `{ dialog: true | false }` and
+ *   `{ abort: true }`. If there is no internet, the optimistic value is not applied, and no
+ *   request is sent.
+ * - It should not be combined with `nonReentrant`, `retry`, `unlimitedRetryCheckInternet`,
+ *   `debounce`, `throttle`, `fresh` or polling. Dispatching it with those throws a
+ *   `StoreException`.
+ * - It should not be combined with `sequential`, which throws a `StoreException` too.
+ *   `OptimisticSync` needs dispatches to overlap: it applies the optimistic value as soon as the
+ *   action is dispatched, and coalesces the dispatches made while a request is in flight into a
+ *   single follow-up request. With `sequential`, the UI would stop responding immediately, and
+ *   nothing would ever be coalesced. Note `OptimisticSync` already guarantees a single
+ *   in-flight request per key, so you don't need `sequential` to serialize the requests.
+ */
+export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
+
+  /**
+   * The optimistic value that was applied to the state by this dispatch. It's set once, when
+   * the reducer starts, to the value returned by `valueToApply()`, and remains available in
+   * `onFinish` for rollback logic.
+   */
+  optimisticValue!: T;
+
+  /**
+   * The most recent value that was passed to `sendValueToServer`. It's updated right before
+   * each server request (including follow-ups), and is `undefined` if this dispatch sent no
+   * request (because another dispatch was already sending them). Useful for debugging, logging,
+   * or implementing custom guards.
+   */
+  lastSentValue: T | undefined = undefined;
+
+  /**
+   * Safety limit for the number of follow-up requests, to avoid infinite loops. If the state is
+   * still changing after this many follow-ups, the action fails with a `StoreException`.
+   * Use `-1` for no limit. The default is 10000.
+   */
+  maxFollowUpRequests: number = 10000;
+
+  /**
+   * Optionally, override `optimisticSyncKeyParams()` to differentiate the coalescing by the
+   * action parameters. For example, if you have a like button per item, return the item ID, so
+   * that different items can have concurrent requests:
+   *
+   * ```ts
+   * optimisticSyncKeyParams() { return this.itemId; }
+   * ```
+   *
+   * You can also return an array of values:
+   *
+   * ```ts
+   * optimisticSyncKeyParams() { return [this.userId, this.itemId]; }
+   * ```
+   *
+   * Params are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents.
+   *
+   * Important: If the action changes a different part of the state depending on its fields,
+   * make the key depend on them too. Otherwise, while `ToggleLike('A')` has a request in flight,
+   * `ToggleLike('B')` changes the state but doesn't send its own request, and the follow-up of
+   * `ToggleLike('A')` only checks item A, so item B may never be sent to the server.
+   *
+   * See also: `computeOptimisticSyncKey()`, which uses this method by default to build the key.
+   */
+  optimisticSyncKeyParams(): any {
+    return null;
+  }
+
+  /**
+   * By default, the coalescing key combines the action class with `optimisticSyncKeyParams()`.
+   * Override this method if you want different action classes to share the same coalescing key.
+   *
+   * Keys are compared with `Object.is`, except arrays and plain objects, which are compared by
+   * their contents.
+   */
+  computeOptimisticSyncKey(): any {
+    return [this.constructor, this.optimisticSyncKeyParams()];
+  }
+
+  /**
+   * Return the value that should be applied optimistically to the state, and then sent to the
+   * server. This is called synchronously, and only once per dispatch, when the reducer starts.
+   *
+   * The value to apply can be anything, and is usually constructed from the action fields,
+   * and/or from the current `state`. Valid examples are:
+   *
+   * ```ts
+   * // Set the like button to "liked".
+   * valueToApply() { return true; }
+   *
+   * // Set the like button to "liked" or "not liked", according to
+   * // the field `isLiked` of the action.
+   * valueToApply() { return this.isLiked; }
+   *
+   * // Toggle the current state of the like button.
+   * valueToApply() { return !this.state.items.get(this.itemId).liked; }
+   * ```
+   */
+  abstract valueToApply(): T;
+
+  /**
+   * Return a new state where the given `optimisticValue` is applied to the given `state`.
+   *
+   * Note, Kiss calculates `optimisticValue` by previously calling `valueToApply()`.
+   *
+   * ```ts
+   * applyOptimisticValueToState(state: State, isLiked: boolean) {
+   *   return state.copy({ items: state.items.setLiked(this.itemId, isLiked) });
+   * }
+   * ```
+   */
+  abstract applyOptimisticValueToState(state: St, optimisticValue: T): St;
+
+  /**
+   * Return the value from the given `state`. It's compared with the value that was sent to the
+   * server, to determine if a follow-up request is needed.
+   *
+   * Here is the rationale: When a request completes, if the value in the state is different from
+   * the value that was sent, it means the user changed it again while the request was in flight,
+   * so a follow-up request is needed to sync the latest value with the server.
+   *
+   * ```ts
+   * getValueFromState(state: State) { return state.items.get(this.itemId).liked; }
+   * ```
+   */
+  abstract getValueFromState(state: St): T;
+
+  /**
+   * Send the given `value` to the server, and optionally return the server's response.
+   *
+   * The first request sends the `optimisticValue` (calculated by previously calling
+   * `valueToApply()`). But the value in the store state may change while the request is in
+   * flight. For example, if the user presses a like button once, but then presses it again
+   * before the first request finishes, the value in the store state is now different from the
+   * value that was sent. In this case, `sendValueToServer` will be called again, with the value
+   * from the state, to create a follow-up request to sync the updated state with the server.
+   *
+   * If `sendValueToServer` returns a value that is not `null` or `undefined`, that value will be
+   * passed to `applyServerResponseToState`, but **only when the state stabilizes** (when there
+   * are no more pending requests and the key is about to be released). This prevents the server
+   * response from overwriting subsequent user interactions that occurred while the request was
+   * in flight.
+   *
+   * If `sendValueToServer` returns `null` or `undefined`, the current optimistic state is
+   * assumed to be correct and valid.
+   *
+   * ```ts
+   * async sendValueToServer(isLiked: boolean) {
+   *   const response = await api.setLiked(this.itemId, isLiked);
+   *   return response?.liked; // Return the server-confirmed value, or null.
+   * }
+   * ```
+   */
+  abstract sendValueToServer(value: T): Promise<any>;
+
+  /**
+   * Override `applyServerResponseToState` to return a new state, where the given
+   * `serverResponse` (previously received from the server when running `sendValueToServer`) is
+   * applied to the current `state`. Example:
+   *
+   * ```ts
+   * applyServerResponseToState(state: State, serverResponse: Response) {
+   *   return state.copy({ items: state.items.setLiked(this.itemId, serverResponse.isLiked) });
+   * }
+   * ```
+   *
+   * Note `serverResponse` is never `null` or `undefined` here, because this method is only
+   * called when `sendValueToServer` returned some value.
+   *
+   * If you DO NOT want to apply the server response to the state, return `null`
+   * (which is the default).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  applyServerResponseToState(state: St, serverResponse: any): St | null {
+    return null;
+  }
+
+  /**
+   * Optionally, override `onFinish` to run any code after the synchronization completes. For
+   * example, you might want to reload related data from the server, show a confirmation message,
+   * or perform cleanup.
+   *
+   * Note `onFinish` is called in both success and failure scenarios. On success, it runs only
+   * after the state is stable for this key. On failure, it runs immediately after the request
+   * fails (there is no further stabilization or follow-up).
+   *
+   * Important: The key is released *before* `onFinish` runs. This means new dispatches for the
+   * same key may start a new request while `onFinish` is still running.
+   *
+   * The `error` parameter is `null` on success, or contains the error if the request failed.
+   *
+   * If `onFinish` returns a state (not `null`), it will be applied automatically. If it returns
+   * `null`, no state change is made.
+   *
+   * ```ts
+   * async onFinish(error: any) {
+   *   if (error === null) {
+   *     // Success: show a confirmation, log analytics, etc.
+   *     return null;
+   *   } else {
+   *     // Failure:
+   *     // - Show a dialog.
+   *     // - Reload data from the server.
+   *     // - Roll back the optimistic update.
+   *   }
+   * }
+   * ```
+   *
+   * To show an error dialog in `onFinish`:
+   *
+   * ```ts
+   * this.dispatch(new UserExceptionAction('The server request failed. Info reloaded.'));
+   * ```
+   *
+   * To reload data from the server in `onFinish`:
+   *
+   * ```ts
+   * return this.state.copy({ info: await api.loadInfo() });
+   * ```
+   *
+   * To roll back the optimistic update in `onFinish`:
+   *
+   * ```ts
+   * return this.state.copy({ isLiked: this.getValueFromState(this.initialState) });
+   * ```
+   *
+   * You can combine the above strategies as needed:
+   *
+   * ```ts
+   * async onFinish(error: any) {
+   *   if (error === null) return null;
+   *
+   *   // 1. Show an error message to the user.
+   *   this.dispatch(new UserExceptionAction('The server request failed. Info reloaded.'));
+   *
+   *   // 2. Immediately roll back to the value before the action.
+   *   this.dispatch(new UpdateStateAction((state: State) =>
+   *     state.copy({ isLiked: this.getValueFromState(this.initialState) })));
+   *
+   *   // 3. Then, to be sure, reload the value from the server.
+   *   return this.state.copy({ info: await api.loadInfo() });
+   * }
+   * ```
+   *
+   * Important:
+   *
+   * - If `onFinish(error)` throws, the original `error` is lost, and the error thrown by
+   *   `onFinish` becomes the action error. You can handle it in `wrapError`.
+   *
+   * - Same on success: If `onFinish(null)` throws, the whole action fails even though the
+   *   server request succeeded. You can handle it in `wrapError`.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  onFinish(error: any): Promise<St | null> | St | null {
+    return null;
+  }
+
+  /**
+   * If `ifShouldSendAnotherRequest` returns true, the action will send one more request, with
+   * the value from the state.
+   *
+   * The default behavior of this method is to compare:
+   * - The `stateValue`, which is the value currently in the store state.
+   * - The `sentValue`, which is the value that was sent to the server.
+   *
+   * If they are different, it means the state was changed after we sent the request, so we
+   * should send another request with the new value.
+   *
+   * Values are compared with `Object.is` (which is the same as `===`, except that `NaN` is equal
+   * to `NaN`). So, make sure `getValueFromState` returns the same object you applied, or
+   * override this method if you need custom equality logic.
+   *
+   * The `requestCount` is the number of requests already sent by this action (1 after the first
+   * request). Note the number of follow-up requests is limited by `maxFollowUpRequests`.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  ifShouldSendAnotherRequest({ stateValue, sentValue, requestCount }: {
+    stateValue: T,
+    sentValue: T,
+    requestCount: number,
+  }): boolean {
+    return !Object.is(stateValue, sentValue);
+  }
+
+  /**
+   * Do NOT override this method. Implement `valueToApply`, `applyOptimisticValueToState`,
+   * `getValueFromState` and `sendValueToServer` instead.
+   */
+  async reduce(): Promise<null> {
+    const value = this.valueToApply();
+    this.optimisticValue = value;
+
+    // Always applies the optimistic update immediately.
+    this._applyState(this.applyOptimisticValueToState(this.state, value));
+
+    // If another dispatch has the key, its request is in flight. The optimistic update is
+    // already applied, so we just finish. When that request completes, it checks if a
+    // follow-up is needed.
+    if (!this.store._takeOptimisticSyncKey(this.computeOptimisticSyncKey(), this)) return null;
+
+    await this._sendAndFollowUp(value);
+    return null;
+  }
+
+  /**
+   * Sends the request, and then sends follow-up requests while the value in the state (from
+   * `getValueFromState`) is different from the value that was sent.
+   */
+  private async _sendAndFollowUp(value: T): Promise<void> {
+    let sentValue = value;
+    let requestCount = 0;
+    let finishError: any = null;
+
+    try {
+      while (true) {
+        requestCount++;
+        this.lastSentValue = sentValue;
+
+        // Sends the value, and gets the server response (may be null or undefined).
+        const serverResponse = await this.sendValueToServer(sentValue);
+
+        // The keys were released by `store.clearInternalActionProps()` while the request was
+        // in flight (for example, on logout). So, stop here.
+        if (!this.store._hasOptimisticSyncKey(this)) throw this._clearedError();
+
+        const stateValue = this.getValueFromState(this.state);
+
+        // If the state changed while the request was in flight, sends a follow-up request with
+        // the current value, without applying the server response, since the state isn't stable.
+        if (this.ifShouldSendAnotherRequest({ stateValue, sentValue, requestCount })) {
+          if ((this.maxFollowUpRequests !== -1) && (requestCount > this.maxFollowUpRequests))
+            throw new StoreException(
+              `Too many follow-up requests in action ${this.constructor.name} (> ${this.maxFollowUpRequests}).`);
+          sentValue = stateValue;
+          continue;
+        }
+
+        // The state is stable for this key, so we apply the server response, if any.
+        if (serverResponse !== null && serverResponse !== undefined) {
+          const newState = this.applyServerResponseToState(this.state, serverResponse);
+          if (newState !== null) this._applyState(newState);
+        }
+
+        break;
+      }
+    } catch (error) {
+      if (!this.store._hasOptimisticSyncKey(this)) throw this._clearedError();
+      finishError = error;
+    }
+
+    // Releases the key before `onFinish`, so that new dispatches can send requests.
+    this.store._releaseOptimisticSyncKey(this);
+
+    const newState = await this.onFinish(finishError);
+    if (newState !== null && newState !== undefined) this._applyState(newState);
+
+    // Fails, so that the user can be notified.
+    if (finishError !== null) throw finishError;
+  }
+
+  private _clearedError(): AbortDispatchException {
+    return new AbortDispatchException(
+      'The internal action props were cleared, so the action stopped syncing.');
+  }
+
+  private _applyState(newState: St): void {
+    this.dispatch(new UpdateStateAction(() => newState));
+  }
+
+  /**
+   * For Kiss internal use only.
+   */
+  _injectStore(_store: Store<St>) {
+    super._injectStore(_store);
+
+    const incompatible = (feature: string, isUsed: boolean) => {
+      if (isUsed)
+        throw new StoreException(
+          `Action ${this.constructor.name} is an OptimisticSync, which can't use ${feature}. ` +
+          `Remove its \`${feature === 'polling' ? 'poll' : feature}\` property.`);
+    };
+
+    incompatible('nonReentrant', this.nonReentrant);
+    incompatible('unlimitedRetryCheckInternet', this._isUnlimitedRetryCheckInternet);
+    incompatible('retry', this.ifRetryIsOn);
+    incompatible('debounce', this._debounceMillis !== null);
+    incompatible('throttle', this._throttleMillis !== null);
+    incompatible('fresh', this._freshMillis !== null);
+    incompatible('sequential', this.sequential);
+    incompatible('polling', this.poll !== undefined);
   }
 }
 
@@ -2389,6 +4911,24 @@ export type Retry = {
   maxRetries?: number,
   maxDelay?: number,
   unlimitedRetries?: boolean
+};
+
+/**
+ * The retry options of `unlimitedRetryCheckInternet`. All are optional, and use their defaults
+ * when not set. See the documentation of `KissAction.unlimitedRetryCheckInternet` for details.
+ */
+export type UnlimitedRetryCheckInternet = {
+  /** The delay before the first retry attempt, in milliseconds. Default is `350`. */
+  initialDelay?: number,
+  /** The factor by which the delay increases for each subsequent retry. Default is `2`. */
+  multiplier?: number,
+  /**
+   * The maximum delay between retries, in milliseconds, when there is internet but the action
+   * failed. Default is `5000`.
+   */
+  maxDelay?: number,
+  /** The maximum delay between retries, in milliseconds, when there is no internet. Default is `1000`. */
+  maxDelayNoInternet?: number,
 };
 
 export type RetryOptions = {

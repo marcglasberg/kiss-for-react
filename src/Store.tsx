@@ -7,13 +7,17 @@ import {
   AsyncReducerResult,
   KissAction,
   OptimisticCommand,
+  Poll,
   ReduxReducer,
-  RetryOptions,
   _isSameNonReentrantKey,
 } from './KissAction';
 import { ProcessPersistence } from './ProcessPersistence';
-import { StoreException, TimeoutException } from './StoreException';
+import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
 import { UnmodifiableSetView } from "./UnmodifiableSetView";
+
+// An active polling cycle of the given polling key. The `timer` is the one that dispatches the
+// next tick, or `null` while a tick (or the immediate run) is running.
+type PollingCycle = { key: any, timer: ReturnType<typeof setTimeout> | null };
 
 interface ConstructorParams<St> {
 
@@ -438,8 +442,7 @@ export class Store<St> {
 
   /**
    * Set this to `true` when you want to abort any new actions that are dispatched.
-   * Note this will not stop async actions already  running,
-   * but you can wait for them to finish:
+   * Note this will not stop async actions already running, but you can wait for them to finish:
    *
    * ```ts
    * await store.waitAllActions(null, {
@@ -449,10 +452,130 @@ export class Store<St> {
    * ```
    *
    * Set this back to `false` to restart the store accepting new action dispatches.
+   *
+   * Shutting down the store also calls `clearInternalActionProps()`, which, for example, stops
+   * all polling (see `KissAction.poll`), and stops the actions that retry. The polling and the
+   * retries are not restarted when you set this back to `false`.
    */
   public setShutDown(shutDown: boolean) {
     this._shutDown = shutDown;
+    if (shutDown) this.clearInternalActionProps();
   }
+
+  // How many times `clearInternalActionProps()` was called. An action dispatched before the last
+  // call stops retrying. See `KissAction._clearCountAtDispatch`.
+  private _clearCount = 0;
+
+  // The functions that end the waits of the actions waiting to retry. See `_waitRetryDelay`.
+  private _retryWaitEnders = new Set<() => void>();
+
+  // Ends the waits of all actions waiting to retry, which then abort.
+  private _stopAllRetries(): void {
+    const enders = [...this._retryWaitEnders];
+    this._retryWaitEnders.clear();
+    for (const end of enders) end();
+  }
+
+  // Waits for the delay before the action retries. Throws an `AbortDispatchException` if
+  // `clearInternalActionProps()` was called (for example, by shutting down the store) after
+  // the action was dispatched, either before or during the wait, so that it stops retrying.
+  private async _waitRetryDelay(action: KissAction<St>, delay: number): Promise<void> {
+    const wasCleared = () => action._clearCountAtDispatch !== this._clearCount;
+    const abort = () => new AbortDispatchException('The internal action props were cleared, so the action stopped retrying.');
+    if (wasCleared()) throw abort();
+
+    await new Promise<void>(resolve => {
+      const end = () => {
+        clearTimeout(timer);
+        this._retryWaitEnders.delete(end);
+        resolve();
+      };
+      const timer = setTimeout(end, delay);
+      this._retryWaitEnders.add(end);
+    });
+
+    if (wasCleared()) throw abort();
+  }
+
+  /**
+   * Clears the information the store keeps for the action features, so that actions dispatched
+   * from now on behave as if no action had been dispatched before. This is useful during logout,
+   * to stop the effects of the actions of the previous user, and to make sure they don't
+   * affect the next user. It's also called when the store is shut down (see `setShutDown`).
+   *
+   * It does the following:
+   * - Removes all `fresh` keys, so the next dispatches run even if the data was still fresh.
+   *   Otherwise, after logging in again, loading the new user's data could be aborted.
+   * - Removes all `throttle` locks, for the same reason.
+   * - Removes all `debounce` locks. Actions still waiting for their debounce period finish right
+   *   away, without running their reducer.
+   * - Stops all polling (see `KissAction.poll`).
+   * - Discards the actions waiting in all `sequential` queues. They are aborted without running,
+   *   like when a failed action discards its queue (see `discardQueueOnError()`). Actions
+   *   dispatched from now on start new queues, and don't wait for the actions still running.
+   * - Stops the actions that retry, with `retry` or `unlimitedRetryCheckInternet`, so that they
+   *   don't keep retrying for the previous user. An action waiting to retry is aborted right
+   *   away, and an action running an attempt is aborted if that attempt fails (if it succeeds,
+   *   it changes the state as usual). They are aborted with an `AbortDispatchException`, so they
+   *   don't fail, and don't show errors. This also releases their non-reentrant keys. Note an
+   *   `OptimisticCommand` still finishes its retries, which are always limited.
+   * - Releases all `OptimisticSync` keys, so the next dispatches send their own requests. An
+   *   `OptimisticSync` whose request is in flight stops when that request finishes, without
+   *   sending follow-up requests, and is aborted with an `AbortDispatchException`.
+   *
+   * Note:
+   * - Actions that are already running keep running, and still change the state when they
+   *   finish. For example, an action that started loading the data of the previous user before
+   *   the logout can still put that data into the state after the logout.
+   * - It doesn't affect `nonReentrant` actions or `OptimisticCommand`s, since their keys belong to
+   *   the actions that are running, and are released when those actions finish.
+   *
+   * Usage:
+   *
+   * ```ts
+   * class Logout extends KissAction<State> {
+   *   reduce() {
+   *     this.store.clearInternalActionProps();
+   *     return State.initialState();
+   *   }
+   * }
+   * ```
+   */
+  clearInternalActionProps(): void {
+    this._removeAllFreshKeys();
+    this._removeAllThrottleLocks();
+    this._removeAllDebounceLocks();
+    this._stopAllPolling();
+    this._discardAllSequentialQueues();
+    this._removeAllOptimisticSyncKeys();
+    this._clearCount++;
+    this._stopAllRetries();
+  }
+
+  /**
+   * If you are running tests, you can change `forceInternetOnOffSimulation` to simulate the
+   * internet connection as ON or OFF for all actions that use `checkInternet` or
+   * `unlimitedRetryCheckInternet`.
+   *
+   * - Return `true` if there IS internet.
+   * - Return `false` if there is NO internet.
+   * - Return `null` to use the real internet connection status (default).
+   *
+   * Example:
+   *
+   * ```ts
+   * store.forceInternetOnOffSimulation = () => false;
+   * ```
+   *
+   * This is specially useful during tests, for testing what happens when you have no internet
+   * connection. And since it's tied to the store, it automatically resets when the store is
+   * recreated.
+   *
+   * Note the simulation takes precedence over the action's `hasInternet()` method, even if you
+   * override it. To simulate the connection for a single action, override its
+   * `internetOnOffSimulation` getter instead.
+   */
+  public forceInternetOnOffSimulation: () => boolean | null = () => null;
 
   /**
    * A queue of errors of type UserException, thrown by actions.
@@ -527,6 +650,37 @@ export class Store<St> {
     resolve: (actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null) => void,
     reject: (error: unknown) => void
   }> = [];
+
+  // The `debounce` actions waiting for their debounce period, at most one per lock.
+  // Calling `cancel` makes the action finish without running its reducer.
+  private _debounceLocks: Array<{ lock: any, cancel: () => void }> = [];
+
+  // The `throttle` locks, at most one per lock, with the instant their throttle period ends,
+  // and the action that took them. Expired locks are removed when checking or releasing locks.
+  private _throttleLocks: Array<{ lock: any, expiresAt: number, action: KissAction<St> }> = [];
+
+  // The `fresh` keys, at most one per key, with the instant their fresh period ends, and the
+  // action that made them fresh. Expired keys are removed when checking or releasing keys.
+  private _freshKeys: Array<{ key: any, expiresAt: number, action: KissAction<St> }> = [];
+
+  // The `OptimisticSync` keys with a request in flight, at most one per key, with the action
+  // that sends the requests for that key.
+  private _optimisticSyncKeys: Array<{ key: any, action: KissAction<St> }> = [];
+
+  // The `sequential` queues, at most one per key, each with its actions in the order they will
+  // run. The first action of each queue is the one running. Each waiting action is released by
+  // the action that runs before it (with `false`), or by a failed action that discards the queue
+  // (with `true`). Empty queues are removed.
+  private _sequentialQueues: Array<{
+    key: any,
+    entries: Array<{ action: KissAction<St>, release: (discarded: boolean) => void }>
+  }> = [];
+
+  // The active polling cycles, at most one per polling key. A new cycle is created each time
+  // polling starts or restarts for a key, so that the ticks of a stopped or restarted cycle can
+  // tell they must not continue. While a tick is running (when `pollWaitsForRun` is true) the
+  // cycle has no timer, but polling is still active.
+  private _pollingCycles: Array<PollingCycle> = [];
 
   private readonly _processPersistence: ProcessPersistence<St> | null;
   private _dispatchCount = 0;
@@ -787,17 +941,17 @@ export class Store<St> {
     this._throwIfNotReady(action);
     if (this._shutDown) {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
-      return Promise.resolve(new ActionStatus());
+      return Promise.resolve(new ActionStatus({isDispatchAborted: true}));
     }
 
     const mockedActionOrAction = this._mockActionOrNot(action);
 
     // 1) If mocked as `null`, the action is ignored.
-    if (mockedActionOrAction === null) return Promise.resolve(new ActionStatus());
+    if (mockedActionOrAction === null) return Promise.resolve(new ActionStatus({isDispatchAborted: true}));
     if (mockedActionOrAction !== action) this._throwIfAlreadyDispatched(mockedActionOrAction);
 
     // 2) If the action wants to abort the dispatch, or is non-reentrant and already running, aborts.
-    if (this._mustAbortDispatch(mockedActionOrAction)) return Promise.resolve(new ActionStatus());
+    if (this._mustAbortDispatch(mockedActionOrAction)) return Promise.resolve(new ActionStatus({isDispatchAborted: true}));
 
     // 3) If the action is mocked to return another action, we dispatch the mock.
     const promise = mockedActionOrAction._createPromise();
@@ -950,24 +1104,34 @@ export class Store<St> {
   }
 
   // Returns true if the dispatch must be aborted: either `abortDispatch()` returns true, or the
-  // action is non-reentrant and another action with the same non-reentrant key is already running.
-  // Note: It's up to the developer to make sure `abortDispatch` and `computeNonReentrantKey`
-  // don't throw any errors. If they do, the error is logged and swallowed, and the dispatch is aborted.
+  // action is non-reentrant and another action with the same non-reentrant key is already running,
+  // or the action is inside the throttle period of another action with the same throttle lock,
+  // or the data of another action with the same fresh-key is still fresh.
+  // Note: It's up to the developer to make sure `abortDispatch`, `computeNonReentrantKey`,
+  // `throttleLockBuilder`, `ignoreThrottle`, `computeFreshKey` and `ignoreFresh` don't throw
+  // any errors. If they do, the error is logged and swallowed, and the dispatch is aborted.
   private _mustAbortDispatch(action: KissAction<St>): boolean {
     // The action may access the store and the state in `abortDispatch()`.
     action._setStore(this);
     try {
       if (action.abortDispatch()) return true;
-      return Store._isNonReentrant(action) && this._isNonReentrantKeyRunning(action);
+      // Non-reentrant, throttle and fresh can't be combined (it throws when dispatched), so
+      // an action only takes one of these keys.
+      if (Store._isNonReentrant(action)) return this._isNonReentrantKeyRunning(action);
+      const throttleMillis = action._throttleMillis;
+      if (throttleMillis !== null) return this._isThrottled(action, throttleMillis);
+      const freshMillis = action._freshMillis;
+      return (freshMillis !== null) && this._isFresh(action, freshMillis);
     } catch (error) {
       Store._logLazy(() => `Checking if '${action}' must abort its dispatch has thrown an error: ${error}.`);
       return true;
     }
   }
 
-  // `nonReentrant` actions and `OptimisticCommand`s are non-reentrant, and share the same keys.
+  // `nonReentrant` actions, `OptimisticCommand`s and `unlimitedRetryCheckInternet` actions are
+  // non-reentrant, and share the same keys.
   private static _isNonReentrant(action: KissAction<any>): boolean {
-    return action.nonReentrant || action instanceof OptimisticCommand;
+    return action.nonReentrant || action instanceof OptimisticCommand || action._isUnlimitedRetryCheckInternet;
   }
 
   // Returns true if a non-reentrant action with the same non-reentrant key as the given one is
@@ -981,6 +1145,207 @@ export class Store<St> {
         return true;
     }
     return false;
+  }
+
+  // Returns true if another action with the same throttle lock as the given one took the lock
+  // less than its throttle period ago (unless the action wants to `ignoreThrottle`). Otherwise,
+  // the given action takes the lock, starting a new throttle period.
+  private _isThrottled(action: KissAction<St>, throttleMillis: number): boolean {
+    const now = Date.now();
+    this._removeExpiredThrottleLocks(now);
+    const lock = action.throttleLockBuilder();
+    const index = this._throttleLocks.findIndex(entry => _isSameNonReentrantKey(entry.lock, lock));
+    if (index !== -1) {
+      if (!action.ignoreThrottle) return true;
+      this._throttleLocks.splice(index, 1);
+    }
+    this._throttleLocks.push({ lock, expiresAt: now + throttleMillis, action });
+    return false;
+  }
+
+  private _removeExpiredThrottleLocks(now: number): void {
+    this._throttleLocks = this._throttleLocks.filter(entry => entry.expiresAt > now);
+  }
+
+  // Called when a throttled action finishes. If it failed and `removeThrottleLockOnError` is
+  // true, removes the throttle lock it took (but not a newer one, taken by another action).
+  private _releaseThrottleLock(action: KissAction<St>): void {
+    if (action.removeThrottleLockOnError && (action.status.originalError !== null))
+      this._throttleLocks = this._throttleLocks.filter(entry => entry.action !== action);
+    this._removeExpiredThrottleLocks(Date.now());
+  }
+
+  /**
+   * For Kiss internal use only. Use `removeThrottleLock()` in the action instead.
+   * Removes the throttle lock with the given value, if any.
+   */
+  _removeThrottleLock(lock: any): void {
+    this._throttleLocks = this._throttleLocks.filter(entry => !_isSameNonReentrantKey(entry.lock, lock));
+  }
+
+  /**
+   * For Kiss internal use only. Use `removeAllThrottleLocks()` in the action instead.
+   * Removes all throttle locks.
+   */
+  _removeAllThrottleLocks(): void {
+    this._throttleLocks = [];
+  }
+
+  // Returns true if another action with the same fresh-key made it fresh less than its fresh
+  // period ago (unless the action wants to `ignoreFresh`). Otherwise, the given action makes
+  // the key fresh, starting a new fresh period.
+  private _isFresh(action: KissAction<St>, freshMillis: number): boolean {
+    const now = Date.now();
+    this._removeExpiredFreshKeys(now);
+    const key = action.computeFreshKey();
+    const index = this._freshKeys.findIndex(entry => _isSameNonReentrantKey(entry.key, key));
+    if (index !== -1) {
+      if (!action.ignoreFresh) return true;
+      this._freshKeys.splice(index, 1);
+    }
+    this._freshKeys.push({ key, expiresAt: now + freshMillis, action });
+    return false;
+  }
+
+  private _removeExpiredFreshKeys(now: number): void {
+    this._freshKeys = this._freshKeys.filter(entry => entry.expiresAt > now);
+  }
+
+  // Called when a fresh action finishes. If it failed (or was aborted), removes the fresh-key it
+  // made fresh, so that the failure doesn't keep the key fresh. A newer fresh period, started by
+  // another action with the same key, is kept. Note an action that ran had no fresh period to
+  // restore: either the key was stale, or the action ignored it with `ignoreFresh`.
+  private _releaseFreshKey(action: KissAction<St>): void {
+    if (action.status.originalError !== null)
+      this._freshKeys = this._freshKeys.filter(entry => entry.action !== action);
+    this._removeExpiredFreshKeys(Date.now());
+  }
+
+  /**
+   * For Kiss internal use only. Use `removeFreshKey()` in the action instead.
+   * Removes the fresh-key with the given value, if any.
+   */
+  _removeFreshKey(key: any): void {
+    this._freshKeys = this._freshKeys.filter(entry => !_isSameNonReentrantKey(entry.key, key));
+  }
+
+  /**
+   * For Kiss internal use only. Use `removeAllFreshKeys()` in the action instead.
+   * Removes all fresh-keys.
+   */
+  _removeAllFreshKeys(): void {
+    this._freshKeys = [];
+  }
+
+  /**
+   * For Kiss internal use only.
+   * If no other `OptimisticSync` action has the given key, the given action takes it, and this
+   * returns true. Otherwise, returns false.
+   */
+  _takeOptimisticSyncKey(key: any, action: KissAction<St>): boolean {
+    if (this._optimisticSyncKeys.some(entry => _isSameNonReentrantKey(entry.key, key))) return false;
+    this._optimisticSyncKeys.push({ key, action });
+    return true;
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Returns true if the given `OptimisticSync` action has a key. It doesn't, after it released
+   * it, or after `clearInternalActionProps()` removed all keys.
+   */
+  _hasOptimisticSyncKey(action: KissAction<St>): boolean {
+    return this._optimisticSyncKeys.some(entry => entry.action === action);
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Releases the key of the given `OptimisticSync` action, if it has one. A key taken by
+   * another action is kept.
+   */
+  _releaseOptimisticSyncKey(action: KissAction<St>): void {
+    this._optimisticSyncKeys = this._optimisticSyncKeys.filter(entry => entry.action !== action);
+  }
+
+  private _removeAllOptimisticSyncKeys(): void {
+    this._optimisticSyncKeys = [];
+  }
+
+  // Puts the sequential action at the end of the queue with its key. This runs synchronously
+  // when the action is dispatched, which is what preserves the dispatch order. Returns a Promise
+  // that resolves with `false` when it's the action's turn to run, or with `true` if the action
+  // is discarded before that.
+  private _enterSequentialQueue(action: KissAction<St>): Promise<boolean> {
+    const key = action.sequentialKeyParams();
+    let queue = this._sequentialQueues.find(entry => _isSameNonReentrantKey(entry.key, key));
+    if (queue === undefined) {
+      queue = { key, entries: [] };
+      this._sequentialQueues.push(queue);
+    }
+
+    let release!: (discarded: boolean) => void;
+    const turn = new Promise<boolean>(resolve => release = resolve);
+
+    // If the queue is empty, it's already the action's turn.
+    if (queue.entries.length === 0) release(false);
+    else action._isWaitingInSequentialQueue = true;
+
+    queue.entries.push({ action, release });
+    return turn;
+  }
+
+  // When it's the turn of the sequential action, runs it from its `before` method. If the
+  // action was discarded instead, it's aborted with an `AbortDispatchException`, without running
+  // `before` and `reduce`.
+  private _runOnSequentialTurn(action: KissAction<St>, turn: Promise<boolean>): void {
+    turn.then(discarded => {
+      action._isWaitingInSequentialQueue = false;
+      action._wasDiscardedFromSequentialQueue = discarded;
+      const beforeResult = (async () => {
+        if (discarded) throw new AbortDispatchException('Discarded from the sequential queue.');
+        return action.before();
+      })();
+      this._runAsyncBeforeOnwards(action, beforeResult).then();
+    });
+  }
+
+  // Called when a sequential action finishes. Removes it from its queue, and lets the next
+  // action in the queue run. Or, if the action failed and `discardQueueOnError()` returns true,
+  // discards all the actions waiting behind it. Note a discarded action (or one that failed
+  // before entering the queue) is not in any queue, so it doesn't release anything.
+  private _releaseSequentialQueue(action: KissAction<St>): void {
+    const index = this._sequentialQueues.findIndex(queue => queue.entries[0].action === action);
+    if (index === -1) return;
+    const queue = this._sequentialQueues[index];
+    queue.entries.shift();
+
+    let discard = false;
+    const error = action.status.originalError;
+    if (error !== null) {
+      try {
+        discard = action.discardQueueOnError(error);
+      } catch (thrownError) {
+        Store._logLazy(() => `The discardQueueOnError() method of the action ${action} threw an error: ${thrownError}.`);
+      }
+    }
+
+    if (discard) {
+      for (const entry of queue.entries.splice(0)) entry.release(true);
+    } else if (queue.entries.length !== 0)
+      queue.entries[0].release(false);
+
+    // If the queue is now empty, remove its key, to prevent memory leaks.
+    if (queue.entries.length === 0) this._sequentialQueues.splice(index, 1);
+  }
+
+  // Discards the actions waiting in all sequential queues, and removes the queues. The first
+  // action of each queue is running, and keeps running. Since it's no longer in any queue, it
+  // doesn't release anything when it finishes, and actions dispatched later don't wait for it.
+  private _discardAllSequentialQueues(): void {
+    const queues = this._sequentialQueues;
+    this._sequentialQueues = [];
+    for (const queue of queues) {
+      for (const entry of queue.entries.slice(1)) entry.release(true);
+    }
   }
 
   // Mocks an action to return another action.
@@ -1026,6 +1391,7 @@ export class Store<St> {
     Store._logLazy(() => `${this._dispatchCount}) ${action}`);
 
     action._changeStatus({isDispatched: true});
+    action._clearCountAtDispatch = this._clearCount;
 
     // We inject the store into the store, so that the action can access it as a property.
     action._injectStore(this);
@@ -1153,6 +1519,14 @@ export class Store<St> {
 
     this._record(action, false, this._state, this._state, error);
 
+    // An `AbortDispatchException` aborts the action silently. It's not processed by `wrapError`,
+    // `globalWrapError` or the `errorObserver`, the action doesn't count as failed, and the
+    // error is swallowed.
+    if (error instanceof AbortDispatchException) {
+      action._changeStatus({isDispatchAborted: true});
+      return;
+    }
+
     // Any error may optionally be processed by the `wrapError` method of the action.
     // Usually this is used to wrap the error inside another that better describes the failed
     // action. It's recommended RETURNING the new error, but if `wrapError` throws an error,
@@ -1238,6 +1612,10 @@ export class Store<St> {
       action._changeStatus({hasFinishedMethodAfter: true});
     }
 
+    if (action._throttleMillis !== null) this._releaseThrottleLock(action);
+    if (action._freshMillis !== null) this._releaseFreshKey(action);
+    if (action.sequential) this._releaseSequentialQueue(action);
+
     // Remove the wait state for the action in progress.
     // Note: If the state was applied, this was already removed and the UI updated.
     const removed = this._actionsInProgress.delete(action);
@@ -1297,6 +1675,18 @@ export class Store<St> {
   }
 
   private _runFromStart(action: KissAction<St>, mustBeSync: boolean): boolean {
+
+    // A debounced action always waits for its debounce period, so it can't be SYNC.
+    if (mustBeSync && action._debounceMillis !== null)
+      throw new StoreException(`You called dispatchSync(${action.constructor.name}), but the action uses debounce, which makes it ASYNC.`);
+
+    // A sequential action always waits for its turn in the queue, so it can't be SYNC.
+    if (action.sequential) {
+      if (mustBeSync)
+        throw new StoreException(`You called dispatchSync(${action.constructor.name}), but the action is sequential, which makes it ASYNC.`);
+      this._runOnSequentialTurn(action, this._enterSequentialQueue(action));
+      return true; // Went ASYNC.
+    }
 
     // BEFORE
 
@@ -1359,17 +1749,238 @@ export class Store<St> {
   }
 
   /**
-   * Returns the action's own `wrapReduce`, or, when retry is on, a retry wrapper that calls the
-   * action's own `wrapReduce` on each attempt. Never replaces `action.wrapReduce`.
+   * Returns the action's own `wrapReduce`, or, when polling, debounce, retry or
+   * unlimitedRetryCheckInternet is on, a wrapper that calls the action's own `wrapReduce`.
+   * Never replaces `action.wrapReduce`.
    *
    * Note: An `OptimisticCommand` handles its own retry, by retrying only `sendCommandToServer`,
    * so that the optimistic state is not applied and rolled back on each attempt.
+   * Debounce can't be combined with retry, nor used in an `OptimisticCommand`.
+   * Polling can't be combined with debounce or retry, nor used in an `OptimisticCommand`.
+   * unlimitedRetryCheckInternet can't be combined with any of these.
    */
   private _getWrapReduce(action: KissAction<St>): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
     const userWrapReduce = action.wrapReduce.bind(action);
-    return (action.ifRetryIsOn && !(action instanceof OptimisticCommand))
+    if (action.poll !== undefined) return this._pollingWrapReduce(action, userWrapReduce);
+    const debounceMillis = action._debounceMillis;
+    if (debounceMillis !== null) return this._debounceWrapReduce(action, userWrapReduce, debounceMillis);
+    return ((action.ifRetryIsOn && !(action instanceof OptimisticCommand)) || action._isUnlimitedRetryCheckInternet)
       ? this._retryWrapReduce(action, userWrapReduce)
       : userWrapReduce;
+  }
+
+  // The error for an action that retries its reducer, but whose reducer is SYNC.
+  private static _syncRetryError(action: KissAction<any>): StoreException {
+    const feature = action._isUnlimitedRetryCheckInternet ? 'unlimitedRetryCheckInternet' : 'retry';
+    return new StoreException(`Action '${action}' uses ${feature}, but its reducer is SYNC. Retry needs an ASYNC reducer, that returns a Promise<(St) => St>, because a SYNC reducer does not fail in a way that retrying can fix.`);
+  }
+
+  /**
+   * Waits for the debounce period, and then calls the action's own `wrapReduce`. If another
+   * action with the same lock is dispatched meanwhile, returns `null` right away instead, so
+   * that the action finishes without running its reducer.
+   *
+   * The result is always ASYNC. A SYNC reducer's new state is returned as `() => newState`.
+   */
+  private _debounceWrapReduce(
+    action: KissAction<St>,
+    userWrapReduce: (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St>,
+    debounceMillis: number,
+  ): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
+
+    const store = this;
+
+    function _wrapReduceDebounce(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
+
+      async function _wrapReduceDebounceAsync(): AsyncReducer<St> {
+        const isLast = await store._waitDebounce(action.debounceLockBuilder(), debounceMillis);
+        if (!isLast) return null;
+
+        const newState = userWrapReduce(reduce)();
+        if (newState instanceof Promise) return newState;
+        if (newState == null || newState === store.state) return null;
+        return () => newState;
+      }
+
+      return () => _wrapReduceDebounceAsync();
+    }
+
+    return _wrapReduceDebounce;
+  }
+
+  /**
+   * Resolves with `true` after the debounce period, if no other action with the same lock was
+   * dispatched meanwhile. Otherwise, resolves with `false` as soon as the other action is
+   * dispatched (or the locks are removed).
+   */
+  private _waitDebounce(lock: any, debounceMillis: number): Promise<boolean> {
+    const index = this._debounceLocks.findIndex(entry => _isSameNonReentrantKey(entry.lock, lock));
+    if (index !== -1) this._debounceLocks.splice(index, 1)[0].cancel();
+
+    return new Promise<boolean>(resolve => {
+      const timer = setTimeout(() => {
+        this._debounceLocks = this._debounceLocks.filter(other => other !== entry);
+        resolve(true);
+      }, debounceMillis);
+
+      const entry = {
+        lock,
+        cancel: () => {
+          clearTimeout(timer);
+          resolve(false);
+        },
+      };
+
+      this._debounceLocks.push(entry);
+    });
+  }
+
+  /**
+   * For Kiss internal use only. Use `removeAllDebounceLocks()` in the action instead.
+   * Removes all debounce locks. The actions waiting for their debounce period finish right
+   * away, without running their reducer.
+   */
+  _removeAllDebounceLocks(): void {
+    const entries = this._debounceLocks;
+    this._debounceLocks = [];
+    for (const entry of entries) entry.cancel();
+  }
+
+  /**
+   * Starts, stops or restarts the polling of the action's polling key, according to its `poll`
+   * value, and runs the action's own `wrapReduce` when the `poll` value says the reducer runs.
+   * Otherwise, returns `null` synchronously, so that the action finishes without changing the
+   * state.
+   */
+  private _pollingWrapReduce(
+    action: KissAction<St>,
+    userWrapReduce: (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St>,
+  ): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
+
+    const store = this;
+
+    function _wrapReducePolling(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
+
+      function _reducePolling(): ReduxReducer<St> {
+        const key = action.computePollingKey();
+        const cycle = store._pollingCycles.find(entry => _isSameNonReentrantKey(entry.key, key));
+
+        switch (action.poll) {
+          case Poll.start:
+            // If polling is already active, don't do anything.
+            if (cycle !== undefined) return null;
+            return store._runNowAndStartPollingCycle(action, key, userWrapReduce(reduce));
+
+          case Poll.stop:
+            if (cycle !== undefined) store._stopPollingCycle(cycle);
+            return null;
+
+          case Poll.runNowAndRestart:
+            if (cycle !== undefined) store._stopPollingCycle(cycle);
+            return store._runNowAndStartPollingCycle(action, key, userWrapReduce(reduce));
+
+          default: // Poll.once
+            return userWrapReduce(reduce)();
+        }
+      }
+
+      return _reducePolling;
+    }
+
+    return _wrapReducePolling;
+  }
+
+  /**
+   * Starts a new polling cycle for the given `key`, and runs the `reduce` once, immediately.
+   *
+   * When `pollWaitsForRun` is true, the first tick is only scheduled after that immediate run
+   * finishes (even if it fails). When it's false, the first tick is scheduled right away.
+   */
+  private _runNowAndStartPollingCycle(
+    action: KissAction<St>,
+    key: any,
+    reduce: () => ReduxReducer<St>,
+  ): ReduxReducer<St> {
+    const cycle: PollingCycle = { key, timer: null };
+    this._pollingCycles.push(cycle);
+
+    if (action.pollWaitsForRun === false) {
+      this._scheduleNextPollingTick(action, cycle);
+      return reduce();
+    }
+
+    let result: ReduxReducer<St>;
+    try {
+      result = reduce();
+    } catch (error) {
+      this._scheduleNextPollingTick(action, cycle);
+      throw error;
+    }
+
+    if (result instanceof Promise)
+      return result.finally(() => this._scheduleNextPollingTick(action, cycle));
+
+    this._scheduleNextPollingTick(action, cycle);
+    return result;
+  }
+
+  /**
+   * Schedules a one-shot timer that dispatches the action returned by `createPollingAction()`,
+   * and then schedules the next tick. If `pollWaitsForRun` is true, the next tick is only
+   * scheduled when the dispatched action finishes. Otherwise, it's scheduled as soon as the
+   * action is dispatched.
+   *
+   * If the `cycle` is no longer active (because polling was stopped or restarted in the
+   * meantime), the tick is abandoned.
+   */
+  private _scheduleNextPollingTick(
+    action: KissAction<St>,
+    cycle: PollingCycle,
+  ): void {
+    if (!this._pollingCycles.includes(cycle)) return;
+
+    cycle.timer = setTimeout(() => {
+      if (!this._pollingCycles.includes(cycle)) return;
+
+      // While the tick runs there is no timer, but the cycle is still active.
+      cycle.timer = null;
+
+      const waitsForRun = action.pollWaitsForRun !== false;
+
+      const tick = (async () => {
+        const tickAction = action.createPollingAction();
+        if (waitsForRun) await this.dispatchAndWait(tickAction);
+        else this.dispatch(tickAction);
+      })();
+
+      if (!waitsForRun) this._scheduleNextPollingTick(action, cycle);
+
+      // Errors don't stop the polling. An error that was not swallowed is still thrown, as an
+      // unhandled rejection, like the error of any dispatch nobody waits for.
+      tick.finally(() => {
+        if (waitsForRun) this._scheduleNextPollingTick(action, cycle);
+      });
+    }, action._pollIntervalMillis!);
+  }
+
+  // Cancels the timer of the polling cycle, and removes the cycle, so that its ticks stop.
+  private _stopPollingCycle(cycle: PollingCycle): void {
+    if (cycle.timer !== null) clearTimeout(cycle.timer);
+    cycle.timer = null;
+    this._pollingCycles = this._pollingCycles.filter(entry => entry !== cycle);
+  }
+
+  /**
+   * For Kiss internal use only. Use `stopAllPolling()` in the action instead.
+   * Stops all polling cycles. Runs that are in progress still finish, but no new ticks start.
+   */
+  _stopAllPolling(): void {
+    const cycles = this._pollingCycles;
+    this._pollingCycles = [];
+    for (const cycle of cycles) {
+      if (cycle.timer !== null) clearTimeout(cycle.timer);
+      cycle.timer = null;
+    }
   }
 
   private _retryWrapReduce(
@@ -1377,24 +1988,54 @@ export class Store<St> {
     userWrapReduce: (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St>,
   ): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
 
-    const retry = (action.retry as RetryOptions);
+    const store = this;
+    const retry = action._retry;
 
-    if (!retry.on) {
-      function _wrapReduceOff(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
-        return userWrapReduce(reduce);
-      }
+    // With unlimitedRetryCheckInternet, the internet is checked before each attempt. If there is
+    // no internet, the reducer doesn't run, and it's retried later. Note this retries unlimited
+    // times, and the waits between attempts are capped by `maxDelayNoInternet`.
+    const checkInternet = action._isUnlimitedRetryCheckInternet;
 
-      return _wrapReduceOff;
+    const _syncRetryError = () => Store._syncRetryError(action);
+
+    // Counts the failed attempt, and waits before the next one. Throws the error instead, if
+    // there are no retries left, or an `AbortDispatchException` if the internal action props
+    // were cleared (for example, because the store was shut down).
+    async function _waitToRetry(error: any, maxDelay: number): Promise<void> {
+      retry.attempts++;
+      if (!retry.unlimitedRetries && (retry.maxRetries >= 0) && (retry.attempts > retry.maxRetries)) throw error;
+
+      await store._waitRetryDelay(action, action._nextRetryDelay(maxDelay));
     }
-    //
-    else {
-      function _syncRetryError(): StoreException {
-        return new StoreException(`Action '${action}' uses retry, but its reducer is SYNC. Retry needs an ASYNC reducer, that returns a Promise<(St) => St>, because a SYNC reducer does not fail in a way that retrying can fix.`);
-      }
 
-      function _wrapReduceRetry(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
+    function _wrapReduceRetry(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
 
-        async function _wrapReduceRetryAsync(): AsyncReducer<St> {
+      async function _wrapReduceRetryAsync(): AsyncReducer<St> {
+
+        while (true) {
+
+          if (checkInternet) {
+            let hasInternet: boolean;
+            try {
+              hasInternet = await action._hasInternet();
+            } catch (error) {
+              // If checking the internet fails, this counts as a failed attempt with internet.
+              Store._logLazy(() => `Checking the internet for ${action} has thrown an error: ${error}.`);
+              await _waitToRetry(error, retry.maxDelay);
+              continue;
+            }
+
+            const attempt = (retry.attempts === 0) ? 'Trying' : 'Retrying';
+            const attemptNumber = (retry.attempts === 0) ? '' : ` (attempt ${retry.attempts})`;
+
+            if (!hasInternet) {
+              Store._logLazy(() => `${attempt} ${action}; aborted because of no internet${attemptNumber}.`);
+              await _waitToRetry(null, action._maxDelayNoInternet);
+              continue;
+            }
+
+            Store._logLazy(() => `${attempt} ${action}${attemptNumber}.`);
+          }
 
           // A SYNC reducer can't be retried. If the reducer throws synchronously, or returns
           // without a Promise (even null, or the unchanged state), fail right away with a
@@ -1430,13 +2071,11 @@ export class Store<St> {
           catch (error) {
             if (isSyncReducer) throw _syncRetryError();
 
-            (action.retry as RetryOptions).attempts++;
-            const { maxRetries, unlimitedRetries } = action.retry as RetryOptions;
-            if (!unlimitedRetries && (maxRetries >= 0) && (action.attempts > maxRetries)) throw error;
+            // An aborted action is not retried.
+            if (error instanceof AbortDispatchException) throw error;
 
-            const currentDelay = action._nextRetryDelay();
-            await new Promise(resolve => setTimeout(resolve, currentDelay));
-            return _wrapReduceRetry(reduce)() as any;
+            await _waitToRetry(error, retry.maxDelay);
+            continue;
           }
 
           // The custom `wrapReduce` may have called a SYNC reducer only after some `await`.
@@ -1444,12 +2083,12 @@ export class Store<St> {
 
           return newState;
         }
-
-        return () => _wrapReduceRetryAsync();
       }
 
-      return _wrapReduceRetry;
+      return () => _wrapReduceRetryAsync();
     }
+
+    return _wrapReduceRetry;
   }
 
   private _record(
@@ -1507,8 +2146,8 @@ export class Store<St> {
         }
         //
         else {
-          if (action.ifRetryIsOn && !this._isFunction(reduceResult))
-            throw new StoreException(`Action '${action}' uses retry, but its reducer is SYNC. Retry needs an ASYNC reducer, that returns a Promise<(St) => St>, because a SYNC reducer does not fail in a way that retrying can fix.`);
+          if ((action.ifRetryIsOn || action._isUnlimitedRetryCheckInternet) && !this._isFunction(reduceResult))
+            throw Store._syncRetryError(action);
 
           const newAsyncState = reduceResult(this.state);
           if (newAsyncState != null && newAsyncState !== this.state) {
@@ -1556,8 +2195,8 @@ export class Store<St> {
         // 5.3) If the reducer returned a function `(state: St) => (St | null)`,
       // we still need to run this function to generate the new state.
       else {
-        if (action.ifRetryIsOn && !this._isFunction(functionalReduceResult))
-          throw new StoreException(`Action '${action}' uses retry, but its reducer is SYNC. Retry needs an ASYNC reducer, that returns a Promise<(St) => St>, because a SYNC reducer does not fail in a way that retrying can fix.`);
+        if ((action.ifRetryIsOn || action._isUnlimitedRetryCheckInternet) && !this._isFunction(functionalReduceResult))
+          throw Store._syncRetryError(action);
 
         const finalReduceState = functionalReduceResult(this.state);
 

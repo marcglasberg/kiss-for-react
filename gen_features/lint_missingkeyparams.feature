@@ -146,3 +146,38 @@ class LoadTodos extends KissAction<State> {
     When The code is linted.
     Then With type information, there is a warning.
     And Without type information, there is no warning, since the superclass is unknown.
+
+  Scenario Outline: An action with unlimitedRetryCheckInternet and fields, without a key, is a warning.
+    Given An action with unlimitedRetryCheckInternet = true, and the field todoId.
+    And It does not override nonReentrantKeyParams or computeNonReentrantKey.
+    When The code is linted.
+    Then There is a warning in the class name, since the action is non-reentrant.
+    And With nonReentrantKeyParams, there is no warning.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |
+
+  Scenario Outline: An OptimisticSync with fields, without a key, is a warning.
+    Given A subclass of OptimisticSync with the field itemId.
+    And It doesn't override optimisticSyncKeyParams or computeOptimisticSyncKey.
+    When The code is linted.
+    Then There is a warning in the class name, saying the value of other items may never be sent.
+    And The suggestion overrides optimisticSyncKeyParams, returning the field, and the code compiles.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |
+
+  Scenario Outline: OptimisticSyncs that are not reported.
+    Given An OptimisticSync that {Case}.
+    When The code is linted.
+    Then There are no warnings.
+    Examples: 
+      | Case                                                                                 | Code                                                  |
+      | overrides optimisticSyncKeyParams                                                    | 
+  optimisticSyncKeyParams() { return this.itemId; }  |
+      | overrides computeOptimisticSyncKey                                                   | 
+  computeOptimisticSyncKey() { return this.itemId; } |
+      | only overrides nonReentrantKeyParams, which it does not use, so it is still reported | 
+  nonReentrantKeyParams() { return this.itemId; }    |

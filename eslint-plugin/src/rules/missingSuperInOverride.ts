@@ -4,6 +4,7 @@ import {
   ClassNode,
   declaresCheckInternet,
   extendsOptimisticCommand,
+  extendsOptimisticSync,
   inheritedBeforeWithoutSuper,
   isActionClass,
   readsThisMember,
@@ -28,8 +29,8 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  *   }
  *   ```
  *
- * - `reduce()` in a subclass of `OptimisticCommand`, which must not be overridden. The
- *   optimistic update stops working.
+ * - `reduce()` in a subclass of `OptimisticCommand` or `OptimisticSync`, which must not be
+ *   overridden. The optimistic update stops working.
  *
  * A `before` that reads `this.checkInternet` is assumed to check the internet by itself.
  *
@@ -41,7 +42,7 @@ export default createRule({
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow overrides that turn off `checkInternet` or `OptimisticCommand`, because they don\'t call `super`.',
+      description: 'Disallow overrides that turn off `checkInternet`, `OptimisticCommand` or `OptimisticSync`, because they don\'t call `super`.',
     },
     hasSuggestions: true,
     schema: [],
@@ -56,6 +57,10 @@ export default createRule({
         'Don\'t override `reduce` in an `OptimisticCommand`. Its `reduce` does the optimistic update, ' +
         'so overriding it turns that off. Implement `optimisticValue`, `getValueFromState`, ' +
         '`applyValueToState` and `sendCommandToServer` instead.',
+      optimisticSyncReduce:
+        'Don\'t override `reduce` in an `OptimisticSync`. Its `reduce` does the optimistic update, and ' +
+        'sends the requests to the server, so overriding it turns that off. Implement `valueToApply`, ' +
+        '`applyOptimisticValueToState`, `getValueFromState` and `sendValueToServer` instead.',
       addSuper: 'Call `await super.before()` first.',
     },
   },
@@ -91,6 +96,11 @@ export default createRule({
       // `reduce` in an `OptimisticCommand`.
       if (reduce && extendsOptimisticCommand(classNode, context, typeInfo)) {
         context.report({node: reduce.key, messageId: 'optimisticReduce'});
+      }
+
+      // `reduce` in an `OptimisticSync`.
+      else if (reduce && extendsOptimisticSync(classNode, context, typeInfo)) {
+        context.report({node: reduce.key, messageId: 'optimisticSyncReduce'});
       }
     };
 

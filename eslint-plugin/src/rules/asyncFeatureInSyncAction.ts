@@ -12,6 +12,7 @@ import {
   reduceKind,
   removeMember,
   retryOf,
+  unlimitedRetryCheckInternetOfClass,
 } from '../actionFeatures.js';
 import { createRule, findProperty, getTypeInfo, isKissActionClass, isTestFile, TypeInfo } from '../utils.js';
 
@@ -33,7 +34,8 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  * of the action throw.
  *
  * Not reported when the action overrides `before` or `wrapReduce` (which may make it async),
- * or in tests. `retry` is reported by `retry-requires-async-reduce`.
+ * or in tests. `retry` and `unlimitedRetryCheckInternet` are reported by
+ * `retry-requires-async-reduce`.
  *
  * Suggestion: remove the property.
  */
@@ -87,8 +89,9 @@ export default createRule({
       if (features.overridesBeforeOrWrapReduce) return;
 
       if (reportCheckInternet) report(checkInternet!, 'checkInternet');
-      // With `checkInternet` or `retry`, the action is async anyway.
-      if (reportNonReentrant && !features.setsCheckInternet && !features.retryOn) report(nonReentrant!, 'nonReentrant');
+      // With `checkInternet`, `retry` or `unlimitedRetryCheckInternet`, the action is async anyway.
+      if (reportNonReentrant && !features.setsCheckInternet && !features.retryOn &&
+        !unlimitedRetryCheckInternetOfClass(classNode, context, typeInfo)) report(nonReentrant!, 'nonReentrant');
     };
 
     return {

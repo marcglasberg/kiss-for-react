@@ -11,18 +11,35 @@ import {
   isDeclaredByUser,
   isTrue,
   needsOverrideKeyword,
+  unlimitedRetryCheckInternetOfClass,
 } from '../actionFeatures.js';
 import { createRule, getTypeInfo, memberName, TypeInfo } from '../utils.js';
 
 type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 
 /** Properties of Kiss actions that configure the action. They are not the action's own data. */
-const KISS_PROPERTIES = ['retry', 'checkInternet', 'nonReentrant'];
+const KISS_PROPERTIES = ['retry', 'checkInternet', 'nonReentrant', 'debounce', 'throttle',
+  'removeThrottleLockOnError', 'fresh', 'sequential', 'poll', 'pollInterval', 'pollWaitsForRun',
+  'unlimitedRetryCheckInternet', 'maxFollowUpRequests'];
+
+/** The kind of key the action uses: the non-reentrant key, or the `OptimisticSync` key. */
+type KeyKind = 'nonReentrant' | 'optimisticSync';
+
+/** The methods that compute each kind of key. The first one is the one the suggestion overrides. */
+const KEY_METHODS: Record<KeyKind, [string, string]> = {
+  nonReentrant: ['nonReentrantKeyParams', 'computeNonReentrantKey'],
+  optimisticSync: ['optimisticSyncKeyParams', 'computeOptimisticSyncKey'],
+};
 
 /**
- * Reports a non-reentrant action with fields, that doesn't override `nonReentrantKeyParams`
- * or `computeNonReentrantKey`. Non-reentrant actions are the ones with `nonReentrant = true`,
- * and the subclasses of `OptimisticCommand`:
+ * Reports an action with fields, whose key doesn't depend on them:
+ *
+ * - A non-reentrant action that doesn't override `nonReentrantKeyParams` or
+ *   `computeNonReentrantKey`. Non-reentrant actions are the ones with `nonReentrant = true` or
+ *   `unlimitedRetryCheckInternet`, and the subclasses of `OptimisticCommand`.
+ *
+ * - A subclass of `OptimisticSync` that doesn't override `optimisticSyncKeyParams` or
+ *   `computeOptimisticSyncKey`.
  *
  * ```ts
  * class SaveTodo extends OptimisticCommand<State> {  // Warning
@@ -33,20 +50,28 @@ const KISS_PROPERTIES = ['retry', 'checkInternet', 'nonReentrant'];
  *   nonReentrant = true;
  *   constructor(readonly todoId: string) { super(); }
  * }
+ *
+ * class ToggleLike extends OptimisticSync<State, boolean> {  // Warning
+ *   constructor(readonly itemId: string) { super(); }
+ * }
  * ```
  *
- * By default, the non-reentrant key doesn't depend on the fields, so all instances share it.
- * For example, `SaveTodo('A')` then blocks `SaveTodo('B')`. This rule is opt-in, since sharing
- * the key is often intended.
+ * By default, the key doesn't depend on the fields, so all instances share it. For example,
+ * `SaveTodo('A')` then blocks `SaveTodo('B')`. And while `ToggleLike('A')` has a request in
+ * flight, `ToggleLike('B')` changes the state but doesn't send its own request. The follow-up
+ * request of `ToggleLike('A')` only checks item A, so item B is never sent to the server. This
+ * rule is opt-in, since sharing the key is often intended.
  *
- * Suggestion: override `nonReentrantKeyParams()`, returning the fields.
+ * Suggestion: override `nonReentrantKeyParams()` (or `optimisticSyncKeyParams()`), returning
+ * the fields.
  */
 export default createRule({
   name: 'missing-key-params',
   meta: {
     type: 'suggestion',
     docs: {
-      description: 'Recommend `nonReentrantKeyParams` in non-reentrant actions with fields.',
+      description: 'Recommend `nonReentrantKeyParams` in non-reentrant actions with fields, and ' +
+        '`optimisticSyncKeyParams` in `OptimisticSync` actions with fields.',
     },
     hasSuggestions: true,
     schema: [],
@@ -55,7 +80,12 @@ export default createRule({
         '`{{action}}` has fields, but its non-reentrant key doesn\'t depend on them. So, while one ' +
         '`{{action}}` runs, any other `{{action}}` is aborted, even with different fields. To let them run ' +
         'at the same time, override `nonReentrantKeyParams()`.',
-      addKeyParams: 'Override `nonReentrantKeyParams()`, returning {{fields}}.',
+      missingOptimisticSyncKeyParams:
+        '`{{action}}` has fields, but its optimistic sync key doesn\'t depend on them. So, while one ' +
+        '`{{action}}` has a request in flight, any other `{{action}}` changes the state without sending ' +
+        'its own request, even with different fields, and its value may never be sent to the server. ' +
+        'To give each one its own key, override `optimisticSyncKeyParams()`.',
+      addKeyParams: 'Override `{{method}}()`, returning {{fields}}.',
     },
   },
   defaultOptions: [],
@@ -64,12 +94,14 @@ export default createRule({
 
     const checkClass = (classNode: ClassNode) => {
       if (classNode.abstract || !classNode.superClass) return;
-      if (!isNonReentrantWithoutKey(classNode, context, typeInfo)) return;
+      const kind = keyKindWithoutKey(classNode, context, typeInfo);
+      if (kind === null) return;
 
       const fields = fieldsOf(classNode);
       if (fields.length === 0) return;
 
       const name = classNode.id?.name ?? 'This action';
+      const method = KEY_METHODS[kind][0];
       const values = fields.map((field) => `this.${field.name}`);
       const returned = values.length === 1 ? values[0] : `[${values.join(', ')}]`;
       const override = needsOverrideKeyword(classNode, typeInfo) ? 'override ' : '';
@@ -77,13 +109,13 @@ export default createRule({
 
       context.report({
         node: classNode.id ?? classNode.superClass,
-        messageId: 'missingKeyParams',
+        messageId: kind === 'nonReentrant' ? 'missingKeyParams' : 'missingOptimisticSyncKeyParams',
         data: {action: name},
         suggest: [{
           messageId: 'addKeyParams',
-          data: {fields: values.map((value) => `\`${value}\``).join(', ')},
+          data: {method, fields: values.map((value) => `\`${value}\``).join(', ')},
           fix: (fixer) => fixer.insertTextAfter(after,
-            `\n\n${indentationOf(after, context)}${override}nonReentrantKeyParams() { return ${returned}; }`),
+            `\n\n${indentationOf(after, context)}${override}${method}() { return ${returned}; }`),
         }],
       });
     };
@@ -96,22 +128,36 @@ export default createRule({
 });
 
 /**
- * True if the action is non-reentrant (it extends `OptimisticCommand`, or it or a superclass
- * sets `nonReentrant = true`), and doesn't override how its key is computed.
+ * The kind of key the action uses, if it doesn't override how that key is computed. Otherwise,
+ * or if the action doesn't use a key, `null`.
+ *
+ * The action uses the `OptimisticSync` key if it extends `OptimisticSync`. It uses the
+ * non-reentrant key if it extends `OptimisticCommand`, or it or a superclass sets
+ * `nonReentrant = true` or turns on `unlimitedRetryCheckInternet`.
  */
-function isNonReentrantWithoutKey(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+function keyKindWithoutKey(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): KeyKind | null {
+  let kind: KeyKind | null;
+  let declares: (name: string) => boolean;
+
   if (typeInfo) {
     const type = instanceTypeOfClass(classNode, typeInfo);
-    const nonReentrant = extendsClassNamed(type, 'OptimisticCommand', typeInfo.checker) ||
-      (extendsClassNamed(type, 'KissAction', typeInfo.checker) && initializerTextOf(type, 'nonReentrant')?.trim() === 'true');
-    return nonReentrant &&
-      !isDeclaredByUser(type, 'nonReentrantKeyParams') && !isDeclaredByUser(type, 'computeNonReentrantKey');
+    kind = extendsClassNamed(type, 'OptimisticSync', typeInfo.checker) ? 'optimisticSync'
+      : (extendsClassNamed(type, 'OptimisticCommand', typeInfo.checker) ||
+        (extendsClassNamed(type, 'KissAction', typeInfo.checker) &&
+          (initializerTextOf(type, 'nonReentrant')?.trim() === 'true' ||
+            unlimitedRetryCheckInternetOfClass(classNode, context, typeInfo)))) ? 'nonReentrant' : null;
+    declares = (name) => isDeclaredByUser(type, name);
+  } else {
+    const chain = classChain(classNode, context);
+    const property = findPropertyInChain(chain, 'nonReentrant');
+    kind = chain.end === 'OptimisticSync' ? 'optimisticSync'
+      : (chain.end === 'OptimisticCommand' || (chain.end === 'KissAction' &&
+        ((!!property && isTrue(property)) || unlimitedRetryCheckInternetOfClass(classNode, context, null)))) ? 'nonReentrant' : null;
+    declares = (name) => !!findMemberInChain(chain, name);
   }
-  const chain = classChain(classNode, context);
-  const property = findPropertyInChain(chain, 'nonReentrant');
-  const nonReentrant = chain.end === 'OptimisticCommand' || (chain.end === 'KissAction' && !!property && isTrue(property));
-  return nonReentrant &&
-    !findMemberInChain(chain, 'nonReentrantKeyParams') && !findMemberInChain(chain, 'computeNonReentrantKey');
+
+  if (kind === null || KEY_METHODS[kind].some(declares)) return null;
+  return kind;
 }
 
 /**

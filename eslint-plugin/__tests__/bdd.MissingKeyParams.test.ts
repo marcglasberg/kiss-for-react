@@ -251,3 +251,106 @@ ${commandMethods}
     expect(result.messages.map((m) => m.text)).toEqual(['SaveTodo']);
     expect(lint(rule, code, {files, types: false}).messages).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('An action with unlimitedRetryCheckInternet and fields, without a key, is a warning.')
+  .given('An action with unlimitedRetryCheckInternet = true, and the field todoId.')
+  .and('It does not override nonReentrantKeyParams or computeNonReentrantKey.')
+  .when('The code is linted.')
+  .then('There is a warning in the class name, since the action is non-reentrant.')
+  .and('With nonReentrantKeyParams, there is no warning.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const types = ctx.example.val('Type information') as boolean;
+    const action = (keyParams: string) => `${actionPrelude}
+class LoadTodo extends KissAction<State> {
+  unlimitedRetryCheckInternet = true;
+  constructor(readonly todoId: string) { super(); }${keyParams}
+  async reduce() { await loadTodo(this.todoId); return null; }
+}
+`;
+    const result = lint(rule, action(''), {types});
+    expect(result.messages.map((m) => m.text)).toEqual(['LoadTodo']);
+    expect(result.messages[0].suggestions).toEqual(['Override `nonReentrantKeyParams()`, returning `this.todoId`.']);
+
+    const withKey = lint(rule, action('\n  nonReentrantKeyParams() { return this.todoId; }'), {types});
+    expect(withKey.messages).toEqual([]);
+    expect(withKey.typeErrors).toEqual([]);
+  });
+
+// ---------------------------------------------------------------------------------------------
+// OptimisticSync
+
+const syncPrelude = `import { OptimisticSync } from 'kiss-for-react';
+
+class State {
+  constructor(readonly likes: Record<string, boolean>) {}
+  withLike(id: string, liked: boolean): State { return new State({ ...this.likes, [id]: liked }); }
+}
+
+declare function setLiked(id: string, liked: boolean): Promise<void>;
+`;
+
+const syncMethods = `
+  valueToApply() { return !this.state.likes[this.itemId]; }
+  applyOptimisticValueToState(state: State, liked: boolean) { return state.withLike(this.itemId, liked); }
+  getValueFromState(state: State) { return state.likes[this.itemId] ?? false; }
+  async sendValueToServer(liked: boolean) { await setLiked(this.itemId, liked); }`;
+
+Bdd(feature)
+  .scenario('An OptimisticSync with fields, without a key, is a warning.')
+  .given('A subclass of OptimisticSync with the field itemId.')
+  .and('It doesn\'t override optimisticSyncKeyParams or computeOptimisticSyncKey.')
+  .when('The code is linted.')
+  .then('There is a warning in the class name, saying the value of other items may never be sent.')
+  .and('The suggestion overrides optimisticSyncKeyParams, returning the field, and the code compiles.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${syncPrelude}
+class ToggleLike extends OptimisticSync<State, boolean> {
+  constructor(readonly itemId: string) { super(); }
+${syncMethods}
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages.map((m) => m.text)).toEqual(['ToggleLike']);
+    expect(result.messages[0].message).toContain('`ToggleLike` has fields, but its optimistic sync key doesn\'t depend on them.');
+    expect(result.messages[0].message).toContain('its value may never be sent to the server');
+    expect(result.messages[0].suggestions).toEqual(['Override `optimisticSyncKeyParams()`, returning `this.itemId`.']);
+
+    const suggested = result.withSuggestion(0, 0);
+    expect(suggested).toContain(`  constructor(readonly itemId: string) { super(); }
+
+  optimisticSyncKeyParams() { return this.itemId; }
+`);
+    expect(lint(rule, suggested).typeErrors).toEqual([]);
+    expect(lint(rule, suggested).messages).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('OptimisticSyncs that are not reported.')
+  .given('An OptimisticSync that {Case}.')
+  .when('The code is linted.')
+  .then('There are no warnings.')
+  .example(val('Case', 'overrides optimisticSyncKeyParams'), val('Code', `
+  optimisticSyncKeyParams() { return this.itemId; }`))
+  .example(val('Case', 'overrides computeOptimisticSyncKey'), val('Code', `
+  computeOptimisticSyncKey() { return this.itemId; }`))
+  .example(val('Case', 'only overrides nonReentrantKeyParams, which it does not use, so it is still reported'), val('Code', `
+  nonReentrantKeyParams() { return this.itemId; }`))
+  .run(async (ctx) => {
+    const code = `${syncPrelude}
+class ToggleLike extends OptimisticSync<State, boolean> {
+  constructor(readonly itemId: string) { super(); }
+${syncMethods}${ctx.example.val('Code')}
+}
+`;
+    const reported = (ctx.example.val('Case') as string).includes('still reported');
+    for (const types of [true, false]) {
+      const result = lint(rule, code, {types});
+      expect(result.typeErrors).toEqual([]);
+      expect(result.messages.map((m) => m.text)).toEqual(reported ? ['ToggleLike'] : []);
+    }
+  });

@@ -8,7 +8,9 @@ import {
   hasSubclasses,
   initializerTextOf,
   isDeclaredByUser,
+  isUnlimitedRetryCheckInternetOn,
   retryOf,
+  unlimitedRetryCheckInternetOfClass,
 } from '../actionFeatures.js';
 import { createRule, getTypeInfo, isTestFile, kissImportName, TypeInfo, unwrap } from '../utils.js';
 
@@ -29,7 +31,7 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  *
  * Abstract classes are not reported, since `isWaiting` also matches their subclasses. Neither
  * are classes that may become async: classes with subclasses (which `isWaiting` also matches),
- * and classes that override `wrapReduce`, or turn on `retry`.
+ * and classes that override `wrapReduce`, or turn on `retry` or `unlimitedRetryCheckInternet`.
  */
 export default createRule({
   name: 'wait-fail-never-matches',
@@ -82,8 +84,8 @@ function isWaitingMethod(callee: TSESTree.Expression, context: Context): string 
 
 /**
  * True if the action may be async after all: it has subclasses (which `isWaiting` also matches),
- * or it overrides `wrapReduce` (which may return a promise), or it turns on `retry` (which runs
- * the reducer asynchronously).
+ * or it overrides `wrapReduce` (which may return a promise), or it turns on `retry` or
+ * `unlimitedRetryCheckInternet` (which run the reducer asynchronously).
  */
 function mayBecomeAsync(classRef: TSESTree.Expression, context: Context, typeInfo: TypeInfo | null): boolean {
   const expression = unwrap(classRef);
@@ -95,6 +97,8 @@ function mayBecomeAsync(classRef: TSESTree.Expression, context: Context, typeInf
     if (signatures.length === 0) return true;
     const type: ts.Type = typeInfo.checker.getReturnTypeOfSignature(signatures[0]);
     if (isDeclaredByUser(type, 'wrapReduce')) return true;
+    const unlimited = initializerTextOf(type, 'unlimitedRetryCheckInternet');
+    if (unlimited !== null && isUnlimitedRetryCheckInternetOn(unlimited)) return true;
     const retry = initializerTextOf(type, 'retry');
     return retry !== null && retryOf(retry).on;
   }
@@ -103,6 +107,7 @@ function mayBecomeAsync(classRef: TSESTree.Expression, context: Context, typeInf
   if (!classNode || hasSubclasses(expression, classNode, context, null)) return true;
   const chain = classChain(classNode, context);
   if (findMemberInChain(chain, 'wrapReduce')) return true;
+  if (unlimitedRetryCheckInternetOfClass(classNode, context, null)) return true;
   const retry = findPropertyInChain(chain, 'retry');
   return !!retry?.value && retryOf(context.sourceCode.getText(retry.value)).on;
 }

@@ -18,11 +18,10 @@ rules that only exist in Kiss.
 
 | Status      | Count                         |
 |-------------|-------------------------------|
-| Implemented | 46 (37 from AsyncRedux, 9 new) |
-| Future      | 1 (from AsyncRedux)           |
-| Skipped     | 35 (from AsyncRedux)          |
+| Implemented | 48 (39 from AsyncRedux, 9 new) |
+| Skipped     | 34 (from AsyncRedux)          |
 
-Total: the 73 AsyncRedux rules (37 implemented, 1 future, 35 skipped), and 9 new rules (all
+Total: the 73 AsyncRedux rules (39 implemented, 34 skipped), and 9 new rules (all
 implemented).
 
 All rules planned here are implemented, except two that turned out not to make sense in Kiss
@@ -39,8 +38,8 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 3  | `wrap_reduce_return_type`                 | -                                                                             | Skipped. TypeScript already reports it.                                                                                                                                      |
 | 4  | `reduce_without_await`                    | [`reduce-without-await`](#reduce-without-await)                               | Implemented, adapted. In Kiss it doesn't lose state changes, but it makes the action async for nothing. |
 | 5  | `dispatch_sync_async_action`              | `dispatch-sync-async-action`                                                  | Implemented. |
-| 6  | `incompatible_mixins`                     | [`incompatible-action-features`](#incompatible-action-features)               | Future. Kiss has no mixins, and its current features (`nonReentrant`, `retry`, `checkInternet`) can be combined. Revisit when `debounce` and `throttle` exist.             |
-| 7  | `polling_with_caveat_mixin`               | -                                                                             | Skipped. Kiss has no polling.                                                                                                                                                |
+| 6  | `incompatible_mixins`                     | [`incompatible-action-features`](#incompatible-action-features)               | Implemented, adapted. Reports the action features that can't be combined (the same checks the store does on dispatch), including the ones an `OptimisticCommand` or an `OptimisticSync` can't use. |
+| 7  | `polling_with_caveat_mixin`               | [`polling-with-caveat`](#polling-with-caveat)                 | Implemented, adapted: `checkInternet`, `nonReentrant`, `throttle`, `fresh` or `sequential` in an action with `poll`. |
 | 8  | `wait_fail_invalid_argument`              | -                                                                             | Skipped. The TypeScript types of `isWaiting`, `isFailed`, `exceptionFor` and their hooks only accept action classes.                                                         |
 | 9  | `wait_fail_never_matches`                 | [`wait-fail-never-matches`](#wait-fail-never-matches)                         | Implemented, adapted. Only the "sync action in `isWaiting`" case applies. Abstract classes in `isFailed` are already TypeScript errors, and `isWaiting` accepts them in Kiss. |
 | 10 | `avoid_context_state`                     | [`avoid-use-all-state`](#avoid-use-all-state)                                 | Implemented, adapted: `useAllState` is the Kiss version of `context.state`. |
@@ -60,7 +59,7 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 24 | `prefer_return_null`                      | [`prefer-return-null`](#prefer-return-null)                                   | Implemented. |
 | 25 | `stale_state_after_await`                 | `stale-state-after-await`                                                     | Implemented. |
 | 26 | `after_throws`                            | [`after-throws`](#after-throws)                                               | Implemented. |
-| 27 | `missing_super_in_mixin_override`         | [`missing-super-in-override`](#missing-super-in-override)                     | Implemented, adapted: Kiss has no mixins, but `checkInternet` and `OptimisticCommand` depend on inherited methods. |
+| 27 | `missing_super_in_mixin_override`         | [`missing-super-in-override`](#missing-super-in-override)                     | Implemented, adapted: Kiss has no mixins, but `checkInternet`, `OptimisticCommand` and `OptimisticSync` depend on inherited methods. |
 | 28 | `user_exception_outside_action`           | [`user-exception-outside-action`](#user-exception-outside-action)             | Implemented. |
 | 29 | `user_exception_without_cause`            | [`user-exception-without-cause`](#user-exception-without-cause)               | Implemented. Uses `withHardCause` instead of `addCause`. |
 | 30 | `dispatch_in_global_error_observer`       | [`dispatch-in-global-wrap-error`](#dispatch-in-global-wrap-error)             | Skipped. Checked in Kiss's code and with a test: dispatching from `globalWrapError` (or an action's `wrapError`) works fine. |
@@ -68,12 +67,12 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 32 | `retry_without_non_reentrant`             | [`retry-without-non-reentrant`](#retry-without-non-reentrant)                 | Implemented. |
 | 33 | `dispatch_and_wait_unlimited_retries`     | [`dispatch-and-wait-unlimited-retries`](#dispatch-and-wait-unlimited-retries) | Implemented. |
 | 34 | `async_mixin_in_sync_action`              | [`async-feature-in-sync-action`](#async-feature-in-sync-action)               | Implemented, adapted: Kiss has features, not mixins. `retry` is already covered by `retry-requires-async-reduce`. |
-| 35 | `sequential_deadlock`                     | -                                                                             | Skipped. Kiss has no `Sequential`.                                                                                                                                           |
-| 36 | `sequential_before_super_not_first`       | -                                                                             | Skipped, same reason.                                                                                                                                                        |
-| 37 | `sequential_after_super_not_in_finally`   | -                                                                             | Skipped, same reason.                                                                                                                                                        |
-| 38 | `polling_action_restarts_polling`         | -                                                                             | Skipped. Kiss has no polling.                                                                                                                                                |
+| 35 | `sequential_deadlock`                     | -                                                                             | Not implemented yet. Kiss now has `sequential`, so this rule could be added.                                                                                                 |
+| 36 | `sequential_before_super_not_first`       | -                                                                             | Skipped. Kiss's `sequential` waits for its turn before calling `before`, so there's no `super` to call.                                                                      |
+| 37 | `sequential_after_super_not_in_finally`   | -                                                                             | Skipped. Kiss's `sequential` releases the queue itself after `after`, so there's no `super` to call.                                                                         |
+| 38 | `polling_action_restarts_polling`         | -                                                                             | Not implemented yet. Kiss now has polling, so this rule could be added: `createPollingAction()` returning an action with `Poll.start` or `Poll.runNowAndRestart`.          |
 | 39 | `server_push_associated_action`           | -                                                                             | Skipped. Kiss has no server push.                                                                                                                                            |
-| 40 | `internet_simulation_in_production`       | [`testing-feature-in-production`](#testing-feature-in-production)             | Implemented, adapted: Kiss's testing features are mocks, `record`, and the test-only wait methods. |
+| 40 | `internet_simulation_in_production`       | [`testing-feature-in-production`](#testing-feature-in-production)             | Implemented, adapted: Kiss's testing features are mocks, `record`, the test-only wait methods, and the internet simulation (`store.forceInternetOnOffSimulation`, and `internetOnOffSimulation` returning `true` or `false`, as in AsyncRedux). |
 | 41 | `prefer_immutable_collections`            | [`prefer-readonly-collections`](#prefer-readonly-collections)                 | Implemented, adapted: TypeScript's `readonly T[]`, `ReadonlyMap` and `ReadonlySet`, instead of `fast_immutable_collections`. |
 | 42 | `non_state_object_in_state`               | [`non-state-object-in-state`](#non-state-object-in-state)                     | Implemented, with the TypeScript/React versions of these objects. |
 | 43 | `missing_initial_state`                   | [`missing-initial-state`](#missing-initial-state)                             | Implemented, opt-in, since the Kiss docs say a static `initialState` is optional, and often use `new State()` directly. |
@@ -104,7 +103,7 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 68 | `avoid_abort_dispatch`                    | [`avoid-abort-dispatch`](#avoid-abort-dispatch-and-avoid-wrap-reduce)         | Implemented, opt-in. The Kiss docs also call it "a complex power feature that you may not need to learn". |
 | 69 | `avoid_wrap_reduce`                       | [`avoid-wrap-reduce`](#avoid-abort-dispatch-and-avoid-wrap-reduce)            | Implemented, opt-in. Same. |
 | 70 | `global_error_observer_without_env`       | -                                                                             | Skipped. Kiss has no `environment`.                                                                                                                                          |
-| 71 | `missing_key_params`                      | [`missing-key-params`](#missing-key-params)                                   | Implemented, opt-in. For `nonReentrant` actions and `OptimisticCommand`. |
+| 71 | `missing_key_params`                      | [`missing-key-params`](#missing-key-params)                                   | Implemented, opt-in. For `nonReentrant` actions, `OptimisticCommand` and `OptimisticSync`. |
 | 72 | `route_in_state`                          | [`route-in-state`](#route-in-state)                                           | Implemented, opt-in, with React's router names. |
 | 73 | `action_without_to_string`                | -                                                                             | Skipped. Kiss's `KissAction.toString()` already shows all fields of the action.                                                                                              |
 
@@ -281,8 +280,8 @@ Error. An override that silently turns off a Kiss feature, because it doesn't ca
   }
   ```
 
-- `reduce()` in a subclass of `OptimisticCommand`, whose docs say "Do NOT override this
-  method". The optimistic update stops working.
+- `reduce()` in a subclass of `OptimisticCommand` or `OptimisticSync`, whose docs say "Do NOT
+  override this method". The optimistic update stops working.
 
 Quick fix, for `before`: add `await super.before();` as the first statement.
 
@@ -357,7 +356,8 @@ class LoadText extends Action {
 }
 ```
 
-Not reported for `OptimisticCommand`, which has its own non-reentrant key, when the action
+Not reported for `OptimisticCommand`, which has its own non-reentrant key, for
+`OptimisticSync`, which can't use `retry` nor `nonReentrant`, when the action
 overrides `abortDispatch`, or in tests. Quick fix (automatic): add `nonReentrant = true;`.
 
 ### dispatch-and-wait-unlimited-retries
@@ -398,6 +398,8 @@ Warning. Kiss features meant for tests, used in code that is not a test:
 - The wait methods that the docs say are for tests only: `waitActionType`,
   `waitAllActionTypes`, `waitAnyActionTypeFinishes`, and `waitAllActions` with no actions
   (which waits for all actions, and may deadlock).
+- Setting `store.forceInternetOnOffSimulation`, and an `internetOnOffSimulation` getter in an
+  action that returns `true` or `false` (the AsyncRedux rule).
 
 ```ts
 store.mocks.add(LoadUser, () => null); // Warning, outside a test.
@@ -624,6 +626,11 @@ class SaveTodo extends OptimisticCommand<State> {
 }
 ```
 
+Also for a subclass of `OptimisticSync` with fields, that doesn't override
+`optimisticSyncKeyParams` or `computeOptimisticSyncKey`. Then, while `ToggleLike('A')` has a
+request in flight, `ToggleLike('B')` doesn't send its own request, and the follow-up request
+of `ToggleLike('A')` only checks item A, so item B may never be sent to the server.
+
 It's opt-in, since sharing the key is often intended.
 
 ### route-in-state
@@ -724,12 +731,29 @@ Warning. `waitCondition`, `dispatchWhen` or `useDispatchWhen` with `{ timeoutMil
 on every state change, and a wait without a timeout may never end. Use a timeout, or put the
 logic in an action. Not reported in tests.
 
-## 5. Future rules
+## 5. Rules added later
 
 ### incompatible-action-features
 
-From AsyncRedux's `incompatible_mixins`. Kiss's current action features (`nonReentrant`,
-`retry`, `checkInternet` and `OptimisticCommand`) can be combined. When `debounce` and
-`throttle` are added, check which combinations don't work (for example, AsyncRedux doesn't
-allow `NonReentrant` with `Throttle`, or `Retry` with `Debounce`), and report them.
-At that point, also extend `missing-key-params` to their keys, if they have any.
+From AsyncRedux's `incompatible_mixins`. Reports the action features that can't be combined in
+the same action, since dispatching it throws a `StoreException`: the ❌ cells of the
+compatibility matrix in [`ACTION_FEATURES.md`](ACTION_FEATURES.md). For example, `throttle`
+with `nonReentrant`, `retry` with `debounce`, `nonReentrant` in an `OptimisticCommand`, or
+`retry` in an `OptimisticSync`.
+Features inherited from superclasses count too. Error, in tests too (the action throws there
+as well). Its tests check that it reports exactly the combinations the store doesn't allow.
+`missing-key-params` also covers `unlimitedRetryCheckInternet`, which uses the non-reentrant
+keys, and `OptimisticSync`, which uses its own keys. The other features use their own keys, which are shared by all the actions of the class
+by default, as intended.
+
+### polling-with-caveat
+
+From AsyncRedux's `polling_with_caveat_mixin` (without `mixin`, since Kiss has features
+instead of mixins). Reports `checkInternet`, `nonReentrant`, `throttle`, `fresh` or `sequential` in an
+action with `poll` (the action that starts and stops the polling). They can be combined with
+polling, but only in the action returned by `createPollingAction()` (the tick). They can abort,
+fail or delay a dispatch, and can't tell a `Poll.stop` apart from a tick, so a `Poll.stop` may
+itself be blocked, and the polling can't be stopped. Features inherited from superclasses
+count too. Error, as in AsyncRedux, and also reported in tests. The features that can't be
+combined with polling at all (`retry`, `debounce`, `unlimitedRetryCheckInternet`) are reported
+by `incompatible-action-features` instead.

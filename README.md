@@ -241,6 +241,20 @@ class LoadText extends Action {
 }
 ```
 
+To stop an action silently instead, throw an `AbortDispatchException`. The action is
+aborted without showing any errors, and it doesn't count as failed:
+
+```tsx
+class LoadText extends Action {
+
+  async before() {
+    if (await isTextCached()) throw new AbortDispatchException();
+  }
+  
+  async reduce() { ... }
+}
+```
+
 &nbsp;
 
 ## Components can react to actions
@@ -405,7 +419,48 @@ class LoadPrices extends Action {
 }
 ```
 
-### Debounce (soon)
+Use `checkInternet = { dialog: false }` to fail without a dialog, so you can show the error
+in your components with `isFailed`. Or use `checkInternet = { abort: true }` to abort the
+action silently, as if it had never been dispatched, without any errors.
+
+In tests, simulate the internet connection as off (or on) for all actions with
+`store.forceInternetOnOffSimulation = () => false`. Return `null` to use the real connection.
+
+### UnlimitedRetryCheckInternet
+
+To keep trying an action until it succeeds, even while the device is offline, add the
+`unlimitedRetryCheckInternet` property. If there is no internet, the action waits, and
+retries until there is. It also retries if there is internet but the action fails.
+
+```tsx
+class LoadPrices extends Action {    
+  unlimitedRetryCheckInternet = true
+   
+  async reduce() { ... } 
+}
+```
+
+Note that combining `retry` with `checkInternet` doesn't retry when there is no internet.
+It only retries when there is internet but the action fails.
+
+The action is non-reentrant for the whole time until it succeeds, including the waits between
+retries. You can also change the retry delays:
+
+```tsx
+class LoadPrices extends Action {
+
+  unlimitedRetryCheckInternet = {
+    initialDelay: 350,        // Delay in milliseconds before the first retry
+    multiplier: 2,            // Factor used to increase the delay after each retry
+    maxDelay: 5000,           // Maximum delay between retries, when the action fails
+    maxDelayNoInternet: 1000, // Maximum delay between retries, when there is no internet
+  }
+   
+  async reduce() { ... }
+}
+```
+
+### Debounce
 
 To limit how often an action runs in response to rapid input, add a `debounce` property
 to your action class. For example, when a user types into a search bar, debouncing ensures that not
@@ -425,12 +480,28 @@ class SearchText extends Action {
 }
 ```
 
-### Throttle (soon)
+Each dispatch resets the wait time, and only the last action runs its reducer. The previous
+ones finish without changing the state. Use `debounce = true` for the default of 333 milliseconds.
+
+By default, actions of the same class debounce each other. To use a different lock, override
+`debounceLockBuilder()`. Actions with the same lock debounce each other, even if they are
+of different classes:
+
+```tsx
+class SearchText extends Action {
+  constructor(public field: string, public searchTerm: string) { super(); }
+  debounce = 300;
+  debounceLockBuilder() { return this.field; }
+  ...
+}
+```
+
+### Throttle
 
 To prevent an action from running too frequently, you can add a `throttle` property to your
-action class. This means that once the action runs it's considered _fresh_, and it won't run
-again for a set period of time, even if you dispatch it again during that period.
-After this period ends, the action is considered _stale_ and is ready to run again.
+action class. The action then runs at most once per throttle period. If you dispatch it again
+during that period, the new dispatch is aborted. After the period ends, the next dispatch runs,
+and starts a new period.
 
 ```tsx
 class LoadPrices extends Action {    
@@ -442,6 +513,130 @@ class LoadPrices extends Action {
   } 
 }
 ```
+
+Use `throttle = true` for the default of 1000 milliseconds. Override `ignoreThrottle` to run
+the action anyway under some conditions (for example, a `force` flag). If the action fails,
+the throttle period is kept, unless you set `removeThrottleLockOnError = true`.
+
+By default, actions of the same class throttle each other. To use a different lock, override
+`throttleLockBuilder()`. Actions with the same lock throttle each other, even if they are
+of different classes:
+
+```tsx
+class LoadPrices extends Action {
+  constructor(public category: string, public force = false) { super(); }
+  throttle = 5000;
+  get ignoreThrottle() { return this.force; }
+  throttleLockBuilder() { return this.category; }
+  ...
+}
+```
+
+### Fresh
+
+To avoid reloading the same information too often, add a `fresh` property to your action class.
+When the action runs, its result is considered fresh for that period (counted from the
+dispatch), and dispatching it again during that period is aborted. After the period ends, the data is stale, and the next
+dispatch runs and starts a new period.
+
+```tsx
+class LoadPrices extends Action {    
+  fresh = 5000 // Milliseconds
+   
+  async reduce()  {      
+    let result = await loadJson('https://example.com/prices');
+    return (state: State) => state.copy({prices: result});
+  } 
+}
+```
+
+Use `fresh = true` for the default of 1000 milliseconds. Override `ignoreFresh` to run the
+action anyway under some conditions (for example, a `force` flag). Unlike `throttle`, if the
+action fails, its data doesn't stay fresh, so you can dispatch it again right away.
+
+By default, actions of the same class share the fresh period. Override `freshKeyParams()` to
+give each value of some fields its own fresh period, or `computeFreshKey()` so that actions of
+different classes share it:
+
+```tsx
+class LoadUserCart extends Action {
+  constructor(public userId: string, public force = false) { super(); }
+  fresh = 5000;
+  get ignoreFresh() { return this.force; }
+  freshKeyParams() { return this.userId; }
+  ...
+}
+```
+
+### Sequential
+
+To make actions run one at a time, in the exact order they were dispatched, add the
+`sequential` property to your action class and set it to `true`. Each dispatched action
+waits until all the actions dispatched before it have finished, and only then runs its
+`before`, `reduce` and `after` methods.
+
+```tsx
+class SaveItem extends Action {
+  sequential = true;
+  constructor(readonly item: Item) { super(); }
+   
+  async reduce() {
+    await saveItem(this.item);
+    return null;
+  }
+}
+```
+
+By default, all sequential actions share a single queue, even if they are of different
+classes. To have independent queues, override `sequentialKeyParams()`. Actions with the same
+key run one at a time, while actions with different keys run in parallel:
+
+```tsx
+class SaveUser extends Action {
+  sequential = true;
+  constructor(readonly userId: string) { super(); }
+  sequentialKeyParams() { return this.userId; }
+  ...
+}
+```
+
+If the actions depend on the previous ones (for example, creating an item and then updating
+it), override `discardQueueOnError()` to return `true`. If an action fails, the actions
+waiting behind it are then discarded, without running. While waiting for their turn, actions
+count as being in progress, so `isWaiting` shows a spinner right away. Note an action must
+never wait (for example, with `dispatchAndWait`) for another action in the same queue,
+because they would wait for each other forever.
+
+### Polling
+
+To periodically dispatch an action at a fixed interval, add a `poll` property to your action
+class (usually as a constructor parameter), and override `createPollingAction()` to return
+the action each tick dispatches. Dispatch it with `Poll.start` to run it right away and start
+polling, and with `Poll.stop` to stop polling. Use `Poll.runNowAndRestart` to run it now and
+restart the timer, and `Poll.once` (the default) to run it once, without affecting the polling.
+
+```tsx
+class LoadPrices extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+  pollInterval = 5000; // Milliseconds
+  createPollingAction() { return new LoadPrices(); }
+   
+  async reduce() {
+    let result = await loadJson('https://example.com/prices');
+    return (state: State) => state.copy({prices: result});
+  }
+}
+
+dispatch(new LoadPrices(Poll.start)); // Start polling.
+dispatch(new LoadPrices(Poll.stop)); // Stop polling.
+```
+
+The default `pollInterval` is 10000 milliseconds. Each tick waits for the previous run to
+finish, so runs never overlap. Set `pollWaitsForRun = false` to tick at a fixed rate instead.
+By default, actions of the same class share the same polling. Override `pollingKeyParams()`
+to give each value of some fields its own polling, or `computePollingKey()` so that actions
+of different classes share it. To stop all polling at once (for example, on logout), call
+`stopAllPolling()` from any action.
 
 ### OptimisticCommand
 
@@ -461,6 +656,54 @@ class AddTodo extends OptimisticCommand<State, Todo[]> {
   reloadFromServer() { return api.loadTodos(); }
 }
 ```
+
+### OptimisticSync
+
+For rapid toggles (like a "like" button), extend `OptimisticSync`. Every dispatch changes the
+state immediately, but only one request per key is sent to the server at a time. When the
+request finishes, if the state changed meanwhile, a follow-up request sends the latest value,
+until the state stabilizes. This keeps the UI responsive, while minimizing server load.
+
+```tsx
+class ToggleLike extends OptimisticSync<State, boolean> {
+  constructor(readonly itemId: string) { super(); }
+
+  optimisticSyncKeyParams() { return this.itemId; }
+  valueToApply() { return !this.state.isLiked(this.itemId); }
+  applyOptimisticValueToState(state: State, liked: boolean) { return state.setLiked(this.itemId, liked); }
+  getValueFromState(state: State) { return state.isLiked(this.itemId); }
+  sendValueToServer(liked: boolean) { return api.setLiked(this.itemId, liked); }
+}
+```
+
+Optionally, apply the server response with `applyServerResponseToState`, and run code when the
+state stabilizes, or when a request fails, with `onFinish` (for example, to reload the value
+from the server).
+
+### Clearing the features on logout
+
+The store keeps some information for these features: the fresh keys, the throttle and
+debounce locks, the polling timers, the sequential queues, the actions waiting to retry, and
+the `OptimisticSync` keys.
+On logout, call
+`store.clearInternalActionProps()` so that the previous user's actions stop, and don't affect
+the next user. For example, without it, loading the new user's data could be aborted because
+the previous user's data is still "fresh".
+
+```tsx
+class Logout extends Action {
+  reduce() {
+    this.store.clearInternalActionProps();
+    return State.initialState();
+  }
+}
+```
+
+It removes the fresh keys and throttle locks, makes waiting debounced actions finish without
+running their reducer, stops all polling, discards the actions waiting in sequential queues,
+and stops the actions that retry (with `retry` or `unlimitedRetryCheckInternet`). Actions that
+are already running still finish, and may still change the state. It's also called when the
+store is shut down with `store.setShutDown(true)`.
 
 &nbsp;
 

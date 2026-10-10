@@ -3,6 +3,8 @@
 /* eslint-disable kiss-for-react/missing-super-in-override */
 /* eslint-disable kiss-for-react/retry-requires-async-reduce */
 /* eslint-disable kiss-for-react/retry-without-non-reentrant */
+/* eslint-disable kiss-for-react/incompatible-action-features */
+/* eslint-disable kiss-for-react/polling-with-caveat */
 /* eslint-disable kiss-for-react/async-feature-in-sync-action */
 /* eslint-disable kiss-for-react/extend-base-action */
 /* eslint-disable kiss-for-react/avoid-abort-dispatch */
@@ -20,8 +22,8 @@
 // The last 3 rules (`avoid-abort-dispatch`, `avoid-wrap-reduce` and `missing-key-params`) are
 // opt-in: they're not in `kiss.configs.recommended`, but the demo config turns them on.
 
-import { KissAction, OptimisticCommand, ReduxReducer } from 'kiss-for-react';
-import { Action, fetchName, saveName, State } from './state';
+import { KissAction, OptimisticCommand, Poll, ReduxReducer } from 'kiss-for-react';
+import { Action, fetchName, LoadUser, saveName, State } from './state';
 
 // ---------------------------------------------------------------------------------------------
 // async-after
@@ -393,6 +395,147 @@ class RetryInOptimisticCommandOk extends OptimisticCommand<State, string> {
 
   async sendCommandToServer(value: string) {
     await saveName(value);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// incompatible-action-features
+
+class ThrottleAndNonReentrant extends Action {
+  throttle = 1000;
+  // kiss-for-react/incompatible-action-features
+  // (`throttle` and `nonReentrant` can't be combined. Dispatching it throws a `StoreException`)
+  // Fix (suggestion): Will remove `throttle`.
+  // Fix (suggestion): Will remove `nonReentrant`.
+  nonReentrant = true;
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+class UnlimitedRetryCheckInternetAndRetry extends Action {
+  unlimitedRetryCheckInternet = true;
+  // kiss-for-react/incompatible-action-features
+  // (`unlimitedRetryCheckInternet` already retries)
+  // Fix (suggestion): Will remove `unlimitedRetryCheckInternet`.
+  // Fix (suggestion): Will remove `retry`.
+  retry = { on: true };
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+abstract class ThrottledAction extends Action {
+  throttle = 1000;
+}
+
+class InheritedThrottleAndFresh extends ThrottledAction {
+  // kiss-for-react/incompatible-action-features
+  // (The `throttle` is inherited. Only the own `fresh` can be removed)
+  // Fix (suggestion): Will remove `fresh`.
+  fresh = 5000;
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+class NonReentrantOptimisticCommand extends OptimisticCommand<State, string> {
+  // kiss-for-react/incompatible-action-features
+  // (An `OptimisticCommand` is already non-reentrant)
+  // Fix (suggestion): Will remove `nonReentrant`.
+  nonReentrant = true;
+
+  optimisticValue() {
+    return 'Mary';
+  }
+
+  getValueFromState(state: State) {
+    return state.name;
+  }
+
+  applyValueToState(state: State, value: string) {
+    return state.copy({ name: value });
+  }
+
+  async sendCommandToServer(value: string) {
+    await saveName(value);
+  }
+}
+
+class CompatibleFeaturesOk extends Action {
+  nonReentrant = true; // OK: these features can be combined.
+  retry = { on: true };
+  checkInternet = { dialog: true };
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// polling-with-caveat
+
+class PollUserWithThrottle extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+
+  // kiss-for-react/polling-with-caveat
+  // (A `Poll.stop` dispatched inside the throttle period is ignored. Add it to the tick action)
+  // Fix (suggestion): Will remove `throttle`.
+  throttle = 5000;
+
+  createPollingAction() {
+    return new LoadUser();
+  }
+
+  reduce() {
+    return null;
+  }
+}
+
+abstract class CheckInternetAction extends Action {
+  checkInternet = { dialog: false };
+}
+
+class PollUserOnline extends CheckInternetAction {
+  // kiss-for-react/polling-with-caveat
+  // (The inherited `checkInternet` makes a `Poll.stop` fail with no internet. No quick fix)
+  constructor(readonly poll = Poll.once) { super(); }
+
+  createPollingAction() {
+    return new LoadUser();
+  }
+
+  reduce() {
+    return null;
+  }
+}
+
+class LoadUserTick extends Action {
+  checkInternet = { dialog: false }; // OK: the tick action, not the one that starts and stops.
+  nonReentrant = true;
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+class PollUserOk extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+
+  createPollingAction() {
+    return new LoadUserTick();
+  }
+
+  reduce() {
+    return null;
   }
 }
 
