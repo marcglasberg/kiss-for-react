@@ -433,6 +433,9 @@ export abstract class KissAction<St> {
    *
    * The only use for `dispatchSync` is when you need to guarantee (in runtime) that your
    * action is SYNC, which means the state gets changed right after the dispatch call.
+   *
+   * This `StoreException` is always thrown. It's not given to `wrapError` or the
+   * `errorObserver`, so they can't swallow it or convert it.
    */
   dispatchSync(action: KissAction<any>): void {
     return this.store.dispatchSync(action);
@@ -683,7 +686,8 @@ export abstract class KissAction<St> {
    *   check, and doesn't take the key.
    * - It should not be used in an `OptimisticCommand`, which is already non-reentrant.
    *   Dispatching it with `nonReentrant` throws a `StoreException`.
-   * - It should not be combined with `throttle` or `fresh`. Doing so throws a `StoreException`.
+   * - It should not be combined with `throttle`, `fresh` or `ignoreOld`. Doing so throws a
+   *   `StoreException`.
    * - It should not be combined with `unlimitedRetryCheckInternet`, which is already
    *   non-reentrant. Doing so throws a `StoreException`.
    * - It can be combined with `sequential`. Duplicates are then dropped while the original
@@ -764,6 +768,13 @@ export abstract class KissAction<St> {
    * dispatched. If it's called again later, the action stops retrying.
    */
   _clearCountAtDispatch: number = 0;
+
+  /**
+   * For Kiss internal use only.
+   * True if the action was dispatched with `dispatchSync`, which threw because the action is
+   * ASYNC. Its async work was already running, and its result is ignored, so it stops retrying.
+   */
+  _isDiscardedByDispatchSync: boolean = false;
 
   /**
    * Set `debounce` to delay the execution of the action until after a certain period of
@@ -854,6 +865,11 @@ export abstract class KissAction<St> {
    *   debouncing. Doing so throws a `StoreException`.
    * - An invalid value (for example, a negative number) makes the dispatch throw a
    *   `StoreException`.
+   * - The debounce only delays the start of the reducer. Once the reducer starts, a newer
+   *   dispatch doesn't stop it. So, if the user pauses for longer than the wait time and then
+   *   types again, two requests run at the same time, and the older one may finish last and
+   *   overwrite the newer result. To prevent that, combine it with `ignoreOld`, which also
+   *   lets you cancel the older request.
    */
   declare debounce?: number | boolean;
 
@@ -896,6 +912,263 @@ export abstract class KissAction<St> {
     if (typeof this.debounce === 'number') return this.debounce;
     return null;
   }
+
+  /**
+   * Set `ignoreOld` to `true` so that, when the action is dispatched again, the actions of the
+   * previous dispatches that are still running become "old": their results are ignored, and
+   * their requests can be cancelled. Only the newest dispatch changes the state.
+   *
+   * This prevents a slow request that finishes late from overwriting the newer information. For
+   * example, when the user selects a tab, you load the items of that tab:
+   *
+   * ```ts
+   * class LoadTab extends KissAction<State> {
+   *   constructor(readonly tab: string) { super(); }
+   *
+   *   ignoreOld = true; // Here!
+   *
+   *   async reduce() {
+   *     let response = await fetch(`/api/items?tab=${this.tab}`, { signal: this.abortSignal });
+   *     let items = await response.json();
+   *     return (state: State) => state.copy({ items });
+   *   }
+   * }
+   * ```
+   *
+   * If the user selects tab "A" and then tab "B", without `ignoreOld` both requests run, and if
+   * the request for "A" is slower and finishes last, the items of "A" are shown while tab "B" is
+   * selected. With `ignoreOld`, as soon as "B" is dispatched, the action for "A" is old. Its
+   * request is cancelled (since it got the `abortSignal`), and even if it finishes, its result
+   * is ignored. The screen keeps what it showed before, until the items of "B" arrive.
+   *
+   * In more detail:
+   *
+   * - The actions are numbered in the order they are dispatched. When an action is dispatched,
+   *   all the actions with the same key that are still running become old.
+   *
+   * - The `abortSignal` of the old actions is aborted. Pass it to `fetch` (or to any other API
+   *   that accepts an `AbortSignal`, like axios), so that their requests are cancelled. You may
+   *   also check `isOld` yourself, after some `await`.
+   *
+   * - An old action is aborted silently when it finishes: its result is ignored (it doesn't
+   *   change the state), and so are its errors (no error dialog, it doesn't count as failed,
+   *   and it isn't retried). This includes the `AbortError` thrown by `fetch` when its signal
+   *   is aborted. Its status has `isDispatchAborted: true`, and `dispatchAndWait` resolves.
+   *
+   * - The newest action is never old, even if it fails. In that case the state is not changed,
+   *   and the error is processed as usual.
+   *
+   * - A dispatch that is aborted before it runs (by `abortDispatch()`, `throttle` or `fresh`)
+   *   doesn't make the other actions old. Neither does a dispatch with `Poll.stop`, or with
+   *   `Poll.start` while polling is already active, since they don't run the reducer.
+   *
+   * - Only the state returned by the reducer is ignored. Anything else the reducer did still
+   *   happened, like dispatching other actions. To avoid that, check `isOld`:
+   *
+   *   ```ts
+   *   async reduce() {
+   *     let items = await loadItems(this.tab);
+   *     if (!this.isOld) this.dispatch(new LoadItemImages(items));
+   *     return (state: State) => state.copy({ items });
+   *   }
+   *   ```
+   *
+   * ## Keys
+   *
+   * By default, the key is based on the action class. This means dispatching an action makes
+   * the running actions of the same class old. Note subclasses are different classes, so they
+   * don't affect each other. Override `ignoreOldKeyParams()` so that actions of the same class
+   * but with different parameters don't affect each other, or `computeIgnoreOldKey()` so that
+   * different action classes share the same key.
+   *
+   * Choose the key according to the part of the state the actions change. Actions that change
+   * the same part of the state should share the key, and actions that change different parts
+   * should not. For example, if `LoadItem` always puts the item into the same `selectedItem`
+   * field, keep the default key, so that loading item "B" makes loading item "A" old. But if it
+   * puts each item into a cache, by id, use the id in the key, since item "A" is still useful:
+   *
+   * ```ts
+   * class LoadItem extends KissAction<State> {
+   *   constructor(readonly itemId: string) { super(); }
+   *   ignoreOld = true;
+   *   ignoreOldKeyParams() { return this.itemId; }
+   *
+   *   async reduce() {
+   *     let item = await loadItem(this.itemId, this.abortSignal);
+   *     return (state: State) => state.withCachedItem(item);
+   *   }
+   * }
+   * ```
+   *
+   * ## Combining with other features
+   *
+   * - Use it with `debounce` to search while the user types. The `debounce` avoids sending a
+   *   request for each key pressed. But if the user pauses for longer than the wait time and
+   *   then types again, the older request would still be running. With `ignoreOld`, it's
+   *   cancelled, and its results don't overwrite the newer ones. Note that without `debounce`,
+   *   each key pressed would cancel the previous request, and no results would be shown until
+   *   the user stops typing. Also note an action replaced during its wait time is old too, so
+   *   it's aborted (instead of finishing without running its reducer).
+   *
+   * - It can be combined with `retry` and `checkInternet`. An action that becomes old while
+   *   waiting to retry stops waiting, and is aborted right away.
+   *
+   * - It can be combined with `throttle` and `fresh`. These abort the dispatches inside their
+   *   period, so those don't make the running action old. But when the period ends while an
+   *   older action is still running, the next dispatch runs, and makes it old.
+   *
+   * - When polling, add it to the action returned by `createPollingAction()`. It's useful when
+   *   `pollWaitsForRun` is `false`, or when you also dispatch the action yourself, for example
+   *   from a "refresh" button.
+   *
+   * - It should not be combined with `nonReentrant` or `unlimitedRetryCheckInternet`, since
+   *   those never let two actions with the same key run at the same time, nor with
+   *   `sequential`, which already applies the results in the dispatch order. It also should not
+   *   be used in an `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` or
+   *   `ServerPush`, which already decide which values win. Doing so throws a `StoreException`.
+   *
+   * Other notes:
+   * - It works with both SYNC and ASYNC reducers. Even SYNC reducers can be affected, when an
+   *   ASYNC `before` (for example, the one of `checkInternet`) makes an older action reach its
+   *   reducer after a newer one was dispatched.
+   * - `store.clearInternalActionProps()` forgets the keys. The actions dispatched after it
+   *   don't make the ones dispatched before it old.
+   */
+  ignoreOld: boolean = false;
+
+  /**
+   * By default, the `ignoreOld` key is based on the action class. Override
+   * `ignoreOldKeyParams()` so that actions of the SAME CLASS but with different parameters
+   * don't affect each other. For example:
+   *
+   * ```ts
+   * class LoadItem extends KissAction<State> {
+   *   ignoreOld = true;
+   *   constructor(readonly itemId: string) { super(); }
+   *   ignoreOldKeyParams() { return this.itemId; }
+   *   ...
+   * }
+   * ```
+   *
+   * Now dispatching `LoadItem('A')` makes only the running `LoadItem('A')` actions old. The
+   * `LoadItem('B')` actions are not affected.
+   *
+   * Params are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents. For example, `[1, 'A']` and `{ id: 1 }` are valid params.
+   */
+  ignoreOldKeyParams(): any {
+    return null;
+  }
+
+  /**
+   * By default, the `ignoreOld` key combines the action class with `ignoreOldKeyParams()`.
+   * Override this method if you want different action classes to share the same key:
+   *
+   * ```ts
+   * class LoadUserProfile extends KissAction<State> {
+   *   ignoreOld = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   computeIgnoreOldKey() { return 'selectedUser'; }
+   *   ...
+   * }
+   *
+   * class LoadUserSummary extends KissAction<State> {
+   *   ignoreOld = true;
+   *   constructor(readonly userId: string) { super(); }
+   *   computeIgnoreOldKey() { return 'selectedUser'; }
+   *   ...
+   * }
+   * ```
+   *
+   * With this setup, dispatching a `LoadUserSummary` makes the running `LoadUserProfile`
+   * actions old, and vice versa.
+   *
+   * Keys are compared with `Object.is`, except arrays and plain objects, which are compared
+   * by their contents.
+   */
+  computeIgnoreOldKey(): any {
+    return [this.constructor, this.ignoreOldKeyParams()];
+  }
+
+  /**
+   * Returns `true` if this action uses `ignoreOld`, and an action with the same key was
+   * dispatched after it. In this case, this action's result and errors will be ignored, and
+   * its `abortSignal` is aborted.
+   *
+   * You can check it inside `reduce`, after some `await`, to avoid doing things that only make
+   * sense for the newest action, like dispatching other actions:
+   *
+   * ```ts
+   * async reduce() {
+   *   let items = await loadItems(this.tab);
+   *   if (!this.isOld) this.dispatch(new LoadItemImages(items));
+   *   return (state: State) => state.copy({ items });
+   * }
+   * ```
+   *
+   * After the action finishes, it keeps the value it had at that moment. It's always `false`
+   * for actions that don't use `ignoreOld`, and for actions that were not dispatched yet.
+   */
+  get isOld(): boolean {
+    const entry = this._ignoreOldEntry;
+    return entry !== null && entry.newestOrder > this._ignoreOldOrder;
+  }
+
+  /**
+   * An `AbortSignal` that is aborted when this action becomes old (see `ignoreOld`). Pass it to
+   * `fetch`, or to any other API that accepts an `AbortSignal`, so that the request is
+   * cancelled when an action with the same key is dispatched after this one:
+   *
+   * ```ts
+   * class LoadTab extends KissAction<State> {
+   *   constructor(readonly tab: string) { super(); }
+   *   ignoreOld = true;
+   *
+   *   async reduce() {
+   *     let response = await fetch(`/api/items?tab=${this.tab}`, { signal: this.abortSignal });
+   *     let items = await response.json();
+   *     return (state: State) => state.copy({ items });
+   *   }
+   * }
+   * ```
+   *
+   * When the signal is aborted, `fetch` throws an `AbortError`. You don't need to catch it:
+   * the errors of an old action are ignored, and the action is aborted silently.
+   *
+   * For work that doesn't accept a signal, you can check it yourself, between the steps:
+   *
+   * ```ts
+   * let user = await loadUser(this.userId);
+   * this.abortSignal.throwIfAborted();
+   * let posts = await loadPosts(user);
+   * ```
+   *
+   * For actions that don't use `ignoreOld`, the signal is never aborted.
+   */
+  get abortSignal(): AbortSignal {
+    this._abortController ??= new AbortController();
+    return this._abortController.signal;
+  }
+
+  /**
+   * For Kiss internal use only.
+   * The controller of `abortSignal`. Created by the store when an `ignoreOld` action starts
+   * running, or by `abortSignal` when it's first used.
+   */
+  _abortController: AbortController | null = null;
+
+  /**
+   * For Kiss internal use only.
+   * The information the store keeps for the `ignoreOld` key of this action, set when the
+   * action starts running. It's `null` if the action doesn't use `ignoreOld`.
+   */
+  _ignoreOldEntry: _IgnoreOldEntry | null = null;
+
+  /**
+   * For Kiss internal use only.
+   * The order in which this `ignoreOld` action was dispatched, compared to the others.
+   */
+  _ignoreOldOrder: number = 0;
 
   /**
    * Set `throttle` to make sure the action will be dispatched at most once in the specified
@@ -1033,7 +1306,7 @@ export abstract class KissAction<St> {
    * Notes:
    * - The throttle period starts when the action is dispatched, not when it finishes.
    * - It works with both SYNC and ASYNC actions, and can be combined with `retry`,
-   *   `checkInternet` and `debounce`.
+   *   `checkInternet`, `debounce` and `ignoreOld`.
    * - It should not be combined with `nonReentrant` or `fresh`, nor used in an
    *   `OptimisticCommand`. Dispatching it with those throws a `StoreException`.
    * - It can be combined with `sequential`. Note the throttle period then starts when the
@@ -1319,8 +1592,8 @@ export abstract class KissAction<St> {
    * - If `abortDispatch()` returns `true`, the action is aborted before the fresh check, and
    *   doesn't make its key fresh.
    * - It works with both SYNC and ASYNC actions, and can be combined with `retry`,
-   *   `checkInternet` and `debounce`. With `retry`, the key is only removed if the last
-   *   attempt fails.
+   *   `checkInternet`, `debounce` and `ignoreOld`. With `retry`, the key is only removed if
+   *   the last attempt fails.
    * - It should not be combined with `nonReentrant` or `throttle`, nor used in an
    *   `OptimisticCommand`. Dispatching it with those throws a `StoreException`.
    * - It can be combined with `sequential`. Note the fresh period then starts when the action
@@ -1683,6 +1956,10 @@ export abstract class KissAction<St> {
    *   count as in progress), so two actions of the same class would never queue behind each
    *   other. It also retries forever while holding the queue. Dispatching it with
    *   `unlimitedRetryCheckInternet` throws a `StoreException`.
+   *
+   * - It should NOT be combined with `ignoreOld`, since the actions already run, and apply
+   *   their results, in the dispatch order. Dispatching it with `ignoreOld` throws a
+   *   `StoreException`.
    */
   sequential: boolean = false;
 
@@ -2395,8 +2672,8 @@ export abstract class KissAction<St> {
    * - If necessary, you can know the current "attempt number" by using `this.attempts`.
    *   Attempts that found no internet count too.
    * - It should not be combined with `retry`, `checkInternet` or `nonReentrant`, since it
-   *   already does what they do, nor with `debounce`, `throttle`, `fresh` or polling, nor used in
-   *   an `OptimisticCommand`. Doing so throws a `StoreException`. When polling, add it to the
+   *   already does what they do, nor with `debounce`, `throttle`, `fresh`, `ignoreOld` or
+   *   polling, nor used in an `OptimisticCommand`. Doing so throws a `StoreException`. When polling, add it to the
    *   action returned by `createPollingAction()` instead.
    * - It should not be combined with `sequential`. It aborts the dispatch while another action
    *   with the same key is in progress (and a queued action does count as in progress), so two
@@ -2488,25 +2765,12 @@ export abstract class KissAction<St> {
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.stocks).toEqual(['IBM', 'TSLA']);
-   *
    * // Dispatches two actions in PARALLEL and wait for their TYPES:
    * expect(this.state.portfolio).toEqual(['TSLA']);
    * this.dispatch(new BuyAction('IBM'));
    * this.dispatch(new SellAction('TSLA'));
    * await this.waitAllActionTypes([BuyAction, SellAction]);
    * expect(this.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.portfolio.includes('IBM')).toBe(true);
-   * expect(this.state.portfolio.includes('TSLA')).toBe(true);
    *
    * // Dispatches two actions in PARALLEL and wait for them:
    * let action1 = new BuyAction('IBM');
@@ -2539,7 +2803,7 @@ export abstract class KissAction<St> {
    * See also:
    * `waitCondition` - Waits until the state is in a given condition.
    * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * `waitAllActions` - Waits until the given actions are NOT in progress.
    * `waitActionType` - Waits until an action of a given type is NOT in progress.
    * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
    * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
@@ -2600,25 +2864,12 @@ export abstract class KissAction<St> {
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.stocks).toEqual(['IBM', 'TSLA']);
-   *
    * // Dispatches two actions in PARALLEL and wait for their TYPES:
    * expect(this.state.portfolio).toEqual(['TSLA']);
    * this.dispatch(new BuyAction('IBM'));
    * this.dispatch(new SellAction('TSLA'));
    * await this.waitAllActionTypes([BuyAction, SellAction]);
    * expect(this.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.portfolio.includes('IBM')).toBe(true);
-   * expect(this.state.portfolio.includes('TSLA')).toBe(true);
    *
    * // Dispatches two actions in PARALLEL and wait for them:
    * let action1 = new BuyAction('IBM');
@@ -2651,7 +2902,7 @@ export abstract class KissAction<St> {
    * See also:
    * `waitCondition` - Waits until the state is in a given condition.
    * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * `waitAllActions` - Waits until the given actions are NOT in progress.
    * `waitActionType` - Waits until an action of a given type is NOT in progress.
    * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
    * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
@@ -2693,19 +2944,21 @@ export abstract class KissAction<St> {
 
   /**
    * Returns a promise that resolves when ALL given actions finished dispatching.
+   * You MUST provide at least one action, or the promise rejects with a `StoreException`.
    *
    * If `completeImmediately` is false (the default), this method will throw an error if none
    * of the given actions are in progress when the method is called. Otherwise, the promise will
    * complete immediately and throw no error.
    *
-   * However, if you don't provide any actions (empty list or `null`), the promise will complete
-   * when ALL current actions in progress finish dispatching. In other words, when no actions are
-   * currently in progress. In this case, if [completeImmediately] is `false`, the method will
-   * throw an error if no actions are in progress when the method is called.
+   * The current action itself is ignored if present in `actions`. The current action is in
+   * progress while its reducer runs, so waiting for it would never complete. If `actions`
+   * contains only the current action, there is nothing else to wait for, and the promise
+   * completes immediately.
    *
-   * Note: Waiting until no actions are in progress should only be done in test, never in
-   * production, as it's very easy to create a deadlock. However, waiting for specific actions to
-   * finish is safe in production, as long as you're waiting for actions you just dispatched.
+   * Note: Unlike `store.waitAllActions`, this method can't wait until NO actions are in
+   * progress (by passing an empty list or `null`), since the current action is itself in
+   * progress. Waiting for specific actions to finish is safe in production, as long as you're
+   * waiting for actions you just dispatched.
    *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
@@ -2726,25 +2979,12 @@ export abstract class KissAction<St> {
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.stocks).toEqual(['IBM', 'TSLA']);
-   *
    * // Dispatches two actions in PARALLEL and wait for their TYPES:
    * expect(this.state.portfolio).toEqual(['TSLA']);
    * this.dispatch(new BuyAction('IBM'));
    * this.dispatch(new SellAction('TSLA'));
    * await this.waitAllActionTypes([BuyAction, SellAction]);
    * expect(this.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.portfolio.includes('IBM')).toBe(true);
-   * expect(this.state.portfolio.includes('TSLA')).toBe(true);
    *
    * // Dispatches two actions in PARALLEL and wait for them:
    * let action1 = new BuyAction('IBM');
@@ -2777,7 +3017,7 @@ export abstract class KissAction<St> {
    * See also:
    * `waitCondition` - Waits until the state is in a given condition.
    * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * `waitAllActions` - Waits until the given actions are NOT in progress.
    * `waitActionType` - Waits until an action of a given type is NOT in progress.
    * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
    * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
@@ -2796,8 +3036,23 @@ export abstract class KissAction<St> {
       onTimeout?: () => void
     } = {}): Promise<{ actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null }> {
 
+    // The current action is in progress, so waiting until no actions are in progress would
+    // never complete.
+    if (!actions || (actions.length === 0))
+      return Promise.reject(new StoreException(
+        'Inside an action, you have to provide a non-empty list of actions to waitAllActions, ' +
+        'since the action itself is in progress, so waiting until no actions are in progress ' +
+        'would never complete.'));
+
+    // The current action is in progress, so waiting for it would never complete.
+    const otherActions = actions.filter(action => action !== this);
+
+    // Nothing else to wait for: resolve right away, with the actions in progress.
+    if (otherActions.length === 0)
+      return this.store.waitActionCondition(() => true, {completeImmediately: true});
+
     return this.store.waitAllActions(
-      actions, {
+      otherActions, {
       completeImmediately: completeImmediately,
       timeoutMillis: timeoutMillis,
       onTimeout: onTimeout,
@@ -2823,6 +3078,11 @@ export abstract class KissAction<St> {
    *   expect(action.status.originalError).toBeInstanceOf(UserException);
    *   ```
    *
+   * An action can't wait for its own type, since the action itself is in progress while its
+   * reducer runs, so the wait would never complete. Calling `waitActionType` with the type of
+   * the current action rejects right away with a `StoreException`. To run actions of the same
+   * type one at a time, use `sequential = true` instead.
+   *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
@@ -2842,25 +3102,12 @@ export abstract class KissAction<St> {
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.stocks).toEqual(['IBM', 'TSLA']);
-   *
    * // Dispatches two actions in PARALLEL and wait for their TYPES:
    * expect(this.state.portfolio).toEqual(['TSLA']);
    * this.dispatch(new BuyAction('IBM'));
    * this.dispatch(new SellAction('TSLA'));
    * await this.waitAllActionTypes([BuyAction, SellAction]);
    * expect(this.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.portfolio.includes('IBM')).toBe(true);
-   * expect(this.state.portfolio.includes('TSLA')).toBe(true);
    *
    * // Dispatches two actions in PARALLEL and wait for them:
    * let action1 = new BuyAction('IBM');
@@ -2893,7 +3140,7 @@ export abstract class KissAction<St> {
    * See also:
    * `waitCondition` - Waits until the state is in a given condition.
    * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * `waitAllActions` - Waits until the given actions are NOT in progress.
    * `waitActionType` - Waits until an action of a given type is NOT in progress.
    * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
    * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
@@ -2911,6 +3158,14 @@ export abstract class KissAction<St> {
       timeoutMillis?: number | null,
       onTimeout?: () => void
     } = {}): Promise<KissAction<St> | null> {
+
+    // The current action is in progress, so waiting for its own type would never complete.
+    if (actionType === this.constructor)
+      throw new StoreException(
+        `Action ${actionType.name} cannot wait for its own type with ` +
+        `waitActionType(${actionType.name}), because it would wait forever for itself to ` +
+        'finish. To run actions of the same type one at a time, use sequential = true instead.');
+
     return this.store.waitActionType(
       actionType, {
       completeImmediately: completeImmediately,
@@ -2932,6 +3187,15 @@ export abstract class KissAction<St> {
    * - If any action of the given types is in progress, the promise completes only when
    *   no action of the given types is in progress anymore.
    *
+   * You MUST provide at least one action type, or the promise rejects with a `StoreException`.
+   * Unlike `store.waitAllActionTypes`, this method can't wait until NO actions are in progress
+   * (by passing an empty list), since the current action is itself in progress.
+   *
+   * The type of the current action is ignored if present in `actionTypes`, since the current
+   * action is in progress while its reducer runs, so waiting for its type would never complete.
+   * If `actionTypes` contains only the type of the current action, there is nothing else to
+   * wait for, and the promise completes immediately.
+   *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
@@ -2951,25 +3215,12 @@ export abstract class KissAction<St> {
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.stocks).toEqual(['IBM', 'TSLA']);
-   *
    * // Dispatches two actions in PARALLEL and wait for their TYPES:
    * expect(this.state.portfolio).toEqual(['TSLA']);
    * this.dispatch(new BuyAction('IBM'));
    * this.dispatch(new SellAction('TSLA'));
    * await this.waitAllActionTypes([BuyAction, SellAction]);
    * expect(this.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.portfolio.includes('IBM')).toBe(true);
-   * expect(this.state.portfolio.includes('TSLA')).toBe(true);
    *
    * // Dispatches two actions in PARALLEL and wait for them:
    * let action1 = new BuyAction('IBM');
@@ -3002,7 +3253,7 @@ export abstract class KissAction<St> {
    * See also:
    * `waitCondition` - Waits until the state is in a given condition.
    * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * `waitAllActions` - Waits until the given actions are NOT in progress.
    * `waitActionType` - Waits until an action of a given type is NOT in progress.
    * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
    * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
@@ -3020,8 +3271,23 @@ export abstract class KissAction<St> {
       timeoutMillis?: number | null,
       onTimeout?: () => void
     } = {}): Promise<void> {
+
+    // The current action is in progress, so waiting until no actions are in progress would
+    // never complete.
+    if (actionTypes.length === 0)
+      throw new StoreException(
+        'Inside an action, you have to provide a non-empty list of action types to ' +
+        'waitAllActionTypes, since the action itself is in progress, so waiting until no ' +
+        'actions are in progress would never complete.');
+
+    // The current action is in progress, so waiting for its own type would never complete.
+    const otherTypes = actionTypes.filter(type => type !== this.constructor);
+
+    // Nothing else to wait for.
+    if (otherTypes.length === 0) return;
+
     return this.store.waitAllActionTypes(
-      actionTypes, {
+      otherTypes, {
       completeImmediately: completeImmediately,
       timeoutMillis: timeoutMillis,
       onTimeout: onTimeout,
@@ -3067,25 +3333,12 @@ export abstract class KissAction<St> {
    * expect(action instanceof ChangeNameAction).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
-   * // Dispatches actions and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.stocks).toEqual(['IBM', 'TSLA']);
-   *
    * // Dispatches two actions in PARALLEL and wait for their TYPES:
    * expect(this.state.portfolio).toEqual(['TSLA']);
    * this.dispatch(new BuyAction('IBM'));
    * this.dispatch(new SellAction('TSLA'));
    * await this.waitAllActionTypes([BuyAction, SellAction]);
    * expect(this.state.portfolio).toEqual(['IBM']);
-   *
-   * // Dispatches actions in PARALLEL and wait until no actions are in progress.
-   * this.dispatch(new BuyAction('IBM'));
-   * this.dispatch(new BuyAction('TSLA'));
-   * await this.waitAllActions([]);
-   * expect(this.state.portfolio.includes('IBM')).toBe(true);
-   * expect(this.state.portfolio.includes('TSLA')).toBe(true);
    *
    * // Dispatches two actions in PARALLEL and wait for them:
    * let action1 = new BuyAction('IBM');
@@ -3118,7 +3371,7 @@ export abstract class KissAction<St> {
    * See also:
    * `waitCondition` - Waits until the state is in a given condition.
    * `waitActionCondition` - Waits until the actions in progress meet a given condition.
-   * `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
+   * `waitAllActions` - Waits until the given actions are NOT in progress.
    * `waitActionType` - Waits until an action of a given type is NOT in progress.
    * `waitAllActionTypes` - Waits until all actions of the given type are NOT in progress.
    * `waitAnyActionTypeFinishes` - Waits until ANY action of the given types finish dispatching.
@@ -3152,8 +3405,7 @@ export abstract class KissAction<St> {
 
   /**
    * For Kiss internal use only.
-   * Sets the store and the initial state, so that the action can access them, even in
-   * `abortDispatch()`, which runs before `_injectStore`.
+   * Sets the store and the initial state, so that the action can access them.
    */
   _setStore(_store: Store<St>) {
     this._store = _store;
@@ -3168,7 +3420,9 @@ export abstract class KissAction<St> {
 
     if (this.retry) {
       this._validateRetry(this.retry);
-      this._retry = { ...this._retry, on: true, ...this.retry };
+      // Options that are not set (`undefined`) must not replace their defaults.
+      const options = Object.fromEntries(Object.entries(this.retry).filter(([, value]) => value !== undefined));
+      this._retry = { ...this._retry, on: true, ...options };
       this.retry = this._retry;
     }
 
@@ -3224,6 +3478,8 @@ export abstract class KissAction<St> {
       throw new StoreException(
         `Action ${this.constructor.name} uses both sequential and debounce, which can't be combined. ` +
         'Remove one of them.');
+
+    if (this.ignoreOld) this._validateIgnoreOld();
 
     if (this.poll !== undefined) this._validatePolling();
 
@@ -3295,6 +3551,24 @@ export abstract class KissAction<St> {
       unlimitedRetries: true,
     };
     if (maxDelayNoInternet !== undefined) this._maxDelayNoInternet = maxDelayNoInternet;
+  }
+
+  /**
+   * Throws a `StoreException` if this action uses `ignoreOld` with a feature it can't use.
+   * The optimistic classes check it themselves.
+   */
+  private _validateIgnoreOld() {
+    const incompatible = (feature: string, isUsed: boolean, reason: string) => {
+      if (isUsed)
+        throw new StoreException(
+          `Action ${this.constructor.name} uses both ignoreOld and ${feature}, which can't be combined, ` +
+          `since ${reason}. Remove one of them.`);
+    };
+
+    const neverOverlap = 'it never lets two actions with the same key run at the same time';
+    incompatible('nonReentrant', this.nonReentrant, neverOverlap);
+    incompatible('unlimitedRetryCheckInternet', this._isUnlimitedRetryCheckInternet, neverOverlap);
+    incompatible('sequential', this.sequential, 'it already applies the results in the dispatch order');
   }
 
   /**
@@ -3412,7 +3686,7 @@ export abstract class KissAction<St> {
     // Initialize an array to hold key-value pairs as strings
     const keyValuePairs: string[] = [];
     for (const key of Object.keys(this)) {
-      if (!key.startsWith('_') && (key != 'nonReentrant') && (key != 'retry') && (key != 'checkInternet') && (key != 'wrapReduce') && (key != 'debounce') && (key != 'throttle') && (key != 'removeThrottleLockOnError') && (key != 'fresh') && (key != 'sequential') && (key != 'pollInterval') && (key != 'pollWaitsForRun') && (key != 'unlimitedRetryCheckInternet')) { // Continue to exclude base class/internal fields
+      if (!key.startsWith('_') && (key != 'nonReentrant') && (key != 'ignoreOld') && (key != 'retry') && (key != 'checkInternet') && (key != 'wrapReduce') && (key != 'debounce') && (key != 'throttle') && (key != 'removeThrottleLockOnError') && (key != 'fresh') && (key != 'sequential') && (key != 'pollInterval') && (key != 'pollWaitsForRun') && (key != 'unlimitedRetryCheckInternet')) { // Continue to exclude base class/internal fields
         // For each property, push "key:value" string to the array
         // Note: This simple line assumes that `value` can be meaningfully represented as a string.
         // You might need a more complex handling for objects, arrays, etc.
@@ -3478,7 +3752,8 @@ export class ActionStatus {
    * - Because of its `throttle` period, or because its `fresh` data was still fresh.
    * - Because it was mocked as `null`, or the store was shut down.
    * - Because an `AbortDispatchException` was thrown by the action's `before` or `reduce`
-   *   methods. This includes a `sequential` action discarded from its queue.
+   *   methods. This includes a `sequential` action discarded from its queue, and an
+   *   `ignoreOld` action that became old.
    *
    * Note in the last case the action was dispatched and finished (the `after` method ran),
    * but in the other cases it was never dispatched (`isDispatched` is `false`).
@@ -3512,6 +3787,10 @@ export class ActionStatus {
    *
    * If the action was aborted by throwing an `AbortDispatchException`, this holds that
    * exception (which is not processed by `wrapError` and the `errorObserver`).
+   *
+   * If the before/reduce methods threw `null` or `undefined` (or a Promise was rejected with
+   * no reason), this holds an `Error` that says so, and that's the error processed by
+   * `wrapError` and the `errorObserver`.
    */
   readonly originalError: any;
 
@@ -3815,6 +4094,13 @@ export class ActionStatus {
  * entire reducer was retried on each attempt. The optimistic state remains in place during
  * retries, and the rollback only happens if all retry attempts fail.
  *
+ * `store.clearInternalActionProps()` (which is also called by `store.setShutDown(true)`) stops
+ * the retries, which is useful on logout. A command waiting to retry is aborted right away, and
+ * a command whose server call is running is aborted if that call fails (if it succeeds, the
+ * server response is applied as usual). It's aborted with an `AbortDispatchException`, so it
+ * doesn't fail, and doesn't show errors. It also doesn't roll back the optimistic value, and
+ * doesn't reload, since that would change the state of the next user.
+ *
  * ## CheckInternet
  *
  * When combined with `checkInternet`, if there is no internet: no optimistic state is
@@ -3833,7 +4119,8 @@ export class ActionStatus {
  *   dispatched.
  * - It should not be combined with `nonReentrant` (it's already non-reentrant), nor with
  *   unlimited retries (a command that never finishes would never release its non-reentrant
- *   key), nor with `debounce` or `throttle`. Dispatching it with those throws a `StoreException`.
+ *   key), nor with `debounce`, `throttle`, `fresh` or `ignoreOld`. Dispatching it with those
+ *   throws a `StoreException`.
  */
 export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
 
@@ -3904,6 +4191,9 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    *
    * If you DO NOT want to apply the server response to the state, return `null`
    * (which is the default).
+   *
+   * If this method throws, the action fails with that error. But since the command itself
+   * succeeded, the state is not rolled back, and there is no reload.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
   applyServerResponseToState(state: St, serverResponse: any): St | null {
@@ -4079,21 +4369,18 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
     let commandError: any = null;
     let lastAppliedValue: T = optimistic; // What this action last wrote.
     let rollbackValue: T | undefined = undefined; // Value slice after the rollback, if any.
+    let serverResponse: any = undefined;
 
     try {
       // Sends the command to the server.
       // If retry is on, only this call is retried, keeping the optimistic state in place.
-      const serverResponse = await this._sendCommandWithRetryIfNeeded(optimistic);
-
-      // Applies the server response, if any.
-      if (serverResponse !== null && serverResponse !== undefined) {
-        const newState = this.applyServerResponseToState(this.state, serverResponse);
-        if (newState !== null) {
-          this._applyState(newState);
-          lastAppliedValue = this.getValueFromState(newState);
-        }
-      }
+      serverResponse = await this._sendCommandWithRetryIfNeeded(optimistic);
     } catch (error) {
+      // When the command stopped retrying because `clearInternalActionProps()` was called (for
+      // example, on logout), it doesn't roll back and doesn't reload, since that would change
+      // the state of the next user. It's aborted, so it doesn't fail, and doesn't show errors.
+      if (this._hasStoppedRetrying) throw error;
+
       commandFailed = true;
       commandError = error;
 
@@ -4113,6 +4400,17 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
           rollbackValue = this.getValueFromState(rollback);
           lastAppliedValue = rollbackValue;
         }
+      }
+    }
+
+    // Applies the server response, if any. This is outside the `try` above, because the command
+    // succeeded: if applying the response throws, the action fails with that error, but there
+    // is no rollback and no reload.
+    if (!commandFailed && serverResponse !== null && serverResponse !== undefined) {
+      const newState = this.applyServerResponseToState(this.state, serverResponse);
+      if (newState !== null) {
+        this._applyState(newState);
+        lastAppliedValue = this.getValueFromState(newState);
       }
     }
 
@@ -4175,11 +4473,30 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
       } catch (error) {
         // An aborted command is not retried.
         if (error instanceof AbortDispatchException) throw error;
+        // When `dispatchSync` threw because the command is ASYNC, its result is ignored, so
+        // there's no point retrying.
+        if (this._isDiscardedByDispatchSync) throw error;
+        // When `clearInternalActionProps()` was called (for example, on logout), stops retrying.
+        if (this.store._wereInternalActionPropsCleared(this)) throw this._stopRetrying();
         this._retry.attempts++;
         if (this._retry.attempts > this._retry.maxRetries) throw error;
-        await new Promise(resolve => setTimeout(resolve, this._nextRetryDelay()));
+        try {
+          // It also stops waiting right away when `clearInternalActionProps()` is called.
+          await this.store._waitRetryDelay(this, this._nextRetryDelay());
+        } catch {
+          throw this._stopRetrying();
+        }
       }
     }
+  }
+
+  // True if the command stopped retrying because `clearInternalActionProps()` was called.
+  private _hasStoppedRetrying = false;
+
+  private _stopRetrying(): AbortDispatchException {
+    this._hasStoppedRetrying = true;
+    return new AbortDispatchException(
+      'The internal action props were cleared, so the command stopped retrying.');
   }
 
   /**
@@ -4207,6 +4524,11 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
       throw new StoreException(
         `Action ${this.constructor.name} is an OptimisticCommand, which can't use fresh. ` +
         'Remove its `fresh` property.');
+
+    if (this.ignoreOld)
+      throw new StoreException(
+        `Action ${this.constructor.name} is an OptimisticCommand, which can't use ignoreOld. ` +
+        'Remove its `ignoreOld` property.');
 
     if (this.ifRetryIsOn && (this._retry.unlimitedRetries || this._retry.maxRetries === -1))
       throw new StoreException(
@@ -4464,8 +4786,8 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
  *   `{ abort: true }`. If there is no internet, the optimistic value is not applied, and no
  *   request is sent.
  * - It should not be combined with `nonReentrant`, `retry`, `unlimitedRetryCheckInternet`,
- *   `debounce`, `throttle`, `fresh` or polling. Dispatching it with those throws a
- *   `StoreException`.
+ *   `debounce`, `throttle`, `fresh`, `ignoreOld` or polling. Dispatching it with those throws
+ *   a `StoreException`.
  * - It should not be combined with `sequential`, which throws a `StoreException` too.
  *   `OptimisticSync` needs dispatches to overlap: it applies the optimistic value as soon as the
  *   action is dispatched, and coalesces the dispatches made while a request is in flight into a
@@ -5041,8 +5363,8 @@ let _deviceId: number | undefined = undefined;
  *   `{ abort: true }`. If there is no internet, the optimistic value is not applied, and no
  *   request is sent.
  * - It should not be combined with `nonReentrant`, `retry`, `unlimitedRetryCheckInternet`,
- *   `debounce`, `throttle`, `fresh` or polling. Dispatching it with those throws a
- *   `StoreException`.
+ *   `debounce`, `throttle`, `fresh`, `ignoreOld` or polling. Dispatching it with those throws
+ *   a `StoreException`.
  * - It should not be combined with `sequential`, which throws a `StoreException` too, for the
  *   same reasons given in `OptimisticSync`, and also because the revision tracking assumes the
  *   server pushes can be applied to the state while a request is in flight.
@@ -5524,6 +5846,18 @@ export type _OptimisticSyncRevision = {
 };
 
 /**
+ * The information the store keeps for each `ignoreOld` key, while actions with that key are
+ * running. For Kiss internal use only.
+ */
+export type _IgnoreOldEntry = {
+  key: any,
+  // The dispatch order of the newest action with this key.
+  newestOrder: number,
+  // The actions with this key that are running.
+  running: Set<KissAction<any>>,
+};
+
+/**
  * The revision kept in the store for the given key, where the server revision is the newest of
  * the one kept in the store, and the given one (which comes from the state).
  */
@@ -5610,7 +5944,7 @@ function _revisionOf(store: Store<any>, key: any, serverRevisionFromState: numbe
  * Notes:
  * - This class should be used alone. It can't be combined with any other feature: dispatching
  *   it with `checkInternet`, `nonReentrant`, `retry`, `unlimitedRetryCheckInternet`, `debounce`,
- *   `throttle`, `fresh`, `sequential` or polling throws a `StoreException`.
+ *   `throttle`, `fresh`, `ignoreOld`, `sequential` or polling throws a `StoreException`.
  * - In particular, it should not be combined with `sequential`. Pushed values must be applied to
  *   the state as soon as they arrive, and `sequential` would delay them behind unrelated queued
  *   actions. Worse, a push is also what tells an in-flight `OptimisticSyncWithPush` request that
@@ -5758,6 +6092,7 @@ function _checkIncompatibleFeatures(action: KissAction<any>, description: string
 
   if (noCheckInternet) incompatible('checkInternet', !!action.checkInternet);
   incompatible('nonReentrant', action.nonReentrant);
+  incompatible('ignoreOld', action.ignoreOld);
   incompatible('unlimitedRetryCheckInternet', action._isUnlimitedRetryCheckInternet);
   incompatible('retry', action.ifRetryIsOn);
   incompatible('debounce', action._debounceMillis !== null);

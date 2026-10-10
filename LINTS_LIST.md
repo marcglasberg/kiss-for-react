@@ -712,7 +712,8 @@ TypeScript allows it, since `void` methods can be overridden with async ones. Th
 
 ### new-values-in-use-object
 
-Warning. A `useObject` whose selector creates new values inside the object or array, like
+Warning. A `useObject` whose selector creates new values inside the object, array, `Map` or
+`Set`, like
 `state.items.filter(...)`, `state.items.map(...)` or `{ ...state.user }`. `useObject`
 compares the values by identity, so the component re-renders on every state change, as
 with `useSelect`:
@@ -723,7 +724,8 @@ const data = useObject((state: State) => ({ items: state.items, filter: state.fi
 ```
 
 No quick fix. Keep the computed values in the state, or compute them in the component, from
-the selected parts.
+the selected parts. The selector's result itself needs no rule, since the type of `useObject`
+only accepts a plain object, an array, a `Map` or a `Set`.
 
 ### wait-condition-without-timeout
 
@@ -738,9 +740,10 @@ logic in an action. Not reported in tests.
 
 From AsyncRedux's `incompatible_mixins`. Reports the action features that can't be combined in
 the same action, since dispatching it throws a `StoreException`: the ❌ cells of the
-compatibility matrix in [`ACTION_FEATURES.md`](ACTION_FEATURES.md). For example, `throttle`
-with `nonReentrant`, `retry` with `debounce`, `nonReentrant` in an `OptimisticCommand`, or
-`retry` in an `OptimisticSync`.
+compatibility matrix in the
+[Action features](https://kissforreact.org/react/advanced-actions/action-features) docs page.
+For example, `throttle` with `nonReentrant`, `retry` with `debounce`, `ignoreOld` with
+`sequential`, `nonReentrant` in an `OptimisticCommand`, or `retry` in an `OptimisticSync`.
 Features inherited from superclasses count too. Error, in tests too (the action throws there
 as well). Its tests check that it reports exactly the combinations the store doesn't allow.
 `missing-key-params` also covers `unlimitedRetryCheckInternet`, which uses the non-reentrant

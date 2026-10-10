@@ -180,9 +180,9 @@ function _tryToConstruct(classObj: any, isEs6Class: boolean, parameters: any[]):
 
 /**
  * Copies the deserialized values of `parsedObj` into `instance`.
- * Properties with a setter, and read-only properties with primitive values, keep the value
- * the constructor gave them. Read-only properties with object values have their writable
- * fields updated in place.
+ * Properties with a getter or a setter (own or inherited from the class), and read-only
+ * properties with primitive values, keep the value the constructor gave them. Own read-only
+ * properties with object values are updated in place (see `_copyInPlace`).
  */
 function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: ClassMapping, options: DeserializeOptions) {
   const { ignoreProperties, rawProperties } = options;
@@ -203,14 +203,16 @@ function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: Cl
       continue;
     }
 
-    const descriptor = Object.getOwnPropertyDescriptor(instance, key);
+    const descriptor = _findPropertyDescriptor(instance, key);
     if (descriptor) {
-      if (typeof descriptor.set === 'function') {
+      // A getter or a setter. Setting a getter-only property would throw.
+      if (descriptor.get || descriptor.set) {
         continue;
       }
       if (descriptor.writable === false) {
-        if (typeof value === 'object') {
-          _copyWritableFields(instance[key], value, classMapping);
+        // An inherited object is shared by all instances, so it's not changed.
+        if (!notObject(value) && Object.prototype.hasOwnProperty.call(instance, key)) {
+          _copyInPlace(instance[key], value, classMapping);
         }
         continue;
       }
@@ -221,16 +223,37 @@ function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: Cl
   return instance;
 }
 
-/** Copies the fields of `source` into `target`, except the ones that `target` has as read-only. */
-function _copyWritableFields(target: any, source: any, classMapping: ClassMapping) {
-  for (const savedKey in source) {
-    const field = unescapeKey(savedKey);
-    const descriptor = Object.getOwnPropertyDescriptor(target, field);
-    const isReadOnly = descriptor && descriptor.writable !== true && typeof descriptor.set !== 'function';
-    if (!isReadOnly) {
-      setOwnProperty(target, field, deserializeFromParsedObjWithClassMapping(source[savedKey], classMapping));
+/**
+ * Copies the saved `source` into the existing `target`, in place: the built-in data (like the
+ * entries of a Map), and the fields, like `_copyDeserializedValues` does.
+ * If `target` is a primitive, it's kept as is.
+ */
+function _copyInPlace(target: any, source: any, classMapping: ClassMapping) {
+  if (notObject(target)) {
+    return;
+  }
+
+  if (VALUE_FIELD in source) {
+    const deserializeNested = (value: any) => deserializeFromParsedObjWithClassMapping(value, classMapping);
+    findInheritedBuiltinType(target)?.fill?.(target, source[VALUE_FIELD], deserializeNested);
+  }
+
+  _copyDeserializedValues(target, source, classMapping, {});
+}
+
+/**
+ * Returns the descriptor of the property `key` of `obj`, which may be its own, or inherited
+ * from its class. `Object.prototype` is not searched, so that its `__proto__` accessor doesn't
+ * hide a saved `__proto__` key.
+ */
+function _findPropertyDescriptor(obj: object, key: string): PropertyDescriptor | undefined {
+  for (let current = obj; current !== null && current !== Object.prototype; current = Object.getPrototypeOf(current)) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    if (descriptor) {
+      return descriptor;
     }
   }
+  return undefined;
 }
 
 /**

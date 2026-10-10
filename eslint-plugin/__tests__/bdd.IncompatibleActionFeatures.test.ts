@@ -75,6 +75,7 @@ const DECLARATIONS: Record<string, string> = {
   sequential: 'sequential = true;',
   poll: 'poll = Poll.once;',
   unlimitedRetryCheckInternet: 'unlimitedRetryCheckInternet = true;',
+  ignoreOld: 'ignoreOld = true;',
 };
 
 const FEATURES = Object.keys(DECLARATIONS);
@@ -96,16 +97,19 @@ const INCOMPATIBLE_PAIRS = [
   ['unlimitedRetryCheckInternet', 'fresh'],
   ['unlimitedRetryCheckInternet', 'sequential'],
   ['unlimitedRetryCheckInternet', 'poll'],
+  ['ignoreOld', 'nonReentrant'],
+  ['ignoreOld', 'sequential'],
+  ['ignoreOld', 'unlimitedRetryCheckInternet'],
 ];
 
 /** The features an `OptimisticCommand` can't use. */
-const INCOMPATIBLE_WITH_COMMAND = ['nonReentrant', 'debounce', 'throttle', 'fresh', 'poll', 'unlimitedRetryCheckInternet'];
+const INCOMPATIBLE_WITH_COMMAND = ['nonReentrant', 'debounce', 'throttle', 'fresh', 'poll', 'unlimitedRetryCheckInternet', 'ignoreOld'];
 
 /** The features an `OptimisticSync` can't use: all but `checkInternet`. */
-const INCOMPATIBLE_WITH_SYNC = ['nonReentrant', 'retry', 'debounce', 'throttle', 'fresh', 'sequential', 'poll', 'unlimitedRetryCheckInternet'];
+const INCOMPATIBLE_WITH_SYNC = ['nonReentrant', 'retry', 'debounce', 'throttle', 'fresh', 'sequential', 'poll', 'unlimitedRetryCheckInternet', 'ignoreOld'];
 
 /** The features a `ServerPush` can't use: all of them. */
-const INCOMPATIBLE_WITH_SERVER_PUSH = ['nonReentrant', 'retry', 'checkInternet', 'debounce', 'throttle', 'fresh', 'sequential', 'poll', 'unlimitedRetryCheckInternet'];
+const INCOMPATIBLE_WITH_SERVER_PUSH = ['nonReentrant', 'retry', 'checkInternet', 'debounce', 'throttle', 'fresh', 'sequential', 'poll', 'unlimitedRetryCheckInternet', 'ignoreOld'];
 
 /** An action with both features, the first one declared first. */
 function actionWith(first: string, second: string): string {
@@ -156,6 +160,7 @@ Bdd(feature)
   .example(val('First', 'unlimitedRetryCheckInternet'), val('Second', 'nonReentrant'), val('Reason', '`unlimitedRetryCheckInternet` is already non-reentrant.'))
   .example(val('First', 'poll'), val('Second', 'retry'), val('Reason', 'Add `retry` to the action returned by `createPollingAction()` instead.'))
   .example(val('First', 'sequential'), val('Second', 'debounce'), val('Reason', 'The debounce period would only start when the action gets its turn in the queue.'))
+  .example(val('First', 'ignoreOld'), val('Second', 'sequential'), val('Reason', 'The actions already apply their results in the dispatch order.'))
   .run(async (ctx) => {
     const result = lint(rule, actionWith(ctx.example.val('First'), ctx.example.val('Second')), {types: true});
     expect(result.messages).toHaveLength(1);
@@ -549,6 +554,7 @@ function turnOn(action: any, features: string[]) {
     sequential: true,
     poll: Poll.once,
     unlimitedRetryCheckInternet: true,
+    ignoreOld: true,
   };
   for (const feature of features) action[feature] = values[feature];
 }

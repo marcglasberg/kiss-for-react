@@ -21,9 +21,11 @@
   });
   ```
 
-* New hook `useObject()`, to select an object (or array) with some parts of the state. The
-  component re-renders only when one of its values changes:
-  `useObject((state: State) => ({ name: state.name, age: state.age }))`.
+* New hook `useObject()`, to select an object (or an array, `Map` or `Set`) with some parts of
+  the state. The component re-renders only when one of its values changes:
+  `useObject((state: State) => ({ name: state.name, age: state.age }))`. Its type doesn't
+  accept other values, like class instances or a `Date`. The lint rule
+  `new-values-in-use-object` reports values created inside the result, like `state.items.filter(...)`.
 
 * New hook `useIsStoreReady()`: returns `false` while the store is loading the persisted
   state, and `true` after. Use it to show a loading state, and to disable the buttons that
@@ -75,6 +77,23 @@
   long, and only the last action runs its reducer. Actions of the same class debounce each
   other, or override `debounceLockBuilder()` to choose the lock. `removeAllDebounceLocks()`
   removes all locks. It can't be combined with `retry`, nor used in an `OptimisticCommand`.
+
+* New `ignoreOld` action property. With `ignoreOld = true`, when the action is dispatched
+  again, the actions of the previous dispatches (with the same key) that are still running
+  become old: their results and errors are ignored, and they are aborted silently. Only the
+  newest dispatch changes the state, so a slow request that finishes late doesn't overwrite
+  the newer information. `isOld` tells if a newer action was dispatched. An action waiting to
+  retry stops retrying when it becomes old. Actions of the same class share the key, or
+  override `ignoreOldKeyParams()` to separate them by some fields, or `computeIgnoreOldKey()`
+  so that different classes share it. It can be combined with `debounce`, `throttle`, `fresh`,
+  `retry` and `checkInternet`, but not with `nonReentrant`, `sequential` or
+  `unlimitedRetryCheckInternet`, nor used in an `OptimisticCommand`, `OptimisticSync`,
+  `OptimisticSyncWithPush` or `ServerPush`.
+
+* New `abortSignal` action getter, an `AbortSignal` that is aborted when an `ignoreOld` action
+  becomes old. Pass it to `fetch` (or any API that accepts a signal) to cancel the requests of
+  old actions. The `AbortError` that `fetch` then throws is ignored, like any error of an old
+  action. For actions without `ignoreOld`, it's never aborted.
 
 * New `throttle` action property. With `throttle = 5000` (milliseconds), or `throttle = true`
   for the default 1000 milliseconds, the action runs at most once per throttle period, and
@@ -149,11 +168,13 @@
 * New `store.clearInternalActionProps()`, to call on logout. It clears the information the
   store keeps for the action features: it removes all `fresh` keys and `throttle` locks, makes
   the `debounce` actions that are waiting finish without running their reducer, stops all
-  polling, and discards the actions waiting in `sequential` queues. It also stops the actions
+  polling, discards the actions waiting in `sequential` queues, and forgets the `ignoreOld`
+  keys. It also stops the actions
   that retry, with `retry` or `unlimitedRetryCheckInternet`: an action waiting to retry is
   aborted right away (with an `AbortDispatchException`, so it doesn't fail or show errors), and
-  an action running an attempt is aborted if that attempt fails. Actions already running still
-  finish.
+  an action running an attempt is aborted if that attempt fails. The same goes for an
+  `OptimisticCommand` with `retry`, which then doesn't roll back or reload. Actions already
+  running still finish.
 
 * `store.setShutDown(true)` now calls `clearInternalActionProps()` (before, it only stopped
   polling), so it also stops the retries. Setting it back to `false` doesn't resume them.
@@ -185,6 +206,12 @@
   Before, it was silently ignored if the action was then aborted (by `abortDispatch()` or
   `nonReentrant`), mocked, or the store was shut down.
 
+* Dispatching a misconfigured action (for example, an `OptimisticCommand` with `nonReentrant`,
+  or an action with an invalid `retry` option) now always throws a `StoreException` (or, with
+  `dispatchAndWait`, rejects with it), and the action is not marked as dispatched. Before, it
+  was silently aborted if its dispatch would be aborted anyway (by `abortDispatch()`, or
+  because an action with the same non-reentrant key was running, or by `throttle` or `fresh`).
+
 * `OptimisticUpdate` was removed. Use `OptimisticCommand` instead: `newValue()` is now
   `optimisticValue()`, `applyState(value, state)` is now `applyValueToState(state, value)`,
   `saveValue()` is now `sendCommandToServer()`, and `reloadValue()` is now
@@ -197,6 +224,13 @@
   `useIsStoreReady()` in components.
 
 * `store.logOut()` now throws a `StoreException` if called before the store is ready.
+
+* `store.logOut()` now works without a persistor: it waits, and returns the store state to the
+  initial-state, like it does with a persistor (before, it did nothing). Also, a persistor
+  paused by the app (`pausePersistor`), or a store shut down by the app (`setShutDown`),
+  before or during `logOut()`, now stays that way after it. Before, `logOut()` always resumed
+  the persistor and restarted the store. A persistor resumed during `logOut()` no longer saves
+  the old user's state again.
 
 * `waitCondition` now takes an options object, and `timeoutMillis` is required:
   `waitCondition(condition, { timeoutMillis: 5000 })`. Use `{ timeoutMillis: 0 }` for no
@@ -224,9 +258,44 @@
 * `retry` now requires an async reducer. An action with `retry` and a sync reducer fails with
   a `StoreException`.
 
+* A `retry` option set to `undefined` now uses its default, as if it was not set. Before, it
+  replaced the default: for example, `retry = {maxRetries: config.maxRetries}` retried forever
+  when `config.maxRetries` was `undefined`, and `on: undefined` turned retry off.
+
+* An action whose `before()` or `reduce()` throws `null` or `undefined` (or rejects with no
+  reason) now fails with an `Error` that says so. Before, it counted as "completed OK", the
+  `stateObserver` got no error, and `throw null` was swallowed, since `wrapError` got `null`.
+
+* An error thrown by the `actionObserver` is now ignored (and logged), and the action runs
+  and finishes normally. Before, if it threw when the action finished, `dispatchAndWait` of
+  an async action never settled, and a sync action's `dispatch` threw the observer's error. If
+  it threw when the action started, the action never ran.
+
 * When `dispatchSync` throws because the action is async, its async `before()` or `reduce()`
   has already started. Its result is now ignored (it never changes the state), and its errors
-  are only logged.
+  are only logged. It's also not retried anymore: before, an action with `retry` (or an
+  `OptimisticCommand` with `retry`) kept calling `reduce()` (or `sendCommandToServer()`) after
+  `dispatchSync` threw, and an action with `unlimitedRetryCheckInternet` ran its reducer, and
+  without internet kept checking forever.
+
+* When `dispatchSync` throws because the action is async, the `StoreException` is now always
+  thrown. Before, it went to the action's `wrapError` and the `errorObserver`, which could
+  swallow it (so `dispatchSync` returned silently), or turn it into a `UserException` (so the
+  user saw an error dialog, and the action counted as failed). Now they don't see it, and
+  `isFailed` and `exceptionFor` stay `null`/`false`. The action still finishes: `after()` runs.
+
+* Inside an action, `this.waitAllActions` and `this.waitAllActionTypes` now need a non-empty
+  list, and reject right away with a `StoreException` when the list is empty (or `null`).
+  Before, they waited until no actions were in progress, which never happens since the action
+  itself is in progress, so they always timed out (the docs had this as an example). They now
+  also ignore the action itself (or its own type) if it's in the list. The store's
+  `store.waitAllActions([])` and `store.waitAllActionTypes([])` still wait until no actions
+  are in progress.
+
+* Inside an action, `this.waitActionType` with the action's own type now rejects right away
+  with a `StoreException`. Before, it waited for the action itself to finish, which never
+  happens while it waits, so it always timed out. To run actions of the same type one at a
+  time, use `sequential = true`.
 
 * `action.getLog` is now a method: use `action.getLog()`.
 
@@ -242,5 +311,18 @@
 
 * The `UserException` builder methods (`withTitle`, `withMessage`, `addProps` etc.) now keep
   the subclass of the exception, and its fields. Before, they returned a plain `UserException`.
+
+* The `ClassPersistor` can now save a plain object with a `constructor` key, like a
+  dictionary of word counts where one of the words is "constructor". Before, serializing it
+  threw a `TypeError`, so every save failed from then on.
+
+* The `ClassPersistor` now reads back a read-only property holding a `Map`, `Set`, `Date`,
+  array or class instance, with its content and fields. Before, a `Map` came back empty, and a
+  class instance got extra `type` and `value` fields.
+
+* The `ClassPersistor` can now read a saved field that is a getter-only property in a newer
+  version of the app. The saved value is ignored, and the getter is kept. Before, reading threw
+  a `TypeError`, and the saved state was deleted. A property with a setter in the class also
+  keeps the value the constructor gave it, and its setter is not called.
 
 * Bug fixes.

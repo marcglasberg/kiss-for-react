@@ -15,8 +15,8 @@ const AMBIGUOUS_METHODS = new Set(['slice', 'concat']);
 const NEW_VALUE_FUNCTIONS = new Set(['structuredClone']);
 
 /**
- * Reports a `useObject` whose selector creates new values inside the object or array it returns,
- * like `state.items.filter(...)`, `{ ...state.user }`, or `() => ...`:
+ * Reports a `useObject` whose selector creates new values inside the object, array, `Map` or
+ * `Set` it returns, like `state.items.filter(...)`, `{ ...state.user }`, or `() => ...`:
  *
  * ```tsx
  * const data = useObject((state: State) => ({ done: state.items.filter((i) => i.done) })); // Warning
@@ -34,7 +34,8 @@ export default createRule({
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow creating new objects, arrays or functions inside the result of a `useObject` selector.',
+      description: 'Disallow creating new objects, arrays or functions inside the result of a `useObject` selector ' +
+        '(an object, array, `Map` or `Set`).',
     },
     schema: [],
     messages: {
@@ -57,13 +58,25 @@ export default createRule({
         for (const returned of returnedExpressions(selector)) {
           const container = resolve(unwrap(returned), selector, context);
           const values: TSESTree.Node[] = [];
+          let containerName: string;
           if (container.type === AST_NODE_TYPES.ObjectExpression) {
+            containerName = 'object';
             for (const property of container.properties) {
               if (property.type === AST_NODE_TYPES.Property) values.push(property.value);
             }
           } else if (container.type === AST_NODE_TYPES.ArrayExpression) {
-            for (const element of container.elements) {
-              if (element && element.type !== AST_NODE_TYPES.SpreadElement) values.push(element);
+            containerName = 'array';
+            values.push(...elementsOf(container));
+          } else if (container.type === AST_NODE_TYPES.NewExpression && container.callee.type === AST_NODE_TYPES.Identifier &&
+            (container.callee.name === 'Map' || container.callee.name === 'Set')) {
+            // `new Map([[key, value], ...])` or `new Set([value, ...])`.
+            containerName = container.callee.name;
+            const entries = container.arguments[0] && unwrap(container.arguments[0]);
+            if (entries?.type !== AST_NODE_TYPES.ArrayExpression) continue;
+            for (const entry of elementsOf(entries)) {
+              const pair = unwrap(entry);
+              if (containerName === 'Set') values.push(entry);
+              else if (pair.type === AST_NODE_TYPES.ArrayExpression) values.push(...elementsOf(pair));
             }
           } else {
             continue;
@@ -77,7 +90,7 @@ export default createRule({
                 data: {
                   text: shortText(context.sourceCode.getText(created.node)),
                   kind: created.kind,
-                  container: container.type === AST_NODE_TYPES.ObjectExpression ? 'object' : 'array',
+                  container: containerName,
                 },
               });
             }
@@ -87,6 +100,12 @@ export default createRule({
     };
   },
 });
+
+/** The elements of an array literal, without holes and spreads. */
+function elementsOf(array: TSESTree.ArrayExpression): TSESTree.Node[] {
+  return array.elements.filter((element): element is TSESTree.Expression =>
+    element !== null && element.type !== AST_NODE_TYPES.SpreadElement);
+}
 
 function shortText(text: string): string {
   const oneLine = text.replace(/\s+/g, ' ');

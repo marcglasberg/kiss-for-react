@@ -17,10 +17,10 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 
 /** The action features that are set with a property. */
 export type PropertyFeature = 'nonReentrant' | 'retry' | 'checkInternet' | 'debounce' | 'throttle' | 'fresh' |
-  'sequential' | 'poll' | 'unlimitedRetryCheckInternet';
+  'sequential' | 'poll' | 'unlimitedRetryCheckInternet' | 'ignoreOld';
 
 const PROPERTY_FEATURES: PropertyFeature[] = ['nonReentrant', 'retry', 'checkInternet', 'debounce', 'throttle',
-  'fresh', 'sequential', 'poll', 'unlimitedRetryCheckInternet'];
+  'fresh', 'sequential', 'poll', 'unlimitedRetryCheckInternet', 'ignoreOld'];
 
 /**
  * The pairs of features that can't be combined in the same action (dispatching it throws a
@@ -46,6 +46,9 @@ const INCOMPATIBLE: [PropertyFeature, PropertyFeature, string?][] = [
     'while holding the queue.'],
   ['unlimitedRetryCheckInternet', 'poll',
     'Add `unlimitedRetryCheckInternet` to the action returned by `createPollingAction()` instead.'],
+  ['ignoreOld', 'nonReentrant', 'Two actions with the same key never run at the same time.'],
+  ['ignoreOld', 'sequential', 'The actions already apply their results in the dispatch order.'],
+  ['ignoreOld', 'unlimitedRetryCheckInternet', 'Two actions with the same key never run at the same time.'],
 ];
 
 /** The features an `OptimisticCommand` can't use, and why, when it helps. */
@@ -56,6 +59,7 @@ const INCOMPATIBLE_WITH_COMMAND: [PropertyFeature, string?][] = [
   ['fresh'],
   ['poll'],
   ['unlimitedRetryCheckInternet'],
+  ['ignoreOld', 'It\'s already non-reentrant.'],
 ];
 
 /** The features an `OptimisticSync` can't use, and why, when it helps. It can only use `checkInternet`. */
@@ -70,6 +74,7 @@ const INCOMPATIBLE_WITH_SYNC: [PropertyFeature, string?][] = [
     'while a request is in flight. It already sends a single request per key at a time.'],
   ['poll'],
   ['unlimitedRetryCheckInternet'],
+  ['ignoreOld', 'It already decides which value wins.'],
 ];
 
 /** The features a `ServerPush` can't use: all of them, since it should be used alone. */
@@ -85,6 +90,7 @@ const INCOMPATIBLE_WITH_SERVER_PUSH: [PropertyFeature, string?][] = [
     '`OptimisticSyncWithPush` requests that no follow-up is needed.'],
   ['poll'],
   ['unlimitedRetryCheckInternet'],
+  ['ignoreOld', 'It already ignores the stale pushes.'],
 ];
 
 /** How a feature is set in the action: if it's on, and its declaration in the class itself, if any. */
@@ -124,7 +130,7 @@ export interface FeatureState {
  * ```
  *
  * The features are `nonReentrant`, `retry`, `checkInternet`, `debounce`, `throttle`, `fresh`,
- * `sequential`, polling (`poll`), `unlimitedRetryCheckInternet`, `OptimisticCommand`,
+ * `sequential`, polling (`poll`), `unlimitedRetryCheckInternet`, `ignoreOld`, `OptimisticCommand`,
  * `OptimisticSync`, `OptimisticSyncWithPush` (which can use the same features as an
  * `OptimisticSync`) and `ServerPush`. It also reports an `OptimisticCommand` that retries forever
  * (`retry = { maxRetries: -1 }` or `retry = { unlimitedRetries: true }`).
@@ -299,6 +305,7 @@ function isOn(name: PropertyFeature, text: string | null, isParameter: boolean):
   switch (name) {
     case 'nonReentrant':
     case 'sequential':
+    case 'ignoreOld':
       return value === 'true';
     case 'retry':
       return retryOf(value).on;

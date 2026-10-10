@@ -40,7 +40,7 @@ export function useSelector<St, T>(selector: (state: St) => T): T {
 }
 
 /**
- * Returns an object (or array) with some parts of the store state:
+ * Returns an object (or an array, `Map` or `Set`) with some parts of the store state:
  *
  * ```ts
  * const user = useObject((state: State) => ({ name: state.user.name, age: state.user.age }));
@@ -54,12 +54,23 @@ export function useSelector<St, T>(selector: (state: St) => T): T {
  * since it creates a new object each time. Instead, `useObject` compares the new object with
  * the previous one, value by value (with `Object.is`). If they have the same values, it
  * returns the previous object, and the component doesn't rebuild. This also works if the
- * selector returns an array: `useObject((state: State) => [state.name, state.age])`.
+ * selector returns an array: `useObject((state: State) => [state.name, state.age])`, or a
+ * `Map` or a `Set`, whose entries are compared in order.
  *
  * Note the values themselves are compared by identity. So, the selector should return parts
  * of the state, and not create new objects or arrays for its values.
+ *
+ * Only plain objects, arrays, `Map`s and `Set`s are compared value by value. Anything else,
+ * like a `Date`, a class instance, or a subclass of `Map` or `Set`, is compared by identity,
+ * like `useSelect` does. So, `useObject((state: State) => new Point(state.x, state.y))` would
+ * rebuild the component for ALL state changes.
+ *
+ * For this reason, the selector's type only accepts a plain object, an array, a `Map` or a
+ * `Set` (or `null` or `undefined`), and a class instance, a `Date`, a string, a number or a
+ * function doesn't compile. Note an object whose type is an `interface` doesn't compile either,
+ * since TypeScript can't tell it apart from a class instance. Declare it with `type` instead.
  */
-export function useObject<St, T>(selector: (state: St) => T): T {
+export function useObject<St, T extends UseObjectValue>(selector: (state: St) => T): T {
   // The last object returned. While the selector returns objects with the same values, we keep
   // returning this same object, so that `useSelect` sees no change.
   const lastRef = useRef<{ value: T } | null>(null);
@@ -73,8 +84,21 @@ export function useObject<St, T>(selector: (state: St) => T): T {
   });
 }
 
-// Returns true if `a` and `b` are the same, or are both arrays (or both plain objects) with the
-// same values (compared with `Object.is`).
+// What a `useObject` selector can return. A class instance is not assignable to a `Record`,
+// since only object literal types (and `type` aliases) get an implicit index signature.
+type UseObjectValue =
+  | Record<string, unknown>
+  | readonly unknown[]
+  | ReadonlyMap<unknown, unknown>
+  | ReadonlySet<unknown>
+  | null
+  | undefined;
+
+// Returns true if `a` and `b` are the same, or are both plain objects, arrays, `Map`s or `Set`s
+// with the same values (compared with `Object.is`). The entries of a `Map` or `Set` must also be
+// in the same order, since that's the order they are rendered in. Other objects, like a `Date`,
+// a class instance, or a subclass of `Map` or `Set`, are only equal if they are the same object,
+// since their values may not be in their own enumerable keys.
 function _shallowEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
@@ -86,7 +110,30 @@ function _shallowEqual(a: unknown, b: unknown): boolean {
     return true;
   }
 
-  if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+  const proto = Object.getPrototypeOf(a);
+  if (proto !== Object.getPrototypeOf(b)) return false;
+
+  if (proto === Map.prototype) {
+    const mapA = a as Map<unknown, unknown>, mapB = b as Map<unknown, unknown>;
+    if (mapA.size !== mapB.size) return false;
+    const entriesB = mapB.entries();
+    for (const [key, value] of mapA) {
+      const [keyB, valueB] = entriesB.next().value!;
+      if (!Object.is(key, keyB) || !Object.is(value, valueB)) return false;
+    }
+    return true;
+  }
+
+  if (proto === Set.prototype) {
+    const setA = a as Set<unknown>, setB = b as Set<unknown>;
+    if (setA.size !== setB.size) return false;
+    const valuesB = setB.values();
+    for (const value of setA)
+      if (!Object.is(value, valuesB.next().value)) return false;
+    return true;
+  }
+
+  if (proto !== Object.prototype && proto !== null) return false;
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);
   if (keysA.length !== keysB.length) return false;
@@ -672,6 +719,17 @@ function useStoreFromContext<St>(): Store<St> {
 class StoreDispatchers<St> {
 
   constructor(public store: Store<St>) {
+    // Bind the methods, so that they also work when destructured: `const { dispatch } = useStore()`.
+    this.dispatch = this.dispatch.bind(this);
+    this.dispatchWhen = this.dispatchWhen.bind(this);
+    this.dispatchAndWait = this.dispatchAndWait.bind(this);
+    this.dispatchSync = this.dispatchSync.bind(this);
+    this.waitCondition = this.waitCondition.bind(this);
+    this.waitActionCondition = this.waitActionCondition.bind(this);
+    this.waitAllActions = this.waitAllActions.bind(this);
+    this.waitActionType = this.waitActionType.bind(this);
+    this.waitAllActionTypes = this.waitAllActionTypes.bind(this);
+    this.waitAnyActionTypeFinishes = this.waitAnyActionTypeFinishes.bind(this);
   }
 
   /**

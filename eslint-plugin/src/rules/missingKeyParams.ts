@@ -20,7 +20,7 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 /** Properties of Kiss actions that configure the action. They are not the action's own data. */
 const KISS_PROPERTIES = ['retry', 'checkInternet', 'nonReentrant', 'debounce', 'throttle',
   'removeThrottleLockOnError', 'fresh', 'sequential', 'poll', 'pollInterval', 'pollWaitsForRun',
-  'unlimitedRetryCheckInternet', 'maxFollowUpRequests'];
+  'unlimitedRetryCheckInternet', 'maxFollowUpRequests', 'ignoreOld'];
 
 /**
  * The kind of key the action uses: the non-reentrant key, or the `OptimisticSync` key (also used

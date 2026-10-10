@@ -21,31 +21,31 @@
 
 | # | Severity | Area | Bug | Checked | Fixed |
 |---|---|---|---|---|---|
-| 1 | High | useIsWaiting | The spinner doesn't show when an action that failed is dispatched again. | Reproduced | No |
-| 2 | High | Persistence | `persistAndPausePersistor()` freezes the app if `persistDifference` throws synchronously. | Reproduced | No |
-| 3 | Medium | Persistence | `ifPersists=false` is ignored while the persistor is paused, so `resumePersistor()` saves that state. | Reproduced | No |
-| 4 | Medium | Persistence / startup | Pausing before the store is ready makes the persistor diff against a state that was never saved, and a change is lost. | Reproduced | No |
-| 5 | Medium | ESSerializer | A plain object with a `constructor` key can't be serialized, so every save fails from then on. | Reproduced | No |
-| 6 | Medium | retry | A `retry` option set to `undefined` replaces its default. `maxRetries: undefined` retries forever. | Reproduced | No |
-| 7 | Medium | dispatchSync | `dispatchSync` doesn't throw for an async action when the error is swallowed or converted by `wrapError`/`errorObserver`. | Reproduced | No |
-| 8 | Medium | useObject | `useObject` returns a stale value when the selector returns a `Map`, `Set` or `Date`. | Reproduced | No |
-| 9 | Medium | useStore | `const { dispatch } = useStore()` crashes when `dispatch` is called. | Reproduced | No |
-| 10 | Medium | Wait helpers (docs) | The documented `await this.waitAllActions([])` inside an action always times out. | Reproduced | No |
+| 1 | High | useIsWaiting | The spinner doesn't show when an action that failed is dispatched again. | Reproduced | Yes |
+| 2 | High | Persistence | `persistAndPausePersistor()` freezes the app if `persistDifference` throws synchronously. | Reproduced | Yes |
+| 3 | Medium | Persistence | `ifPersists=false` is ignored while the persistor is paused, so `resumePersistor()` saves that state. | Reproduced | Yes |
+| 4 | Medium | Persistence / startup | Pausing before the store is ready makes the persistor diff against a state that was never saved, and a change is lost. | Reproduced | Yes |
+| 5 | Medium | ESSerializer | A plain object with a `constructor` key can't be serialized, so every save fails from then on. | Reproduced | Yes |
+| 6 | Medium | retry | A `retry` option set to `undefined` replaces its default. `maxRetries: undefined` retries forever. | Reproduced | Yes |
+| 7 | Medium | dispatchSync | `dispatchSync` doesn't throw for an async action when the error is swallowed or converted by `wrapError`/`errorObserver`. | Reproduced | Yes |
+| 8 | Medium | useObject | `useObject` returns a stale value when the selector returns a `Map`, `Set` or `Date`. | Reproduced | Yes |
+| 9 | Medium | useStore | `const { dispatch } = useStore()` crashes when `dispatch` is called. | Reproduced | Yes |
+| 10 | Medium | Wait helpers (docs) | The documented `await this.waitAllActions([])` inside an action always times out. | Reproduced | Yes |
 | 11 | Low | dispatchAndWaitAll | Stops dispatching the rest if one `dispatchAndWait` throws synchronously. | Reproduced | No |
-| 12 | Low | ActionStatus | An action that fails with `undefined` is "completed OK", and `throw null` is swallowed. | Reproduced | No |
-| 13 | Low | retry / OptimisticCommand | An invalid `retry` option leaves the action half-dispatched: `after()` never runs. | Reproduced | No |
-| 14 | Low | retry / dispatchSync | After `dispatchSync` throws, the retry loop keeps calling `reduce()`. | Reproduced | No |
+| 12 | Low | ActionStatus | An action that fails with `undefined` is "completed OK", and `throw null` is swallowed. | Reproduced |Yes |
+| 13 | Low | retry / OptimisticCommand | An invalid `retry` option leaves the action half-dispatched: `after()` never runs. | Reproduced | Yes |
+| 14 | Low | retry / dispatchSync | After `dispatchSync` throws, the retry loop keeps calling `reduce()`. | Reproduced | Yes |
 | 15 | Low | nonReentrant | The non-reentrant key is released before `after()`, but only if the state changed. | Reproduced | No |
-| 16 | Low | OptimisticCommand | If applying the server response throws, the state is rolled back as if the command failed. | Reproduced | No |
-| 17 | Low | OptimisticCommand | A misconfigured command is silently aborted, instead of throwing, when its key is already running. | Reproduced | No |
-| 18 | Low | actionObserver | If the `actionObserver` throws when the action finishes, `dispatchAndWait` never settles. | Reproduced | No |
-| 19 | Low | logOut | `store.logOut()` does nothing when there is no persistor. | Reproduced | No |
-| 20 | Low | logOut | `logOut()` un-pauses a paused persistor, and un-shuts a shut-down store. | Reproduced | No |
+| 16 | Low | OptimisticCommand | If applying the server response throws, the state is rolled back as if the command failed. | Reproduced | Yes |
+| 17 | Low | OptimisticCommand | A misconfigured command is silently aborted, instead of throwing, when its key is already running. | Reproduced | Yes |
+| 18 | Low | actionObserver | If the `actionObserver` throws when the action finishes, `dispatchAndWait` never settles. | Reproduced | Yes |
+| 19 | Low | logOut | `store.logOut()` does nothing when there is no persistor. | Reproduced | Yes |
+| 20 | Low | logOut | `logOut()` un-pauses a paused persistor, and un-shuts a shut-down store. | Reproduced | Yes |
 | 21 | Low | logOut | If `deleteState` fails, the old user's state stays in the store and is saved again. | Reproduced | No |
-| 22 | Low | Persistence | `persistAndPausePersistor()` resolves even when the save failed. | Reproduced | No |
+| 22 | Low | Persistence | `persistAndPausePersistor()` resolves even when the save failed. | Reproduced | Not a bug |
 | 23 | Low | Persistence | A failed `saveInitialState` still counts as persisted. | Reproduced | No |
-| 24 | Low | ESSerializer | A read-only property holding a class instance or a `Map` is restored wrongly. | Reproduced | No |
-| 25 | Low | ESSerializer | A saved field that is now a getter-only property makes reading throw, and the saved state is deleted. | Reproduced | No |
+| 24 | Low | ESSerializer | A read-only property holding a class instance or a `Map` is restored wrongly. | Reproduced | Yes |
+| 25 | Low | ESSerializer | A saved field that is now a getter-only property makes reading throw, and the saved state is deleted. | Reproduced | Yes |
 | 26 | Low | useStore | `useStore()` has no `dispatchAll` and no `dispatchAndWaitAll`. | Reproduced | No |
 | 27 | Low | useSelect | A selector that returns `NaN` re-renders on every state change. | Reproduced | No |
 | 28 | Low | Wait helpers | `UnmodifiableSetView.forEach` hands out the real set, so the store's actions can be deleted. | Reproduced | No |
@@ -60,64 +60,25 @@
 
 - **Docs say:** `useIsWaiting` "returns true if an ASYNC action of the specific type is currently being processed" (`src/Hooks.tsx`). README: "To show a spinner while an asynchronous action is running, use `useIsWaiting(ActionType)`."
 - **What happens:** action `X` fails, and some component uses `useIsFailed(X)` or `useExceptionFor(X)`. Then `X` is dispatched again (a retry). A component that uses `useIsWaiting(X)`, but not `useIsFailed(X)`, is not re-rendered, and shows `false` for the whole run, even though `store.isWaiting(X)` is `true`. It only works when both hooks are in the same component, as in the README example.
-- **Cause:** in `_calculateIsWaitingIsFailed` (`src/Store.tsx:1047`), when the action is failable and was in the failed list, `_rebuildFromStoreHooks()` runs **before** `this._actionsInProgress.add(action)`. So the `isWaiting` selectors see no change. Then `theUIHasAlreadyUpdated = true` skips the second rebuild.
-- **How to trigger:**
-  ```tsx
-  class Load extends KissAction<number> {
-    async reduce() {
-      await new Promise<void>(r => finish = r);
-      if (shouldFail) throw new UserException('fail');
-      return (s: number) => s + 1;
-    }
-  }
-  const Spinner = () => <p>{`waiting=${useIsWaiting(Load)}`}</p>;
-  const Err = () => <p>{`failed=${useIsFailed(Load)}`}</p>;
-  // Render both under StoreProvider (store with showUserException: () => {}).
-  await act(async () => { store.dispatch(new Load()); });  // waiting=true
-  await act(async () => { finish(); await new Promise(r => setTimeout(r, 0)); });  // failed=true
-  shouldFail = false;
-  await act(async () => { store.dispatch(new Load()); });
-  expect(store.isWaiting(Load)).toBe(true);  // Passes.
-  expect(text()).toContain('waiting=true');  // Fails: "waiting=false".
-  ```
+- **Cause:** in `_calculateIsWaitingIsFailed` (`src/Store.tsx:1047`), when the action is failable and was in the failed list, `_rebuildFromStoreHooks()` runs **before** `this._actionsInProgress.add(action)`. So the `isWaiting` selectors see no change. Then `theUIHasAlreadyUpdated = true` skips the second rebuild. It also happened when the action failed with an error that is not a `UserException` (`isFailed` stays `false`, but the type is still in the failed list), and when waiting for a base class of the action.
+- **Fixed:** `_calculateIsWaitingIsFailed` now removes the action from the failed list and adds it to the actions in progress first, and only then rebuilds once, if the action was failed and failable, or is awaitable. So that one rebuild sees both changes.
+- **How to trigger:** see the BDDs in `__tests__/bdd.UseIsWaitingAfterFailure.test.ts`. Scenarios 2 to 5 failed before the fix: a retry after a failure, with the error shown by `useIsFailed` or by `useExceptionFor`; a retry that fails again; a retry after an error that is not a `UserException`; and a spinner for a base class. The other scenarios cover the cases that already worked, so the fix can't break them.
 
 ## 2. `persistAndPausePersistor()` freezes the app if `persistDifference` throws synchronously (High)
 
 - **Docs say:** `persistDifference` "should save the new state ... and return a `Promise`" (`src/Persistor.tsx:70`). `persistAndPausePersistor`: "The returned promise completes when the current state is persisted" (`src/Store.tsx:1915`).
 - **What happens:** a `persistDifference` that is not `async`, and throws before returning its promise, leaves `_persisting` set to a promise that never goes back to `null`. The next `persistAndPausePersistor()` then runs `while (this._persisting) await this._persisting.catch(...)` forever. Each pass is only a microtask, so timers and I/O never run again: the whole app freezes. A real persistor that does `return storage.set('k', JSON.stringify(s))` triggers this with a `BigInt` or a cycle in the state.
 - **Cause:** `src/ProcessPersistence.ts:355-359`. When `_doPersist` throws synchronously, its `finally` (which sets `_persisting = null`, `:390-394`) runs **before** `_persist` stores the returned promise in `this._persisting`. The loop is at `:446-449`.
-- **How to trigger:**
-  ```ts
-  class JsonPersistor extends Persistor<S> {
-    async readState() { return null; }
-    async deleteState() {}
-    persistDifference(_l: S | null, next: S): Promise<void> { JSON.stringify(next); return Promise.resolve(); }
-    get throttle() { return null; }
-  }
-  class Inc extends KissAction<S> { reduce() { return { n: 10n }; } }
-  const store = new Store<S>({ initialState: { n: 0 }, persistor: new JsonPersistor(), logger: null, errorObserver: () => false });
-  await store.ready();
-  store.dispatch(new Inc());
-  await tick(10);
-  expect((store as any)._processPersistence._persisting).toBeNull();  // Fails: Promise {}
-  await store.persistAndPausePersistor();  // Never returns. Jest's own timeout never fires.
-  ```
+- **Fixed:** like AsyncRedux, `ProcessPersistence` now tracks a running save only with the `isPersisting` flag, which `_persist`'s `finally` always resets, and no longer keeps its promise. `persistAndPause` and `logOut` wait with `_waitForPersisting()`, which `_persist`'s `finally` resolves. So a `persistDifference` that throws synchronously is handled the same as one that returns a rejected promise: the error goes to the `errorObserver`, the state is not considered saved, and nothing waits forever.
+- **How to trigger:** see the BDDs in `__tests__/bdd.PersistorSyncThrow.test.ts`. Before the fix, every case where `persistDifference` throws synchronously froze: after a failed save started by a state change, by the throttle timer or by a `PersistAction`; after `persistAndPausePersistor`'s own save failed; and after `logOut` failed to save the initial state. The cases where it returns a rejected promise, and the scenario "After a save failed, the next state change is saved", cover what already worked.
 
 ## 3. `ifPersists=false` is ignored while the persistor is paused (Medium)
 
 - **Docs say:** "if `ifPersists` is false, the persistor will ignore this state change, and won't persist the state change" (`src/KissAction.ts:2363`).
 - **What happens:** `pausePersistor()`, then `UpdateStateAction(fn, false)`, then `resumePersistor()` calls `persistDifference` with that state.
 - **Cause:** `src/ProcessPersistence.ts:298` returns early when `isPaused`, before the `ifPersists` branch (`:300-307`). So `lastPersistedState` is not updated, and `resume()` (`:462`) sees a difference.
-- **How to trigger:**
-  ```ts
-  await store.ready();
-  const n = persistor.calls.length;
-  store.pausePersistor();
-  store.dispatch(new UpdateStateAction<S>(() => ({ a: 7, b: 7 }), false));
-  store.resumePersistor();
-  await tick();
-  expect(persistor.calls.length).toBe(n);  // Fails: n + 1
-  ```
+- **Fixed:** `process` now checks `ifPersists` before checking if the persistor is paused. As before, the state is only considered persisted if no earlier change is waiting to be saved. To know that, it now also checks if the state changed since it was last saved, which covers the changes made while the persistor is paused (these are not tracked by the throttle timer or by `isANewStateAvailable`). So `resumePersistor()` and `persistAndPausePersistor()` don't save that state, but they still save the earlier changes.
+- **How to trigger:** see the BDDs in `__tests__/bdd.UpdateStateNotPersisted.test.ts`. Scenarios 4 and 5 failed before the fix: the state is saved when the paused persistor resumes, and by `persistAndPausePersistor`. Scenario 6 covers what already worked: a change made while paused is still saved, even when an `ifPersists=false` change comes after it.
 
 ## 4. Pausing before the store is ready makes the persistor diff against a state that was never saved (Medium)
 
@@ -126,29 +87,16 @@
   - `getLastPersistedStateFromPersistor()` returns the `initialState`, not the state read from storage.
   - `resumePersistor()` and `persistAndPausePersistor()` re-save the read state as `persistDifference(initialState, readState)`.
   - A persistor that writes only the changed keys loses data, as shown below.
-- **How to trigger:**
-  ```ts
-  persistor.stored = { a: 5, b: 5 };  // readState is held until open() is called.
-  const store = new Store<S>({ initialState: { a: 0, b: 0 }, persistor, ... });
-  store.pausePersistor();
-  open();
-  await store.ready();               // State is {a:5, b:5}.
-  store.dispatch(new SetA(0));       // State is {a:0, b:5}.
-  store.resumePersistor();
-  await tick();
-  expect(persistor.stored).toEqual({ a: 0, b: 5 });  // Fails: {a:5, b:5}. The diff is against {a:0, b:0}, so a=0 is never written.
-  ```
+- **Fixed:** two changes, each of which fixes it on its own. The fix of bug 3 makes `process` consider the read state as saved even while the persistor is paused. Also, `_readInitialState` now sets `lastPersistedState` to the state it read, right after applying it, so this no longer depends on how `process` handles `ifPersists`.
+- **How to trigger:** see the BDDs in `__tests__/bdd.PausePersistorBeforeReady.test.ts`. Scenarios 1 to 4 failed before the fix: `getLastPersistedStateFromPersistor()` returned the initial-state; a change made after the store was ready was diffed against the initial-state, so it was lost; and `resumePersistor()` and `persistAndPausePersistor()` saved the read state again. Scenario 5, where nothing was persisted yet, covers what already worked.
 
 ## 5. ESSerializer: a plain object with a `constructor` key can't be serialized (Medium)
 
 - **Docs say:** the README says it "supports serialization of JavaScript objects" (`README.md:470`).
 - **What happens:** `ESSerializer.serialize({ the: 3, constructor: 1 })` throws `TypeError: Function.prototype.toString requires that 'this' be a Function`. With `ClassPersistor`, every save then fails, and state changes are no longer saved. Any dictionary keyed by user text (word counts, tags) can hit this.
 - **Cause:** `_getConstructor` (`src/Esserializer/serializer.ts:162-169`) returns `target.constructor` (here, the number `1`) when the prototype's constructor is `Object`. That value reaches `isNativeFunction` (`:87`). It should check `typeof target.constructor === 'function'`.
-- **How to trigger:**
-  ```ts
-  const value = { the: 3, constructor: 1 };
-  expect(ESSerializer.deserialize(ESSerializer.serialize(value), [])).toEqual(value);  // Throws TypeError.
-  ```
+- **Fixed:** `_getConstructor` now uses the object's own `constructor` property only if it's a function (as in Big from big.js). Otherwise, the object is a plain object, and its `constructor` key is saved and read back like any other key.
+- **How to trigger:** see the BDDs in `__tests__/bdd.SerializeConstructorKey.test.ts`. Scenarios 1 to 3 failed before the fix: a plain object whose `constructor` key holds a number, string, boolean, `null`, object or array; a dictionary with a `constructor` key inside a class; and a `ClassPersistor` that saves such a state, and then keeps saving. Scenario 4 covers what already worked: a function-style class like Big, whose instances have their own `constructor` property, is still saved as that class.
 
 ## 6. A `retry` option set to `undefined` replaces its default (Medium)
 
@@ -158,21 +106,8 @@
   - `initialDelay: undefined` gives 0 ms delays, `multiplier: undefined` gives `NaN` delays, `maxDelay: undefined` removes the cap, and `on: undefined` turns retry off.
   - On an `OptimisticCommand`, the unlimited-retries check (`maxRetries === -1`) doesn't fire. The command retries forever and never releases its non-reentrant key, so every later dispatch with that key is silently aborted.
 - **Cause:** `src/KissAction.ts:1491`, `this._retry = { ...this._retry, on: true, ...this.retry }`. Spreading copies the explicit `undefined` values over the defaults, and validation skips `undefined`. Then `maxRetries >= 0` (`src/Store.tsx:1435`) and `attempts > undefined` (`src/KissAction.ts:2305`) are always false.
-- **How to trigger:**
-  ```ts
-  const config: { maxRetries?: number } = {};
-  let count = 0;
-  class Load extends KissAction<number> {
-    retry = { initialDelay: 1, maxRetries: config.maxRetries };
-    async reduce(): Promise<(s: number) => number> { count++; throw new Error('fail'); }
-  }
-  const store = new Store<number>({ initialState: 0, errorObserver: () => false });
-  const action = new Load();
-  store.dispatchAndWait(action).catch(() => {});
-  await new Promise(r => setTimeout(r, 300));
-  expect(count).toBe(4);                         // Fails: 9, and still going.
-  expect(action.status.isCompleted).toBe(true);  // Fails.
-  ```
+- **Fixed:** `_injectStore` now drops the `retry` options that are `undefined` before merging them with the defaults. So an option that is `undefined` uses its default, as if it was not set. A `retry` where every option is `undefined` turns retry on, with all the defaults.
+- **How to trigger:** see the BDDs in `__tests__/bdd.RetryUndefinedOptions.test.ts`. Before the fix, every scenario failed except the example with `unlimitedRetries: undefined`: `maxRetries: undefined` retried forever; `initialDelay`, `multiplier`, `maxDelay` or `on` set to `undefined` gave the wrong delays, or no retry at all; all options `undefined` turned retry off; and an `OptimisticCommand` with `maxRetries: undefined` retried forever, so a later dispatch never got to run. The `unlimitedRetries: undefined` example already worked, and is there so the fix can't break it.
 
 ## 7. `dispatchSync` doesn't throw for an async action when the error is swallowed or converted (Medium)
 
@@ -182,60 +117,32 @@
   - With a `wrapError` that converts errors to `UserException` (also a JSDoc example), the user sees that dialog, `isFailed(A)` becomes true, and nothing is thrown.
   - This happens for both an async `reduce()` and an async `before()`.
 - **Cause:** the exception is thrown inside `_runFromStart` (`src/Store.tsx:1309-1311` and `1337-1340`), which runs inside `_wraps`, so it goes to `_processWrapsError`. The other developer errors ("already dispatched", "not ready") are thrown outside that pipeline.
-- **How to trigger:**
-  ```ts
-  const store = new Store<St>({ initialState: new St(), logger: null, errorObserver: () => false });
-  expect(() => store.dispatchSync(new AsyncInc())).toThrow(StoreException);  // Fails: doesn't throw.
-  ```
+- **Fixed:** the "action is ASYNC" `StoreException` is still thrown inside the action's run, so that the action finishes normally (`after()` runs, the action leaves the actions in progress, the `actionObserver` sees it end, and its status is `isCompletedFailed`). But `_runFromStart` now marks it (`_notSyncError`), and `_processWrapsError` throws a marked error right away, without giving it to `wrapError` or the `errorObserver`, and without adding the action to the failed actions. So `dispatchSync` always throws it, like the other developer errors. This also covers `debounce` and `sequential` actions, which are ASYNC too. Note getting a `Promise` back was never the problem: that's how the action is found to be ASYNC. The problem was only where the error went after that.
+- **How to trigger:** see the BDDs in `__tests__/bdd.DispatchSyncAsync.test.ts`. Before the fix, these failed: `dispatchSync` throws even if the `errorObserver` swallows errors (for an async `reduce()`, an async `before()`, `debounce` and `sequential`); even if `wrapError` converts errors to `UserException`; even if the `errorObserver` converts errors to a `UserException` or another error; and the action still finishes when it throws.
 
 ## 8. `useObject` returns a stale value when the selector returns a `Map`, `Set` or `Date` (Medium)
 
 - **Docs say:** `useObject` "compares the new object with the previous one, value by value … If they have the same values, it returns the previous object" (`src/Hooks.tsx:43-60`). The comment of `_shallowEqual` says it compares "both arrays (or both plain objects)".
 - **What happens:** two different `Map`s have the same prototype, and `Object.keys()` is `[]` for both, so they are always "equal". `useObject(s => s.tags)` keeps returning the first `Map`, and the component never re-renders. The same happens with `Set`, `Date`, and class instances whose fields are all `#private`.
 - **Cause:** `_shallowEqual` (`src/Hooks.tsx:78-100`) only compares the prototype and the own enumerable keys. It never checks the objects are plain.
-- **How to trigger:**
-  ```tsx
-  class State { constructor(readonly tags: Map<string, number>) {} }
-  class SetTag extends KissAction<State> {
-    constructor(readonly k: string, readonly v: number) { super(); }
-    reduce() { return new State(new Map(this.state.tags).set(this.k, this.v)); }
-  }
-  const C = () => { seen = useObject((s: State) => s.tags); return null; };
-  act(() => store.dispatch(new SetTag('a', 1)));
-  expect(store.state.tags.size).toBe(1);
-  expect(seen.size).toBe(1);  // Fails: 0 (the old Map).
-  ```
+- **Fixed:** `_shallowEqual` now compares value by value only plain objects (whose prototype is `Object.prototype` or `null`), arrays, `Map`s and `Set`s. The entries of a `Map` or `Set` are compared in order, since that's the order they are rendered in. Any other object, like a `Date`, a class instance, or a subclass of `Map` or `Set`, is compared by identity, like `useSelect` does. The JSDoc of `useObject` now says so. Also, the type of `useObject` now only accepts a selector that returns a plain object, an array, a `Map` or a `Set` (or `null` or `undefined`), and the lint rule `new-values-in-use-object` now also checks the entries of a `new Map([...])` or `new Set([...])` returned by the selector.
+- **How to trigger:** see the BDDs in `__tests__/bdd.UseObjectNotPlainObjects.test.ts`. Before the fix, these failed: "useObject rebuilds the component when the selected value is replaced by a different one, which is not a plain object", for all its examples (`Map`, `Set`, `Date`, and a class instance with only `#private` fields), since the component didn't rebuild and kept the old value; and "useObject compares a Map or a Set entry by entry", since a `Map` or `Set` created by the selector was compared by its (empty) own keys. The other scenarios already passed, and are there so the fix can't break them: the component doesn't rebuild while the selected value is the same object; a `Map` or `Set` with the same entries in a different order rebuilds it; other objects are compared by identity; and an object created with `Object.create(null)` is still compared value by value.
 
 ## 9. `const { dispatch } = useStore()` crashes when `dispatch` is called (Medium)
 
 - **Docs say:** the project's own ESLint plugin treats `const { dispatch } = useStore()` as a supported pattern (`eslint-plugin/src/components.ts:304,327`), and its demo uses it. All other dispatch hooks return bound functions.
 - **What happens:** calling it throws `TypeError: Cannot read properties of undefined (reading 'store')`. This applies to `dispatch`, `dispatchAndWait`, `dispatchSync`, `dispatchWhen` and the `wait*` methods.
 - **Cause:** the methods of `StoreDispatchers` (`src/Hooks.tsx:672`) are prototype methods that use `this.store`, and are not bound.
-- **How to trigger:**
-  ```tsx
-  let dispatch!: (a: KissAction<any>) => void;
-  const C = () => { ({ dispatch } = useStore()); return null; };
-  act(() => { dispatch(new SetTag('a', 1)); });  // TypeError.
-  ```
+- **Fixed:** the constructor of `StoreDispatchers` now binds all its methods (`dispatch`, `dispatchWhen`, `dispatchAndWait`, `dispatchSync`, `waitCondition`, `waitActionCondition`, `waitAllActions`, `waitActionType`, `waitAllActionTypes` and `waitAnyActionTypeFinishes`), so they also work when destructured. Since `useStore()` memoizes the `StoreDispatchers` per store, the bound functions are also stable across renders.
+- **How to trigger:** see the BDDs in `__tests__/bdd.UseStoreDestructuring.test.ts`. Before the fix, the scenario "The methods of useStore work when destructured" failed for all its examples (one per method), with `TypeError: Cannot read properties of undefined (reading 'store')`.
 
 ## 10. The documented `await this.waitAllActions([])` inside an action always times out (Medium)
 
 - **Docs say:** the JSDoc of every wait method of the action (`src/KissAction.ts:814, 827, 926, 939, 1052, 1065, 1168, 1181, 1277, 1290, 1393, 1406`) has this example: "Dispatches actions and wait until no actions are in progress. `this.dispatch(new BuyAction('IBM')); this.dispatch(new BuyAction('TSLA')); await this.waitAllActions([]);`".
 - **What happens:** the action that calls it is itself in progress, so "no actions in progress" is never true. The wait always rejects with a `TimeoutException`, or never resolves if the timeout is 0.
 - **Cause:** `Store.waitAllActions` (`src/Store.tsx:2279-2288`) waits for `actions.size === 0`, and the calling action is in `_actionsInProgress`. Either the example is wrong, or the action's version should ignore the action itself.
-- **How to trigger:**
-  ```ts
-  class Outer extends KissAction<St> {
-    async reduce() {
-      this.dispatch(new BuyAction('IBM'));
-      this.dispatch(new BuyAction('TSLA'));
-      await this.waitAllActions([], { timeoutMillis: 300 });
-      return null;
-    }
-  }
-  const status = await store.dispatchAndWait(new Outer());
-  expect(status.originalError).toBe(null);  // Fails: TimeoutException.
-  ```
+- **Fixed:** the example was wrong, and was removed from the JSDoc. Following AsyncRedux, inside an action, `this.waitAllActions` and `this.waitAllActionTypes` now need a non-empty list: with an empty list (or `null`) they reject right away with a `StoreException` that explains why, instead of timing out. They also ignore the action itself (or its own type) if it's in the list, and if nothing else is left, they complete right away. The store's `store.waitAllActions([])` and `store.waitAllActionTypes([])`, used in tests, still wait until no actions are in progress. Also, `this.waitActionType` with the action's own type had the same problem (it always timed out). It now rejects right away with a `StoreException`, as in AsyncRedux.
+- **How to trigger:** see the BDDs in `__tests__/bdd.ActionWaitAllActions.test.ts`. Before the fix, these failed (with a `TimeoutException`): inside an action, `waitAllActions([])`, `waitAllActions(null)` and `waitAllActionTypes([])` fail right away with a `StoreException`; `waitAllActions` ignores the action itself, and completes right away with only the action itself; and `waitAllActionTypes` ignores the action's own type. Also the last BDD in `__tests__/bdd.ActionWaitActionType.test.ts`: `waitActionType` with the action's own type fails right away with a `StoreException`.
 
 ## 11. `dispatchAndWaitAll` stops dispatching the rest if one dispatch throws synchronously (Low)
 
@@ -258,49 +165,25 @@
   - A reducer that rejects with no reason (`await Promise.reject()`, which some promise wrappers do): `dispatchAndWait` rejects, but `isCompletedOk` is `true`, `isCompletedFailed` is `false`, and the `stateObserver` gets `error = undefined`.
   - `throw null`: `wrapError(null)` returns `null`, which means "disable the error", so the failure is swallowed and the status is OK.
 - **Cause:** the `ActionStatus` constructor and `copy` use `??` (`src/KissAction.ts:1719, 1736`), so a `null` or `undefined` `originalError` can't be stored. Then `src/Store.tsx:1166` treats `null` as "disabled".
-- **How to trigger:**
-  ```ts
-  class A extends KissAction<St> {
-    async reduce() { await Promise.reject(); return (s: St) => s; }
-  }
-  const a = new A();
-  await store.dispatchAndWait(a).catch(() => {});  // Rejects.
-  expect(a.status.isCompletedOk).toBe(false);      // Fails: true.
-  ```
+- **Fixed:** when the action's `before` or `reduce` throws `null` or `undefined` (or a Promise is rejected with no reason), the store now turns it into an `Error` that says so ("Action '...' failed with `null`..."), before anything else sees it. This `Error` is the action's `originalError`, the error given to the `stateObserver`, `wrapError` and the `errorObserver`, and the error thrown by `dispatch` or `dispatchAndWait`. So the action is "completed failed", and `wrapError` can still swallow the error by returning `null`, but it's never swallowed by accident.
+- **How to trigger:** see the BDDs in `__tests__/bdd.ThrowNullOrUndefined.test.ts`. Before the fix, all of them failed: an action whose sync or async `before` or `reduce` throws `null` or `undefined` (or rejects with no reason) was "completed OK" and, with `null`, didn't fail at all; `dispatch` didn't throw for a sync `throw null`; the `stateObserver`, `wrapError` and the `errorObserver` got `null` or `undefined` instead of an `Error`; and an action whose error was swallowed by `wrapError` was "completed OK", even though its reducer didn't finish.
 
 ## 13. An invalid `retry` option leaves the action half-dispatched (Low)
 
 - **Docs say:** `after()` "will always be called when the action is dispatched" (`src/KissAction.ts:145`). The `actionObserver` is "called whenever actions are dispatched, and also when they finish" (`src/Store.tsx:143`).
 - **What happens:** with an invalid `retry` (for example `maxRetries: -5`), or a misconfigured `OptimisticCommand`, `status.isDispatched` is `true`, but `after()` never runs, `isCompleted` never becomes `true`, and neither `actionObserver` call happens. The dispatch does throw (or reject) the `StoreException`, as documented. Nothing leaks: the action never enters the in-progress set.
 - **Cause:** `src/Store.tsx:1028` sets `isDispatched`, and then `_injectStore` (`:1031`) throws, in `_validateRetry` (`src/KissAction.ts:1489`) or the `OptimisticCommand` override (`:2314-2325`). This is outside `_wraps`.
-- **How to trigger:**
-  ```ts
-  class Bad extends KissAction<St> {
-    retry = { maxRetries: -5 };
-    async reduce() { return (s: St) => s; }
-    after() { calls.push('after'); }
-  }
-  const bad = new Bad();
-  await store.dispatchAndWait(bad).catch(() => {});
-  expect(calls).toEqual(['after']);  // Fails: [].
-  ```
+- **Fixed:** with the fix of #17, `_injectStore` (which checks the configuration, and throws) now runs in `_mustAbortDispatch`, before the action is marked as dispatched. So a misconfigured action is not dispatched at all: the dispatch throws the `StoreException` (`dispatchAndWait` rejects with it), `isDispatched` stays `false`, `before`, `reduce` and `after` don't run, the `actionObserver` is not called, and the action is never in progress. This keeps the docs true, since `after()` is only promised for actions that are dispatched. It also means that, once fixed, the same action object can be dispatched again (before, that threw "already dispatched").
+- **How to trigger:** see the BDDs in `__tests__/bdd.MisconfiguredActionNotDispatched.test.ts`. They were written after the fix of #17, so they pass. Run against a copy of `src` with the old order (`_injectStore` called in `_processDispatch`, after `isDispatched` is set), all of them failed: `isDispatched` was `true` for an action with an invalid `retry` and for an `OptimisticCommand` with `nonReentrant`, with `dispatch`, `dispatchAndWait` and `dispatchSync`, and dispatching the fixed action again threw "already dispatched".
 
 ## 14. After `dispatchSync` throws, the retry loop keeps calling `reduce()` (Low)
 
 - **Docs say:** when `dispatchSync` throws for an async action, "the async method has already started, and any side effects it has will still happen. Its result is ignored" (`src/Store.tsx:896-899`).
 - **What happens:** for an action with `retry` whose async reducer fails, `dispatchSync` throws and `after()` runs. But the retry loop is still running, so `reduce()` is called again after each delay: 3 more server calls for an action that already completed.
 - **Cause:** `src/Store.tsx:1338-1341` only attaches a `.catch` to the discarded promise. The retry loop (`:1437-1439`) doesn't know it was discarded.
-- **How to trigger:**
-  ```ts
-  let count = 0;
-  class A extends KissAction<number> {
-    retry = { initialDelay: 1, maxRetries: 3 };
-    async reduce(): Promise<(s: number) => number> { count++; throw new Error('fail'); }
-  }
-  try { store.dispatchSync(new A()); } catch {}
-  await new Promise(r => setTimeout(r, 100));
-  expect(count).toBe(1);  // Fails: 4.
-  ```
+- **Also:** the same happened with an `OptimisticCommand` with `retry`, which kept calling `sendCommandToServer()`. With `unlimitedRetryCheckInternet`, it was worse: `dispatchSync` throws while the internet is being checked, before the reducer runs, so the reducer ran **after** `dispatchSync` threw. And without internet, it kept checking the internet forever.
+- **Fixed:** `_discardAsyncResultOfDispatchSync` now sets `action._isDiscardedByDispatchSync`. The store's retry loop checks it before waiting to retry, and then fails with the reducer's error (which is logged) instead of retrying. It also checks it before each attempt, so with `unlimitedRetryCheckInternet` the reducer never runs. `OptimisticCommand` checks it before retrying `sendCommandToServer()`.
+- **How to trigger:** see the BDDs in `__tests__/bdd.DispatchSyncAsync.test.ts`. These failed before the fix: "After dispatchSync throws for an action with retry, its reducer is not retried" (it ran 4 times), "... with unlimitedRetryCheckInternet, its reducer never runs" (with internet the reducer ran; without it the internet was checked 8 times in 70 ms, and kept going), and "... for an optimistic command with retry, its server call is not retried" (it ran 4 times).
 
 ## 15. The non-reentrant key is released before `after()`, but only if the state changed (Low)
 
@@ -329,73 +212,40 @@
 - **Docs say:** `rollbackState` and `shouldRollback` are "called only when `sendCommandToServer` throws" (`src/KissAction.ts:2057, 2092`).
 - **What happens:** `sendCommandToServer` succeeds, and then `applyServerResponseToState` (or `getValueFromState`) throws. `shouldRollback` and `rollbackState` run, and the state goes back to the old value, even though the server saved the new one.
 - **Cause:** the `try` that catches the command's errors also wraps applying the server response (`src/KissAction.ts:2211-2245`).
-- **How to trigger:**
-  ```ts
-  class Save extends OptimisticCommand<State, string> {
-    optimisticValue() { return 'new'; }
-    getValueFromState(s: State) { return s.value; }
-    applyValueToState(s: State, v: string) { return new State(v); }
-    async sendCommandToServer() { return 'resp'; }
-    applyServerResponseToState(): State | null { throw new Error('bad apply'); }
-    shouldRollback(p: any) { log.push('shouldRollback'); return super.shouldRollback(p); }
-  }
-  await store.dispatchAndWait(new Save()).catch(() => {});
-  expect(log).not.toContain('shouldRollback');  // Fails. And the state is 'old'.
-  ```
+- **Fixed:** the server response is now applied after the `try` that handles the command's errors, and only if the command succeeded. So if `applyServerResponseToState` (or `getValueFromState`, on the new state) throws, the action fails with that error, but `shouldRollback` and `rollbackState` are not called, the state is not rolled back, and there is no reload. This is now in the `applyServerResponseToState` docs.
+- **How to trigger:** see the BDDs in `__tests__/bdd.OptimisticCommandResponseThrows.test.ts`. Before the fix, both failed: when applying the server response threw, and when reading the value from the applied response threw, the state was rolled back to `'old'`, and then reloaded.
 
 ## 17. A misconfigured `OptimisticCommand` is silently aborted, instead of throwing (Low)
 
 - **Docs say:** dispatching an `OptimisticCommand` with `nonReentrant`, or with unlimited retries, "throws a `StoreException`" (`src/KissAction.ts:574, 1962`).
 - **What happens:** if another command with the same key is running, the misconfigured command is silently aborted, and nothing is thrown. So the developer error only shows up sometimes.
 - **Cause:** the check is in `OptimisticCommand._injectStore` (`src/KissAction.ts:2317-2325`), which runs after `_mustAbortDispatch` (`src/Store.tsx:754, 800, 922`) has already aborted the dispatch because of the shared key.
-- **How to trigger:**
-  ```ts
-  store.dispatch(new Save2());  // OptimisticCommand with key 'k', still running.
-  expect(() => store.dispatch(new SaveNR())).toThrow(StoreException);  // nonReentrant = true, key 'k'. Fails: doesn't throw.
-  ```
+- **Also:** the same happened to any misconfigured action whose dispatch was aborted: by `abortDispatch()`, by a running action with the same non-reentrant key, or by `throttle` or `fresh`. For example, an action with `throttle` and an invalid `retry` option didn't throw inside the throttle period.
+- **Fixed:** `_mustAbortDispatch` now calls `_injectStore` (which checks the configuration, and throws) before checking whether to abort, instead of only `_setStore`. `_processDispatch` doesn't call `_injectStore` anymore. So a misconfigured action always throws the `StoreException` (`dispatchAndWait` rejects with it, as before). Since this now happens before the action is marked as dispatched, a misconfigured action is no longer left with `isDispatched` true (see #13).
+- **How to trigger:** see the BDDs in `__tests__/bdd.MisconfiguredActionAborted.test.ts`. Before the fix, all of them failed: an `OptimisticCommand` with `nonReentrant` or unlimited retries, dispatched while another command with the same key was running, or whose `abortDispatch()` returned true, was silently aborted (and `dispatchAndWait` resolved), and so was an action with `throttle` and an invalid `retry`, inside the throttle period.
 
 ## 18. If the `actionObserver` throws when the action finishes, `dispatchAndWait` never settles (Low)
 
 - **What happens:** `after()` has run and the action has left the in-progress set, but the promise of `dispatchAndWait` stays pending forever. The library guards the other user callbacks (`after`, `showUserException`, wait conditions, selectors, the persistence `errorObserver`), but not this one.
-- **Cause:** `src/Store.tsx:1252` calls the observer with no `try/catch`, before `action._resolvePromise(failure)` at `:1256`.
-- **How to trigger:**
-  ```ts
-  const store = new Store<St>({
-    initialState: new St(), logger: null,
-    actionObserver: (_a, _c, ini) => { if (!ini) throw new Error('obs'); },
-  });
-  let settled = false;
-  store.dispatchAndWait(new AsyncInc()).finally(() => { settled = true; }).catch(() => {});
-  await new Promise(r => setTimeout(r, 200));
-  expect(settled).toBe(true);  // Fails.
-  ```
+- **Cause:** `src/Store.tsx:1252` calls the observer with no `try/catch`, before `action._resolvePromise(failure)` at `:1256`. The same happened when the action starts (`ini` true): the action was marked as dispatched, but never ran.
+- **Fixed:** both calls to the `actionObserver` now go through `_observeAction`, which logs and ignores the observer's error, like it's done for `after()`. So the action runs and finishes normally, and `dispatchAndWait` settles with the action's own result or error. The JSDoc of `actionObserver` now says it should not throw, and that its errors are ignored.
+- **How to trigger:** see the BDDs in `__tests__/bdd.ActionObserverThrows.test.ts`. All of them failed before the fix: `dispatchAndWait` of an ASYNC action never settled, and of a SYNC action rejected with the observer's error; a failing action rejected with the observer's error instead of its own (or never settled, if ASYNC); `dispatch` of a SYNC action threw the observer's error; and when the observer threw as the action started, the action never ran.
 
 ## 19. `store.logOut()` does nothing when there is no persistor (Low)
 
 - **Docs say:** it deletes "the persisted state, and return[s] the store state to the given initial-state" (`src/Store.tsx:1859`).
 - **What happens:** without a persistor, it resolves right away, and the state is not reset.
 - **Cause:** `src/Store.tsx:1890`, `return this._processPersistence?.logOut(...)`.
-- **How to trigger:**
-  ```ts
-  store.dispatch(new Inc());
-  await store.logOut({ initialState: new St(100), throttle: 0, actionsThrottle: 0 });
-  expect(store.state.n).toBe(100);  // Fails: 1.
-  ```
+- **Fixed:** the logOut steps moved from `ProcessPersistence.logOut` to `Store._logOut`, which takes the persistence, or `null`. With no persistor, it does the same steps, except deleting and persisting: it stops accepting actions, clears the internal action props, waits for the throttle and for the running actions (at most `actionsThrottle`), and returns the state to the initial-state. `ProcessPersistence.logOut` now calls `store._logOut(this, ...)`.
+- **How to trigger:** see the BDDs in `__tests__/bdd.LogOutWithoutPersistor.test.ts`. All of them failed before the fix. The old scenario "logOut without a persistor does nothing" in `bdd.LogOut.test.ts`, which tested the bug, was removed.
 
 ## 20. `logOut()` un-pauses a paused persistor, and un-shuts a shut-down store (Low)
 
 - **Docs say:** after `pausePersistor`, the persistor "will not start a new persistence process, until method resumePersistor is called" (`src/Store.tsx:1898`).
 - **What happens:** after `logOut()`, the persistor is running again, even if the app had paused it. Also, a store the app had shut down before `logOut()` accepts dispatches again.
-- **Cause:** the `finally` of `logOut` always calls `this.resume()` (`src/ProcessPersistence.ts:279`) and `store.setShutDown(false)` (`:275`), instead of restoring what was there before.
-- **How to trigger:**
-  ```ts
-  store.pausePersistor();
-  await store.logOut({ initialState, throttle: 0, actionsThrottle: 0 });
-  const n = persistor.calls.length;
-  store.dispatch(new SetA(5));
-  await tick();
-  expect(persistor.calls.length).toBe(n);  // Fails: n + 1.
-  ```
+- **Cause:** the `finally` of `logOut` always calls `this.resume()` (`src/ProcessPersistence.ts:279`) and `store.setShutDown(false)` (`:275`), instead of restoring what was there before. Also, a `resumePersistor()` during logOut, after the state was deleted, saved the old user's state again, because `lastPersistedState` was `null`.
+- **Fixed:** logOut no longer uses `pause`/`resume` or `setShutDown`. It keeps its own counters of the logOuts running: `Store._logOutsRunning` (no dispatches while it's above zero) and `ProcessPersistence._logOutsRunning` (no persistence while it's above zero, except for the initial-state that logOut persists itself). So the app's pause and shut-down, set before or during logOut, are kept, and a resume during logOut has no effect until logOut finishes. Since they are counters, two logOuts running at the same time work too. Note logOut still deletes the persisted state and persists the initial-state when the persistor is paused, since that's what it's called to do. It also resets the state when the store is shut down.
+- **How to trigger:** see the BDDs in `__tests__/bdd.LogOutKeepsPauseAndShutDown.test.ts`. All of them failed before the fix, except "two logOuts that run at the same time", which checks the counters.
 
 ## 21. If `deleteState` fails, `logOut` leaves the old user's state, and saves it again (Low)
 
@@ -411,18 +261,10 @@
   expect(persistor.stored).toBeNull();    // Fails: {a: 7}.
   ```
 
-## 22. `persistAndPausePersistor()` resolves even when the save failed (Low)
+## 22. `persistAndPausePersistor()` resolves even when the save failed (Not a bug)
 
-- **Docs say:** "The returned promise completes when the current state is persisted" (`src/Store.tsx:1915`, `src/ProcessPersistence.ts:427`).
-- **What happens:** the save fails, the error goes only to the `errorObserver`, and the promise resolves. The caller (for example, an app going to the background) can't tell that the save failed.
-- **Cause:** `_doPersist` catches and reports the error, and never rethrows (`src/ProcessPersistence.ts:377-388`). `persistAndPause` returns that promise (`:453`).
-- **How to trigger:**
-  ```ts
-  persistor.fail = true;
-  store.dispatch(new SetA(1));
-  await tick();
-  await expect(store.persistAndPausePersistor()).rejects.toBeDefined();  // Fails: resolves.
-  ```
+- **What happens:** the save fails, the error goes to the `errorObserver`, and the promise resolves.
+- **Why it's not a bug:** this is on purpose. `persistAndPausePersistor()` is usually called when the app is shutting down (logging off, going to the background, or about to be killed), and then the app can't recover from a failed save anyway. Rejecting would only force every caller to add a `catch`. The error is not lost: it's given to the `errorObserver` (with a `null` action) before the promise resolves, so it can be logged. This is explained in the JSDoc of `Store.persistAndPausePersistor` and `ProcessPersistence.persistAndPause`, and the BDD "persistAndPausePersistor does not reject when the save fails." (`__tests__/bdd.PersistorErrors.test.ts`) keeps it this way.
 
 ## 23. A failed `saveInitialState` still counts as persisted (Low)
 
@@ -445,29 +287,15 @@
   - A class instance comes back with extra fields `type` (and `value`), taken from the metadata.
   - A `Map` comes back empty, with fields `type: '@Map'` and `value: [...]` instead of its entries.
 - **Cause:** `_copyWritableFields` (`src/Esserializer/deserializer.ts:422-431`) loops over all keys, including `*type` and `*value`, unescapes them to `type` and `value`, and never decodes built-ins.
-- **How to trigger:**
-  ```ts
-  class Holder {
-    constructor() { Object.defineProperty(this, 'm', { value: new Map(), writable: false, enumerable: true }); }
-  }
-  const h = new Holder();
-  (h as any).m.set('k', 1);
-  const out = ESSerializer.deserialize(ESSerializer.serialize(h), [Holder]);
-  expect(out.m.get('k')).toBe(1);  // Fails: undefined.
-  ```
+- **Fixed:** the in-place update (now `_copyInPlace`) skips the `*type` and `*value` metadata, and puts the `*value` data into the existing object with the `fill` of its built-in type (Map, Set, Date, Array, Error, and user subclasses of them). The object keeps its own class and gets its saved fields. A read-only property holding a primitive that JSON can't represent (`NaN`, `Infinity`, `undefined`, a `bigint`) used to make reading throw, and now keeps the value the constructor gave it.
+- **How to trigger:** see the BDDs in `__tests__/bdd.SerializeReadOnlyProperty.test.ts`. All of them failed before the fix: a read-only property holding a `Map`, a `Set`, a `Date`, an `Array` subclass or a `Map` subclass came back without its content; one holding a class instance came back with extra fields; and one holding `NaN`, `Infinity`, `undefined` or a `bigint` made reading throw.
 
 ## 25. ESSerializer: a saved field that is now a getter-only property makes reading throw (Low)
 
 - **What happens:** if a class field became a getter in a later version of the app, `readState` throws "Cannot set property total of #<Cart> which has only a getter". Kiss then **deletes the saved state** (`src/ProcessPersistence.ts:70-79`).
 - **Cause:** `_copyDeserializedValues` (`src/Esserializer/deserializer.ts:403-414`) checks for setters and read-only properties with `getOwnPropertyDescriptor`, which only sees the object's own properties, not the prototype's. Its comment says "Properties with a setter ... keep the value the constructor gave them".
-- **How to trigger:**
-  ```ts
-  class Cart {
-    items: number[] = [];
-    get total() { return this.items.length; }
-  }
-  expect(() => ESSerializer.deserialize('{"*type":"Cart","items":[1,2,3],"total":3}', [Cart])).not.toThrow();  // Fails.
-  ```
+- **Fixed:** `_copyDeserializedValues` now looks for the property in the object and in its class (`_findPropertyDescriptor`, which stops before `Object.prototype`, so a saved `__proto__` key still works). A property with a getter or a setter, own or inherited, keeps the value the constructor gave it, as the comment says. A getter-only property is skipped instead of throwing, and a setter is not called. Nested read-only objects are updated in place with the same rules, since `_copyInPlace` now reuses `_copyDeserializedValues`.
+- **How to trigger:** see the BDDs in `__tests__/bdd.SerializeGetterOnlyProperty.test.ts`. All of them failed before the fix: a saved field that is now a getter-only property, defined in the class or in the constructor, made reading throw; a saved field that is now a property with a setter in the class called the setter; the same getter-only field in a nested object made reading throw; and a `ClassPersistor` reading such a state reported an error and deleted the saved state.
 
 ## 26. `useStore()` has no `dispatchAll` and no `dispatchAndWaitAll` (Low)
 

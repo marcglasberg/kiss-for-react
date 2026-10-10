@@ -307,13 +307,14 @@ only use of `useSelect`, it's replaced with `useObject` in the import.
 
 ### new-values-in-use-object
 
-A warning for a `useObject` whose selector creates new values inside the object or array it
-returns, like `state.items.filter(...)`, `state.items.map(...)`, `{ ...state.user }`, `[]`, or
+A warning for a `useObject` whose selector creates new values inside the object, array, `Map`
+or `Set` it returns, like `state.items.filter(...)`, `state.items.map(...)`, `{ ...state.user }`, `[]`, or
 a function:
 
 ```tsx
 const data = useObject((state: State) => ({ done: state.items.filter((i) => i.done) })); // Warning
 const data = useObject((state: State) => ({ items: state.items, filter: state.filter })); // OK
+const data = useObject((state: State) => new Set([state.name, () => state.name])); // Warning
 ```
 
 `useObject` compares the values inside the object by identity, so a new value makes the
@@ -325,6 +326,10 @@ are compared by value. A selector that returns a filtered array directly, like
 `useObject((state: State) => state.items.filter(...))`, is fine too, since `useObject` compares
 its items. Methods that strings also have, like `slice` and `concat`, are only reported with
 [type information](#type-information).
+
+The selector's result itself doesn't need a rule: the type of `useObject` only accepts a plain
+object, an array, a `Map` or a `Set`, so returning a class instance, a `Date` or a string
+doesn't compile.
 
 ---
 
@@ -897,12 +902,15 @@ dispatched):
 - `unlimitedRetryCheckInternet` with any of `retry`, `checkInternet`, `nonReentrant`,
   `debounce`, `throttle`, `fresh`, `sequential` or `poll`. It already retries, checks the
   internet, and is non-reentrant.
-- An `OptimisticCommand` with `nonReentrant`, `debounce`, `throttle`, `fresh`, `poll` or
-  `unlimitedRetryCheckInternet`, or with a `retry` that retries forever
+- `ignoreOld` with `nonReentrant`, `unlimitedRetryCheckInternet` or `sequential`. With them,
+  two actions with the same key never run at the same time, or already apply their results in
+  the dispatch order.
+- An `OptimisticCommand` with `nonReentrant`, `debounce`, `throttle`, `fresh`, `poll`,
+  `unlimitedRetryCheckInternet` or `ignoreOld`, or with a `retry` that retries forever
   (`maxRetries: -1` or `unlimitedRetries: true`).
 - An `OptimisticSync` or an `OptimisticSyncWithPush` with any feature other than
   `checkInternet`: `nonReentrant`, `retry`, `debounce`, `throttle`, `fresh`, `sequential`,
-  `poll` or `unlimitedRetryCheckInternet`.
+  `poll`, `unlimitedRetryCheckInternet` or `ignoreOld`.
 - A `ServerPush` with any feature, including `checkInternet`. It should be used alone.
 
 A feature is on when it's set to something other than `false`, `null` or `undefined` (for

@@ -1,6 +1,6 @@
 import { expect, jest } from '@jest/globals';
 import { Bdd, Feature, FeatureFileReporter, reporter, val } from 'easy-bdd-tool-jest';
-import { KissAction, Poll, Store, UserException } from '../src';
+import { KissAction, OptimisticCommand, Poll, Store, UserException } from '../src';
 import { delayMillis } from '../src/utils';
 
 reporter(new FeatureFileReporter());
@@ -322,6 +322,40 @@ Bdd(feature)
   });
 
 Bdd(feature)
+  .scenario('The last attempt, if running when the internal action props are cleared, is aborted if it fails.')
+  .given('An action with "retry = { initialDelay: 100, maxRetries: {Max retries} }", whose attempts fail after 1000 millis.')
+  .and('It is running its last attempt.')
+  .when('clearInternalActionProps is called, and then the attempt fails.')
+  .then('The action is aborted: it does not count as failed, and its dispatchAndWait resolves.')
+  .example(val('Max retries', 0))
+  .example(val('Max retries', 1))
+  .run(async (ctx) => {
+    jest.useFakeTimers();
+    try {
+      const maxRetries: number = ctx.example.val('Max retries');
+      const store = new Store<RetryState>({ initialState: new RetryState(0), logger: logger });
+      store.isFailed(LoadValue); // So that the store keeps track of this failed action.
+      const action = new LoadValue({ failures: Infinity, reduceMillis: 1000 });
+      action.retry = { initialDelay: 100, maxRetries };
+      const promise = store.dispatchAndWait(action);
+      promise.catch(() => {}); // Before the fix, it rejected with the error.
+
+      // Each attempt takes 1000 millis, plus the 100 millis wait before each retry.
+      await jest.advanceTimersByTimeAsync(maxRetries * 1100 + 500);
+      expect(action.runs).toBe(maxRetries + 1);
+
+      store.clearInternalActionProps();
+      await jest.advanceTimersByTimeAsync(500);
+      expect(action.status.isCompleted).toBe(true);
+      expect(action.status.isDispatchAborted).toBe(true);
+      expect(store.isFailed(LoadValue)).toBe(false);
+      expect(action.runs).toBe(maxRetries + 1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+Bdd(feature)
   .scenario('An attempt that is running when the internal action props are cleared still changes the state if it succeeds.')
   .given('An action with "retry = { maxRetries: -1 }", that takes 1000 millis to succeed.')
   .and('It is running an attempt.')
@@ -387,6 +421,273 @@ Bdd(feature)
       jest.useRealTimers();
     }
   });
+
+Bdd(feature)
+  .scenario('Clearing the internal action props aborts an optimistic command that is waiting to retry.')
+  .given('An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }".')
+  .and('Its server call failed, and it is waiting to retry.')
+  .when('clearInternalActionProps is called.')
+  .then('The command stops retrying right away, without waiting for the retry delay.')
+  .and('It is aborted: it does not count as failed, and its dispatchAndWait resolves.')
+  .and('It does not roll back the optimistic value, and does not reload.')
+  .and('The server call does not run again.')
+  .run(async (_) => {
+    jest.useFakeTimers();
+    try {
+      const store = new Store<number>({ initialState: 0, logger: logger });
+      store.isFailed(SaveNumber); // So that the store keeps track of this failed action.
+      const action = new SaveNumber({ sendMillis: 10, fails: true });
+      const promise = store.dispatchAndWait(action);
+
+      await jest.advanceTimersByTimeAsync(100);
+      expect(action.calls).toBe(1);
+      expect(store.isWaiting(SaveNumber)).toBe(true);
+
+      store.clearInternalActionProps();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(action.status.isCompleted).toBe(true);
+      const status = await promise;
+
+      expect(status.isDispatchAborted).toBe(true);
+      expect(store.isFailed(SaveNumber)).toBe(false);
+      expect(store.isWaiting(SaveNumber)).toBe(false);
+      expect(store.state).toBe(1);
+      expect(action.reloads).toBe(0);
+
+      // It doesn't run again.
+      await jest.advanceTimersByTimeAsync(60000);
+      expect(action.calls).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+Bdd(feature)
+  .scenario('An optimistic command whose server call is running when the internal action props are cleared is not retried if it fails.')
+  .given('An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }".')
+  .and('Its server call is running, and will fail after 1000 millis.')
+  .when('clearInternalActionProps is called, and then the server call fails.')
+  .then('The command is aborted, without retrying.')
+  .and('It does not roll back the optimistic value, and does not reload.')
+  .run(async (_) => {
+    jest.useFakeTimers();
+    try {
+      const store = new Store<number>({ initialState: 0, logger: logger });
+      store.isFailed(SaveNumber); // So that the store keeps track of this failed action.
+      const action = new SaveNumber({ sendMillis: 1000, fails: true });
+      const promise = store.dispatchAndWait(action);
+
+      await jest.advanceTimersByTimeAsync(500);
+      expect(action.calls).toBe(1);
+
+      store.clearInternalActionProps();
+      await jest.advanceTimersByTimeAsync(500);
+      expect(action.status.isCompleted).toBe(true);
+      const status = await promise;
+
+      expect(status.isDispatchAborted).toBe(true);
+      expect(store.isFailed(SaveNumber)).toBe(false);
+      expect(store.state).toBe(1);
+      expect(action.reloads).toBe(0);
+
+      await jest.advanceTimersByTimeAsync(60000);
+      expect(action.calls).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+Bdd(feature)
+  .scenario('An optimistic command whose server call is running when the internal action props are cleared still applies the server response if it succeeds.')
+  .given('An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }".')
+  .and('Its server call is running, and will succeed after 1000 millis, with a response.')
+  .when('clearInternalActionProps is called, and then the server call succeeds.')
+  .then('The command completes normally, and applies the server response.')
+  .run(async (_) => {
+    jest.useFakeTimers();
+    try {
+      const store = new Store<number>({ initialState: 0, logger: logger });
+      const action = new SaveNumber({ sendMillis: 1000, fails: false });
+      const promise = store.dispatchAndWait(action);
+
+      await jest.advanceTimersByTimeAsync(500);
+      store.clearInternalActionProps();
+      await jest.advanceTimersByTimeAsync(500);
+      const status = await promise;
+
+      expect(status.isCompletedOk).toBe(true);
+      expect(store.state).toBe(2);
+      expect(action.calls).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+Bdd(feature)
+  .scenario('An optimistic command whose last server call is running when the internal action props are cleared is aborted if it fails.')
+  .given('An optimistic command with "retry = { initialDelay: 1000, maxRetries: {Max retries} }".')
+  .and('Its last server call is running, and will fail after 1000 millis.')
+  .when('clearInternalActionProps is called, and then the server call fails.')
+  .then('The command is aborted: it does not count as failed.')
+  .and('It does not roll back the optimistic value, and does not reload.')
+  .example(val('Max retries', 0))
+  .example(val('Max retries', 1))
+  .run(async (ctx) => {
+    jest.useFakeTimers();
+    try {
+      const maxRetries: number = ctx.example.val('Max retries');
+      const store = new Store<number>({ initialState: 0, logger: logger });
+      store.isFailed(SaveNumber); // So that the store keeps track of this failed action.
+      const action = new SaveNumber({ sendMillis: 1000, fails: true });
+      action.retry = { initialDelay: 1000, maxRetries };
+      const promise = store.dispatchAndWait(action);
+      promise.catch(() => {});
+
+      // Each server call takes 1000 millis, plus the 1000 millis wait before the retry.
+      await jest.advanceTimersByTimeAsync(maxRetries * 2000 + 500);
+      expect(action.calls).toBe(maxRetries + 1);
+
+      store.clearInternalActionProps();
+      await jest.advanceTimersByTimeAsync(500);
+      expect(action.status.isCompleted).toBe(true);
+      expect(action.status.isDispatchAborted).toBe(true);
+      expect(store.isFailed(SaveNumber)).toBe(false);
+      expect(store.state).toBe(1);
+      expect(action.reloads).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+Bdd(feature)
+  .scenario('Shutting down the store aborts an optimistic command that is waiting to retry.')
+  .given('An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }".')
+  .and('Its server call failed, and it is waiting to retry.')
+  .when('The store is shut down.')
+  .then('The command is aborted right away, without retrying.')
+  .and('It does not roll back the optimistic value.')
+  .run(async (_) => {
+    jest.useFakeTimers();
+    try {
+      const store = new Store<number>({ initialState: 0, logger: logger });
+      const action = new SaveNumber({ sendMillis: 10, fails: true });
+      const promise = store.dispatchAndWait(action);
+
+      await jest.advanceTimersByTimeAsync(100);
+      expect(action.calls).toBe(1);
+
+      store.setShutDown(true);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(action.status.isCompleted).toBe(true);
+      expect((await promise).isDispatchAborted).toBe(true);
+      expect(store.state).toBe(1);
+
+      await jest.advanceTimersByTimeAsync(60000);
+      expect(action.calls).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+Bdd(feature)
+  .scenario('An optimistic command dispatched after the internal action props were cleared retries as usual.')
+  .given('An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }", waiting to retry.')
+  .and('clearInternalActionProps was called, which aborted it.')
+  .when('The same command is dispatched again, and its server call always fails.')
+  .then('The new command is not aborted, since the old one released its key.')
+  .and('It retries 3 times, and then fails, rolling back the optimistic value.')
+  .run(async (_) => {
+    jest.useFakeTimers();
+    try {
+      const store = new Store<number>({ initialState: 0, logger: logger });
+      store.isFailed(SaveNumber); // So that the store keeps track of this failed action.
+      const oldAction = new SaveNumber({ sendMillis: 10, fails: true });
+      const oldPromise = store.dispatchAndWait(oldAction);
+      await jest.advanceTimersByTimeAsync(100);
+
+      store.clearInternalActionProps();
+      expect((await oldPromise).isDispatchAborted).toBe(true);
+
+      const newAction = new SaveNumber({ sendMillis: 10, fails: true });
+      const newPromise = store.dispatchAndWait(newAction);
+      await jest.advanceTimersByTimeAsync(60000);
+      const status = await newPromise;
+
+      expect(status.isDispatchAborted).toBe(false);
+      expect(status.isCompletedFailed).toBe(true);
+      expect(newAction.calls).toBe(4);
+      expect(store.isFailed(SaveNumber)).toBe(true);
+      expect(store.state).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+Bdd(feature)
+  .scenario('An action dispatched after the internal action props were cleared still fails normally on its last attempt.')
+  .given('clearInternalActionProps was called.')
+  .and('Then, an action with "retry = { initialDelay: 100, maxRetries: 1 }", whose attempts always fail, is dispatched.')
+  .when('Its last attempt fails.')
+  .then('The action fails, and is not aborted.')
+  .run(async (_) => {
+    jest.useFakeTimers();
+    try {
+      const store = new Store<RetryState>({ initialState: new RetryState(0), logger: logger });
+      store.isFailed(LoadValue); // So that the store keeps track of this failed action.
+      store.clearInternalActionProps();
+
+      const action = new LoadValue({ failures: Infinity, reduceMillis: 1000 });
+      action.retry = { initialDelay: 100, maxRetries: 1 };
+      const promise = store.dispatchAndWait(action);
+      await jest.advanceTimersByTimeAsync(5000);
+      const status = await promise;
+
+      expect(action.runs).toBe(2);
+      expect(status.isDispatchAborted).toBe(false);
+      expect(status.isCompletedFailed).toBe(true);
+      expect(store.isFailed(LoadValue)).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+// Optimistic command that applies the value 1, and retries its server call. The server call
+// either always fails, or succeeds with the response 2.
+class SaveNumber extends OptimisticCommand<number, number> {
+  retry = { initialDelay: 1000, maxRetries: 3 };
+  calls = 0;
+  reloads = 0;
+
+  constructor(readonly opts: { sendMillis: number, fails: boolean }) { super(); }
+
+  optimisticValue() {
+    return 1;
+  }
+
+  getValueFromState(state: number) {
+    return state;
+  }
+
+  applyValueToState(_state: number, value: number) {
+    return value;
+  }
+
+  async sendCommandToServer(_value: number) {
+    this.calls++;
+    await delayMillis(this.opts.sendMillis);
+    if (this.opts.fails) throw new UserException('Command failed.');
+    return 2;
+  }
+
+  applyServerResponseToState(_state: number, serverResponse: number) {
+    return serverResponse;
+  }
+
+  async reloadFromServer() {
+    this.reloads++;
+    return 0;
+  }
+}
 
 function createRetryAction(feature: string, reason: string): LoadValue {
   const noInternet = reason === 'there is no internet';

@@ -370,6 +370,90 @@ Bdd(feature)
   });
 
 Bdd(feature)
+  .scenario('An error thrown by saveInitialState at startup is given to the errorObserver.')
+  .given('There is no persisted state, so the store saves the initial state.')
+  .and('A persistor whose saveInitialState throws.')
+  .and('A store with an errorObserver.')
+  .when('The store is created.')
+  .then('The errorObserver gets the error, with a null action.')
+  .and('The store becomes ready.')
+  .run(async (_) => {
+    const observed: any[] = [];
+    const persistor = new FailingPersistor();
+    persistor.failSaveInitial = true;
+
+    const store = await createStore(persistor, {
+      errorObserver: (params: any) => {
+        observed.push(params);
+        return null;
+      },
+    });
+    await store.ready();
+
+    expect(observed.map(o => o.error.message)).toEqual(['save initial failed']);
+    expect(observed[0].originalError).toBe(observed[0].error);
+    expect(observed[0].action).toBeNull();
+    expect(persistor.savedState).toBeNull();
+  });
+
+Bdd(feature)
+  .scenario('When reading the persisted state fails, an error thrown by deleteState is also given to the errorObserver.')
+  .given('A persistor whose readState throws, so the store deletes the persisted state.')
+  .and('Its deleteState also throws.')
+  .and('A store with an errorObserver.')
+  .when('The store is created.')
+  .then('The errorObserver gets both errors, in order, with a null action.')
+  .and('The initial-state is saved.')
+  .run(async (_) => {
+    const observed: any[] = [];
+    const persistor = new FailingPersistor();
+    persistor.failRead = true;
+    persistor.failDelete = true;
+
+    await createStore(persistor, {
+      errorObserver: (params: any) => {
+        observed.push(params);
+        return null;
+      },
+    });
+
+    expect(observed.map(o => o.error.message)).toEqual(['read failed', 'delete failed']);
+    expect(observed.map(o => o.action)).toEqual([null, null]);
+    expect(persistor.savedState?.count).toBe(0);
+  });
+
+Bdd(feature)
+  .scenario('A save error that becomes a UserException without a dialog is not shown, and not thrown.')
+  .given('A persistor whose wrapError turns errors into UserExceptions without a dialog.')
+  .and('The store has <Observer>.')
+  .when('A save fails.')
+  .then('The UserException is not shown to the user.')
+  .and('There is no unhandled promise rejection.')
+  .example(val('Observer', 'no errorObserver'))
+  .example(val('Observer', 'an errorObserver that returns the error'))
+  .run(async (ctx) => {
+    const shown: UserException[] = [];
+    const persistor = new FailingPersistor();
+    persistor.wrap = (error: any) => new UserException('Could not save your data.', { hardCause: error }).noDialog;
+
+    const store = await createStore(persistor, {
+      errorObserver: (ctx.example.val('Observer') === 'no errorObserver') ? undefined : ({ error }: any) => error,
+      showUserException: (exception: UserException, _count: number, next: () => void) => {
+        shown.push(exception);
+        next();
+      },
+    });
+    persistor.failPersist = true;
+
+    const unhandled = await collectUnhandledRejections(() => store.dispatch(new Increment()));
+
+    expect(persistor.record).toEqual(['persist 1 (failed)']);
+    expect(shown).toEqual([]);
+    expect(store.userExceptionsQueue.length).toBe(0);
+    expect(unhandled).toEqual([]);
+  });
+
+Bdd(feature)
   .scenario('An error thrown by readState is given to the errorObserver.')
   .given('A persistor whose readState throws.')
   .and('A store with an errorObserver.')
@@ -484,6 +568,8 @@ class FailingPersistor extends Persistor<State> {
   lastPersistedStates: (State | null)[] = [];
   failPersist = false;
   failRead = false;
+  failSaveInitial = false;
+  failDelete = false;
   corrupted = false;
   wrap: ((error: any) => any) | null = null;
 
@@ -502,10 +588,12 @@ class FailingPersistor extends Persistor<State> {
   }
 
   async saveInitialState(state: State) {
+    if (this.failSaveInitial) throw new Error('save initial failed');
     this.savedState = state;
   }
 
   async deleteState() {
+    if (this.failDelete) throw new Error('delete failed');
     this.savedState = null;
   }
 

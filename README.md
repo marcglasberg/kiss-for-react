@@ -496,6 +496,37 @@ class SearchText extends Action {
 }
 ```
 
+### IgnoreOld
+
+When the same action may be dispatched again before the previous one finishes (for example,
+when the user switches tabs or filters quickly), a slow older request may finish last, and
+overwrite the newer information. To prevent that, add the `ignoreOld` property to your action
+class and set it to `true`. When the action is dispatched again, the previous ones that are
+still running become old: their results and errors are ignored, and their `abortSignal` is
+aborted. Pass it to `fetch` to cancel their requests.
+
+```tsx
+class LoadTab extends Action {
+  constructor(readonly tab: string) { super(); }
+  ignoreOld = true;
+
+  async reduce() {
+    let response = await fetch(`/api/items?tab=${this.tab}`, {signal: this.abortSignal});
+    let items = await response.json();
+    return (state: State) => state.copy({items});
+  }
+}
+```
+
+Only the newest dispatch changes the state. Until it finishes, the state keeps what it had
+before. Check `this.isOld` inside the reducer to know if a newer action was dispatched.
+
+By default, actions of the same class affect each other. Override `ignoreOldKeyParams()` to
+separate them by some fields (for example, when each item goes into its own place in a cache),
+or `computeIgnoreOldKey()` so that actions of different classes share the key. It's also useful
+together with `debounce`, when searching while the user types: if the user pauses for longer
+than the wait time and then types again, the older search is cancelled.
+
 ### Throttle
 
 To prevent an action from running too frequently, you can add a `throttle` property to your
@@ -723,7 +754,7 @@ the server revision, and the local revision and device ID sent by `sendValueToSe
 ### Clearing the features on logout
 
 The store keeps some information for these features: the fresh keys, the throttle and
-debounce locks, the polling timers, the sequential queues, the actions waiting to retry, the
+debounce locks, the `ignoreOld` keys, the polling timers, the sequential queues, the actions waiting to retry, the
 `OptimisticSync` and `OptimisticSyncWithPush` keys, and the revisions kept by
 `OptimisticSyncWithPush` and `ServerPush`.
 On logout, call
@@ -741,7 +772,7 @@ class Logout extends Action {
 ```
 
 It removes the fresh keys and throttle locks, makes waiting debounced actions finish without
-running their reducer, stops all polling, discards the actions waiting in sequential queues,
+running their reducer, forgets the `ignoreOld` keys, stops all polling, discards the actions waiting in sequential queues,
 and stops the actions that retry (with `retry` or `unlimitedRetryCheckInternet`). Actions that
 are already running still finish, and may still change the state. It's also called when the
 store is shut down with `store.setShutDown(true)`.

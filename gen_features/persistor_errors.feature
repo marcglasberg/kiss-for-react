@@ -99,6 +99,33 @@ Feature: Persistor errors
     And Its originalError is the same error.
     And The persistor wrapError is not called.
 
+  Scenario: An error thrown by saveInitialState at startup is given to the errorObserver.
+    Given There is no persisted state, so the store saves the initial state.
+    And A persistor whose saveInitialState throws.
+    And A store with an errorObserver.
+    When The store is created.
+    Then The errorObserver gets the error, with a null action.
+    And The store becomes ready.
+
+  Scenario: When reading the persisted state fails, an error thrown by deleteState is also given to the errorObserver.
+    Given A persistor whose readState throws, so the store deletes the persisted state.
+    And Its deleteState also throws.
+    And A store with an errorObserver.
+    When The store is created.
+    Then The errorObserver gets both errors, in order, with a null action.
+    And The initial-state is saved.
+
+  Scenario Outline: A save error that becomes a UserException without a dialog is not shown, and not thrown.
+    Given A persistor whose wrapError turns errors into UserExceptions without a dialog.
+    And The store has <Observer>.
+    When A save fails.
+    Then The UserException is not shown to the user.
+    And There is no unhandled promise rejection.
+    Examples: 
+      | Observer                                |
+      | no errorObserver                        |
+      | an errorObserver that returns the error |
+
   Scenario: An error thrown by readState is given to the errorObserver.
     Given A persistor whose readState throws.
     And A store with an errorObserver.

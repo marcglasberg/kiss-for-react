@@ -58,8 +58,3 @@ Feature: LogOut
     When We call logOut.
     Then logOut rejects with the error.
     And The store accepts actions again, and the persistor is not paused.
-
-  Scenario: logOut without a persistor does nothing.
-    Given A store without a persistor.
-    When We call logOut.
-    Then It returns without error.

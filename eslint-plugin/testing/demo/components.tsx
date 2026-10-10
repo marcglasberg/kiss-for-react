@@ -155,15 +155,6 @@ function SelectWholeState() {
   return <p>{state.counter}</p>;
 }
 
-function ObjectWholeState() {
-  // kiss-for-react/avoid-use-all-state
-  // (A `useObject` that selects the whole state)
-  // Fix (automatic): Will replace it with `const name = useSelect((state: State) => state.name);`,
-  // and use it.
-  const all = useObject((state: State) => state);
-  return <p>{all.name}</p>;
-}
-
 function DestructuredState() {
   // kiss-for-react/avoid-use-all-state
   // (Destructured)
@@ -219,7 +210,7 @@ function StoreStateInSelector() {
 
   // kiss-for-react/store-in-selector
   // (A selector without a parameter, so there's no fix)
-  const name = useObject(() => store.state.name);
+  const name = useSelect(() => store.state.name);
 
   return <p>{items.length} {name}</p>;
 }

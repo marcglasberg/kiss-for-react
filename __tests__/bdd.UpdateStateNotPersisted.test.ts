@@ -85,6 +85,78 @@ Bdd(feature)
     expect(persistor.saved).toBe(102);
   });
 
+Bdd(feature)
+  .scenario('A state change that should not be persisted is not saved when the paused persistor resumes.')
+  .given('A store with a persistor, and all state changes already saved.')
+  .and('The persistor is paused.')
+  .when('An UpdateStateAction with ifPersists false changes the state.')
+  .and('The persistor is resumed.')
+  .then('The new state is not saved.')
+  .and('A later change is saved normally.')
+  .run(async (_) => {
+    const persistor = new MemPersistor(50);
+    const store = new Store<number>({initialState: 0, persistor});
+    await store.ready();
+    await advance(60);
+
+    store.pausePersistor();
+    store.dispatchSync(new UpdateStateAction<number>(s => s + 100, false));
+    store.resumePersistor();
+    await advance(120);
+    expect(store.state).toBe(100);
+    expect(persistor.saved).toBe(0);
+    expect(persistor.saves).toEqual([0]);
+
+    store.dispatchSync(new Inc());
+    await advance(120);
+    expect(persistor.saved).toBe(101);
+  });
+
+Bdd(feature)
+  .scenario('A state change that should not be persisted is not saved by persistAndPausePersistor.')
+  .given('A store with a persistor, and all state changes already saved.')
+  .and('The persistor is paused.')
+  .when('An UpdateStateAction with ifPersists false changes the state.')
+  .and('persistAndPausePersistor is called.')
+  .then('The new state is not saved.')
+  .run(async (_) => {
+    const persistor = new MemPersistor(50);
+    const store = new Store<number>({initialState: 0, persistor});
+    await store.ready();
+    await advance(60);
+
+    store.pausePersistor();
+    store.dispatchSync(new UpdateStateAction<number>(s => s + 100, false));
+    await store.persistAndPausePersistor();
+    await advance(120);
+    expect(store.state).toBe(100);
+    expect(persistor.saved).toBe(0);
+    expect(persistor.saves).toEqual([0]);
+  });
+
+Bdd(feature)
+  .scenario('A state change that should not be persisted does not cancel changes made while the persistor is paused.')
+  .given('A store with a persistor, and all state changes already saved.')
+  .and('The persistor is paused.')
+  .and('A state change happened while it was paused, so it waits to be saved.')
+  .when('An UpdateStateAction with ifPersists false changes the state.')
+  .and('The persistor is resumed.')
+  .then('The current state is saved, including the earlier change.')
+  .run(async (_) => {
+    const persistor = new MemPersistor(50);
+    const store = new Store<number>({initialState: 0, persistor});
+    await store.ready();
+    await advance(60);
+
+    store.pausePersistor();
+    store.dispatchSync(new Inc()); // 1 waits for the persistor to resume.
+    store.dispatchSync(new UpdateStateAction<number>(s => s + 100, false)); // 101
+    store.resumePersistor();
+    await advance(120);
+    expect(store.state).toBe(101);
+    expect(persistor.saved).toBe(101);
+  });
+
 class Inc extends KissAction<number> {
   reduce() {
     return this.state + 1;

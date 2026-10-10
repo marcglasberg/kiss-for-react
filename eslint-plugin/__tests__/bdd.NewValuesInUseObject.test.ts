@@ -67,6 +67,58 @@ export function Items() {
   });
 
 Bdd(feature)
+  .scenario('New values inside a Map or a Set returned by the selector are warnings too.')
+  .given('A component with a useObject selector that returns {How}.')
+  .when('The code is linted.')
+  .then('There is a warning in that value.')
+  .example(val('How', 'a Map with a filtered array as a value'),
+    val('Selector', `(state: State) => new Map<string, unknown>([['name', state.name], ['done', state.items.filter((i) => i.done)]])`),
+    val('Text', 'state.items.filter((i) => i.done)'), val('Container', 'Map'))
+  .example(val('How', 'a Map with a new object as a key'),
+    val('Selector', `(state: State) => new Map([[{ id: 1 }, state.name]])`),
+    val('Text', '{ id: 1 }'), val('Container', 'Map'))
+  .example(val('How', 'a Set with a function'),
+    val('Selector', '(state: State) => new Set([state.name, () => state.name])'),
+    val('Text', '() => state.name'), val('Container', 'Set'))
+  .example(val('How', 'a Set with an array literal'),
+    val('Selector', '(state: State) => new Set([state.filter, [state.name]])'),
+    val('Text', '[state.name]'), val('Container', 'Set'))
+  .run(async (ctx) => {
+    const code = `import { useObject } from 'kiss-for-react';
+${state}
+export function Items() {
+  const data = useObject(${ctx.example.val('Selector')});
+  return <p>{data.size}</p>;
+}
+`;
+    const result = lint(rule, code);
+    expect(result.messages.map((m) => m.text)).toEqual([ctx.example.val('Text')]);
+    expect(result.messages[0].message).toContain(`inside the ${ctx.example.val('Container')} by identity`);
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('A useObject selector that returns a Map or a Set with parts of the state is fine.')
+  .given('A component with useObject selectors that return a Map and a Set, with parts of the state and primitive values.')
+  .and('A Set created from a mapped array, whose items are strings.')
+  .when('The code is linted.')
+  .then('There are no warnings.')
+  .run(async (_) => {
+    const code = `import { useObject } from 'kiss-for-react';
+${state}
+export function Items() {
+  const map = useObject((state: State) => new Map<string, unknown>([['items', state.items], ['count', state.items.length]]));
+  const set = useObject((state: State) => new Set([state.name, state.filter]));
+  const texts = useObject((state: State) => new Set(state.items.map((i) => i.text)));
+  return <p>{map.size} {set.size} {texts.size}</p>;
+}
+`;
+    const result = lint(rule, code);
+    expect(result.messages).toEqual([]);
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
   .scenario('A useObject selector that returns parts of the state, or primitive values, is fine.')
   .given('A component with useObject selectors that return parts of the state, and computed numbers, strings and booleans.')
   .and('A selector that returns a filtered array directly, which useObject compares item by item.')

@@ -18,3 +18,26 @@ Feature: UpdateStateAction that does not persist
     And A state change happened while it was running, so it waits to be saved.
     When An UpdateStateAction with ifPersists false changes the state before the save finishes.
     Then When the running save finishes, the current state is saved, including the earlier change.
+
+  Scenario: A state change that should not be persisted is not saved when the paused persistor resumes.
+    Given A store with a persistor, and all state changes already saved.
+    And The persistor is paused.
+    When An UpdateStateAction with ifPersists false changes the state.
+    And The persistor is resumed.
+    Then The new state is not saved.
+    And A later change is saved normally.
+
+  Scenario: A state change that should not be persisted is not saved by persistAndPausePersistor.
+    Given A store with a persistor, and all state changes already saved.
+    And The persistor is paused.
+    When An UpdateStateAction with ifPersists false changes the state.
+    And persistAndPausePersistor is called.
+    Then The new state is not saved.
+
+  Scenario: A state change that should not be persisted does not cancel changes made while the persistor is paused.
+    Given A store with a persistor, and all state changes already saved.
+    And The persistor is paused.
+    And A state change happened while it was paused, so it waits to be saved.
+    When An UpdateStateAction with ifPersists false changes the state.
+    And The persistor is resumed.
+    Then The current state is saved, including the earlier change.

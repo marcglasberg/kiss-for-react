@@ -1,6 +1,6 @@
 import { expect } from '@jest/globals';
 import { Bdd, Feature, FeatureFileReporter, reporter } from 'easy-bdd-tool-jest';
-import { KissAction, Store } from '../src';
+import { KissAction, Store, StoreException, TimeoutException } from '../src';
 
 reporter(new FeatureFileReporter());
 
@@ -127,4 +127,30 @@ Bdd(feature)
 
     expect(action.status.isCompletedOk).toBe(true);
     expect(action.nWhenDone).toBe(1);
+  });
+
+Bdd(feature)
+  .scenario('Inside an action, waitActionType with its own type fails right away, instead of timing out.')
+  .given('An action that is in progress.')
+  .when('The action calls waitActionType with its own type.')
+  .then('The action fails with a StoreException, and not with a TimeoutException.')
+  .and('It fails right away, since the action itself is in progress, so it could never complete.')
+  .run(async (_) => {
+    Store.log = () => {};
+    const store = new Store<St>({ initialState: { n: 0 } });
+
+    class WaitForItself extends KissAction<St> {
+      async reduce() {
+        await this.waitActionType(WaitForItself, { timeoutMillis: 300 });
+        return null;
+      }
+    }
+
+    const action = new WaitForItself();
+    const start = Date.now();
+    await expect(store.dispatchAndWait(action)).rejects.toThrow('cannot wait for its own type');
+
+    expect(action.status.originalError).toBeInstanceOf(StoreException);
+    expect(action.status.originalError).not.toBeInstanceOf(TimeoutException);
+    expect(Date.now() - start).toBeLessThan(200);
   });

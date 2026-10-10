@@ -157,7 +157,8 @@ class Serializer {
 /**
  * Returns the class of `target`, or undefined if it has no prototype.
  * Usually it's the constructor of the prototype, but when that is `Object`, it's the
- * `constructor` property of the object itself, as in Big from big.js.
+ * `constructor` property of the object itself, as in Big from big.js. That property is used
+ * only if it's a function, as a plain object may have a `constructor` key with any value.
  */
 function _getConstructor(target: any): any {
   const proto = Object.getPrototypeOf(target);
@@ -165,7 +166,11 @@ function _getConstructor(target: any): any {
     return undefined;
   }
   const constructor = proto.constructor;
-  return constructor === Object ? target.constructor : constructor;
+  if (constructor === Object) {
+    const ownConstructor = target.constructor;
+    return typeof ownConstructor === 'function' ? ownConstructor : Object;
+  }
+  return constructor;
 }
 
 function _isArrayIndex(key: string): boolean {

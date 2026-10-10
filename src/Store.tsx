@@ -9,6 +9,8 @@ import {
   OptimisticCommand,
   Poll,
   ReduxReducer,
+  UpdateStateAction,
+  _IgnoreOldEntry,
   _isSameNonReentrantKey,
   _OptimisticSyncRevision,
 } from './KissAction';
@@ -207,6 +209,7 @@ interface ConstructorParams<St> {
    * If `ini` is false, this is right after the action finishes.
    *
    * The `actionObserver` is a good place to log which actions are dispatched by your application.
+   * It should not throw errors. If it does, the error is ignored, and the action runs normally.
    * For example, the following code logs actions to the console in development or test mode.
    * and logs actions to Crashlytics in production mode:
    *
@@ -476,6 +479,20 @@ export class Store<St> {
     if (shutDown) this.clearInternalActionProps();
   }
 
+  // How many `logOut` calls are running. While a logOut is running, no actions can be
+  // dispatched, but this is kept apart from `_shutDown`, so that a store shut down by the app,
+  // before or during logOut, stays shut down after it.
+  private _logOutsRunning = 0;
+
+  // True only while `logOut` changes the store state to the initial-state. That's the only
+  // dispatch allowed while a logOut is running, or while the store is shut down.
+  private _isApplyingLogOutState = false;
+
+  private _isShutDown(): boolean {
+    if (this._isApplyingLogOutState) return false;
+    return this._shutDown || (this._logOutsRunning > 0);
+  }
+
   // How many times `clearInternalActionProps()` was called. An action dispatched before the last
   // call stops retrying. See `KissAction._clearCountAtDispatch`.
   private _clearCount = 0;
@@ -490,25 +507,52 @@ export class Store<St> {
     for (const end of enders) end();
   }
 
-  // Waits for the delay before the action retries. Throws an `AbortDispatchException` if
-  // `clearInternalActionProps()` was called (for example, by shutting down the store) after
-  // the action was dispatched, either before or during the wait, so that it stops retrying.
-  private async _waitRetryDelay(action: KissAction<St>, delay: number): Promise<void> {
-    const wasCleared = () => action._clearCountAtDispatch !== this._clearCount;
-    const abort = () => new AbortDispatchException('The internal action props were cleared, so the action stopped retrying.');
-    if (wasCleared()) throw abort();
+  // The error of an action that stopped retrying because `clearInternalActionProps()` was called.
+  private static _clearedRetryError(): AbortDispatchException {
+    return new AbortDispatchException('The internal action props were cleared, so the action stopped retrying.');
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Returns true if `clearInternalActionProps()` was called (for example, by shutting down the
+   * store) after the action was dispatched, so that the action must stop retrying.
+   */
+  _wereInternalActionPropsCleared(action: KissAction<St>): boolean {
+    return action._clearCountAtDispatch !== this._clearCount;
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Waits for the delay before the action retries. Throws an `AbortDispatchException` if
+   * `clearInternalActionProps()` was called (for example, by shutting down the store) after
+   * the action was dispatched, either before or during the wait, so that it stops retrying.
+   * Also throws it if the action uses `ignoreOld`, and became old, since the result of the
+   * retry would be ignored anyway.
+   */
+  async _waitRetryDelay(action: KissAction<St>, delay: number): Promise<void> {
+    const throwIfMustStop = () => {
+      if (this._wereInternalActionPropsCleared(action)) throw Store._clearedRetryError();
+      if (action.isOld)
+        throw new AbortDispatchException('A newer action was dispatched (ignoreOld), so the action stopped retrying.');
+    };
+    throwIfMustStop();
+
+    // An `ignoreOld` action stops waiting as soon as it becomes old.
+    const signal = (action._ignoreOldEntry !== null) ? action.abortSignal : null;
 
     await new Promise<void>(resolve => {
       const end = () => {
         clearTimeout(timer);
         this._retryWaitEnders.delete(end);
+        signal?.removeEventListener('abort', end);
         resolve();
       };
       const timer = setTimeout(end, delay);
       this._retryWaitEnders.add(end);
+      signal?.addEventListener('abort', end);
     });
 
-    if (wasCleared()) throw abort();
+    throwIfMustStop();
   }
 
   /**
@@ -531,14 +575,17 @@ export class Store<St> {
    *   don't keep retrying for the previous user. An action waiting to retry is aborted right
    *   away, and an action running an attempt is aborted if that attempt fails (if it succeeds,
    *   it changes the state as usual). They are aborted with an `AbortDispatchException`, so they
-   *   don't fail, and don't show errors. This also releases their non-reentrant keys. Note an
-   *   `OptimisticCommand` still finishes its retries, which are always limited.
+   *   don't fail, and don't show errors. This also releases their non-reentrant keys. The same
+   *   goes for an `OptimisticCommand` with `retry`, which then doesn't roll back its optimistic
+   *   value, and doesn't reload.
    * - Releases all `OptimisticSync` and `OptimisticSyncWithPush` keys, so the next dispatches
    *   send their own requests. An action whose request is in flight stops when that request
    *   finishes, without sending follow-up requests, and is aborted with an
    *   `AbortDispatchException`.
    * - Removes the revisions that `OptimisticSyncWithPush` and `ServerPush` keep for each key.
    *   The server revisions you saved in the state are kept, and still used.
+   * - Forgets the `ignoreOld` keys. The actions dispatched from now on don't make the ones
+   *   dispatched before old.
    *
    * Note:
    * - Actions that are already running keep running, and still change the state when they
@@ -565,6 +612,7 @@ export class Store<St> {
     this._stopAllPolling();
     this._discardAllSequentialQueues();
     this._removeAllOptimisticSyncKeys();
+    this._ignoreOldEntries = [];
     this._clearCount++;
     this._stopAllRetries();
   }
@@ -687,6 +735,14 @@ export class Store<St> {
   // The revisions of the `OptimisticSyncWithPush` and `ServerPush` keys, at most one per key.
   private _optimisticSyncRevisions: Array<{ key: any, revision: _OptimisticSyncRevision }> = [];
 
+  // The `ignoreOld` keys with actions running, at most one per key. Removed when their last
+  // action finishes, or by `clearInternalActionProps()`. The running actions keep a reference to
+  // their entry, so that removing it doesn't affect them.
+  private _ignoreOldEntries: Array<_IgnoreOldEntry> = [];
+
+  // Incremented for each `ignoreOld` action that starts running, to know their dispatch order.
+  private _ignoreOldOrder = 0;
+
   // The `sequential` queues, at most one per key, each with its actions in the order they will
   // run. The first action of each queue is the one running. Each waiting action is released by
   // the action that runs before it (with `false`), or by a failed action that discards the queue
@@ -701,6 +757,9 @@ export class Store<St> {
   // tell they must not continue. While a tick is running (when `pollWaitsForRun` is true) the
   // cycle has no timer, but polling is still active.
   private _pollingCycles: Array<PollingCycle> = [];
+
+  // The errors thrown by `dispatchSync` when the action is ASYNC. See `_notSyncError`.
+  private readonly _notSyncErrors = new WeakSet<StoreException>();
 
   private readonly _processPersistence: ProcessPersistence<St> | null;
   private _dispatchCount = 0;
@@ -911,7 +970,7 @@ export class Store<St> {
   dispatch(action: KissAction<St>): void {
     this._throwIfAlreadyDispatched(action);
     this._throwIfNotReady(action);
-    if (this._shutDown) {
+    if (this._isShutDown()) {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
@@ -957,7 +1016,7 @@ export class Store<St> {
   dispatchAndWait(action: KissAction<St>): Promise<ActionStatus> {
     this._throwIfAlreadyDispatched(action);
     this._throwIfNotReady(action);
-    if (this._shutDown) {
+    if (this._isShutDown()) {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return Promise.resolve(new ActionStatus({isDispatchAborted: true}));
     }
@@ -969,7 +1028,14 @@ export class Store<St> {
     if (mockedActionOrAction !== action) this._throwIfAlreadyDispatched(mockedActionOrAction);
 
     // 2) If the action wants to abort the dispatch, or is non-reentrant and already running, aborts.
-    if (this._mustAbortDispatch(mockedActionOrAction)) return Promise.resolve(new ActionStatus({isDispatchAborted: true}));
+    // If the action is misconfigured, we return a rejected promise (instead of throwing).
+    let mustAbort: boolean;
+    try {
+      mustAbort = this._mustAbortDispatch(mockedActionOrAction);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    if (mustAbort) return Promise.resolve(new ActionStatus({isDispatchAborted: true}));
 
     // 3) If the action is mocked to return another action, we dispatch the mock.
     const promise = mockedActionOrAction._createPromise();
@@ -1065,10 +1131,18 @@ export class Store<St> {
    *
    * Like `dispatch`, it throws a `StoreException` if the action was already dispatched.
    *
+   * The `StoreException` for an ASYNC action is always thrown. It's not given to the action's
+   * `wrapError` or to the `errorObserver`, so they can't swallow it or convert it (for example,
+   * into a `UserException`), and the action doesn't count as failed for `isFailed` and
+   * `exceptionFor`. The action still finishes: its `after()` runs, and its status is
+   * `isCompletedFailed`, with that `StoreException` as its error.
+   *
    * Note Kiss can only know `before()` or `reduce()` is async after calling it. So, when
    * `dispatchSync` throws because of an async action, the async method has already started,
    * and any side effects it has will still happen. Its result is ignored (it never changes the
-   * state), and its errors are only logged.
+   * state), and its errors are only logged. If the action uses `retry`, it's not retried. With
+   * `unlimitedRetryCheckInternet`, the reducer doesn't run at all, since `dispatchSync` throws
+   * while the internet is being checked.
    *
    * See also:
    * - `dispatch` which dispatches both sync and async actions.
@@ -1079,7 +1153,7 @@ export class Store<St> {
   dispatchSync(action: KissAction<St>): void {
     this._throwIfAlreadyDispatched(action);
     this._throwIfNotReady(action);
-    if (this._shutDown) {
+    if (this._isShutDown()) {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
@@ -1128,9 +1202,13 @@ export class Store<St> {
   // Note: It's up to the developer to make sure `abortDispatch`, `computeNonReentrantKey`,
   // `throttleLockBuilder`, `ignoreThrottle`, `computeFreshKey` and `ignoreFresh` don't throw
   // any errors. If they do, the error is logged and swallowed, and the dispatch is aborted.
+  //
+  // Before that, it injects the store into the action (so that the action may access the store
+  // and the state in `abortDispatch()`), which throws a `StoreException` if the action is
+  // misconfigured. This throws even if the dispatch would be aborted, so that the developer
+  // error doesn't show up only sometimes.
   private _mustAbortDispatch(action: KissAction<St>): boolean {
-    // The action may access the store and the state in `abortDispatch()`.
-    action._setStore(this);
+    action._injectStore(this);
     try {
       if (action.abortDispatch()) return true;
       // Non-reentrant, throttle and fresh can't be combined (it throws when dispatched), so
@@ -1418,7 +1496,7 @@ export class Store<St> {
   // If `mustBeSync` is true, will throw a `StoreException` if the action is ASYNC.
   private _processDispatch(action: KissAction<St>, mustBeSync: boolean) {
 
-    if (this._shutDown) {
+    if (this._isShutDown()) {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
@@ -1431,11 +1509,10 @@ export class Store<St> {
     action._changeStatus({isDispatched: true});
     action._clearCountAtDispatch = this._clearCount;
 
-    // We inject the store into the store, so that the action can access it as a property.
-    action._injectStore(this);
+    // Note the store was already injected into the action by `_mustAbortDispatch`.
 
     // The action is dispatched twice. This is the 1st: when the action starts (ini true).
-    this._actionObserver?.(action, this._dispatchCount, true);
+    this._observeAction(action, true);
 
     // If `record.isRecording`, record the INI state. That's for testing only.
     this._record(action, true, this._state, this._state, null);
@@ -1543,6 +1620,20 @@ export class Store<St> {
 
   private _processWrapsError(error: any, action: KissAction<St>) {
     //
+    // Throwing `null` or `undefined` (or rejecting with no reason) still means the action
+    // failed. We turn it into an `Error`, since a `null` error means "no error" in the action's
+    // status and in the `stateObserver`, and returning `null` from `wrapError` swallows it.
+    if (error == null) error = Store._nullThrownError(action, error);
+
+    //
+    // The errors of an old `ignoreOld` action are ignored, since a newer action was dispatched.
+    // This includes the `AbortError` thrown by `fetch` when the action's `abortSignal` is
+    // aborted. Errors that point to a bug (`StoreException`) are still thrown.
+    if (action.isOld && !(error instanceof AbortDispatchException) && !(error instanceof StoreException)) {
+      Store._logLazy(() => `Ignored the error of ${action}, since a newer action was dispatched (ignoreOld): ${error}`);
+      error = new AbortDispatchException('A newer action was dispatched (ignoreOld).');
+    }
+
     action._changeStatus({originalError: error});
 
     // Observe the state with an error here. We use the current state; no new state was applied.
@@ -1550,6 +1641,15 @@ export class Store<St> {
     this._stateObserver?.(action, this._state, this._state, error, this._dispatchCount);
 
     this._record(action, false, this._state, this._state, error);
+
+    // When `dispatchSync` finds the action is ASYNC, that's a developer error, so `dispatchSync`
+    // always throws it, like it throws when the action was already dispatched. It's not given to
+    // `wrapError` or the `errorObserver`, since these could swallow it or turn it into a
+    // `UserException`. And the action doesn't count as failed for `isFailed`/`exceptionFor`.
+    if (this._notSyncErrors.has(error)) {
+      action._changeStatus({wrappedError: error});
+      throw error;
+    }
 
     // An `AbortDispatchException` aborts the action silently. It's not processed by `wrapError`
     // or the `errorObserver`, the action doesn't count as failed, and the error is
@@ -1636,6 +1736,7 @@ export class Store<St> {
     if (action._throttleMillis !== null) this._releaseThrottleLock(action);
     if (action._freshMillis !== null) this._releaseFreshKey(action);
     if (action.sequential) this._releaseSequentialQueue(action);
+    if (action._ignoreOldEntry !== null) this._releaseIgnoreOldEntry(action);
 
     // Remove the wait state for the action in progress.
     // Note: If the state was applied, this was already removed and the UI updated.
@@ -1648,11 +1749,22 @@ export class Store<St> {
     }
 
     // The action is dispatched twice. This is the 2nd: when the action ends (ini false).
-    this._actionObserver?.(action, this._dispatchCount, false);
+    this._observeAction(action, false);
 
     // This allows us to `let status = await dispatchAndWait(new MyAction())`.
     // If the action failed with an error that was not swallowed, the promise is rejected.
     action._resolvePromise(failure);
+  }
+
+  // Calls the `actionObserver`, if any. If it throws, the error is ignored, so that it doesn't
+  // stop the action from running, or from finishing (which would leave `dispatchAndWait` pending).
+  private _observeAction(action: KissAction<St>, ini: boolean) {
+    try {
+      this._actionObserver?.(action, this._dispatchCount, ini);
+    } catch (error) {
+      Store._logLazy(() => `The actionObserver threw an error: ${error}.
+      This error will be ignored, but you should fix this, as the actionObserver should not throw errors.`);
+    }
   }
 
   // This method checks and resolves conditions related to actions in progress.
@@ -1689,25 +1801,41 @@ export class Store<St> {
   // When `dispatchSync` finds that `before` or `reduce` returned a Promise, the async work has
   // already started and can't be stopped. Its result is ignored (the state is never changed by it),
   // and its error is logged, so that it doesn't become an unhandled rejection.
+  // The retry loops check `_isDiscardedByDispatchSync`, so that they stop retrying.
   private _discardAsyncResultOfDispatchSync(action: KissAction<St>, promise: Promise<unknown>, method: string): void {
+    action._isDiscardedByDispatchSync = true;
     promise.catch((error: any) => {
       Store._logLazy(() => `The async '${method}' of ${action.constructor.name}, dispatched with dispatchSync, failed: ${error}`);
     });
+  }
+
+  // Returns the error `dispatchSync` throws when the action is ASYNC. It's thrown inside the
+  // action's run, so that the action still finishes (`after()` runs, and so on), but it's
+  // marked, so that `_processWrapsError` always throws it.
+  private _notSyncError(message: string): StoreException {
+    const error = new StoreException(message);
+    this._notSyncErrors.add(error);
+    return error;
   }
 
   private _runFromStart(action: KissAction<St>, mustBeSync: boolean): boolean {
 
     // A debounced action always waits for its debounce period, so it can't be SYNC.
     if (mustBeSync && action._debounceMillis !== null)
-      throw new StoreException(`You called dispatchSync(${action.constructor.name}), but the action uses debounce, which makes it ASYNC.`);
+      throw this._notSyncError(`You called dispatchSync(${action.constructor.name}), but the action uses debounce, which makes it ASYNC.`);
 
     // A sequential action always waits for its turn in the queue, so it can't be SYNC.
     if (action.sequential) {
       if (mustBeSync)
-        throw new StoreException(`You called dispatchSync(${action.constructor.name}), but the action is sequential, which makes it ASYNC.`);
+        throw this._notSyncError(`You called dispatchSync(${action.constructor.name}), but the action is sequential, which makes it ASYNC.`);
       this._runOnSequentialTurn(action, this._enterSequentialQueue(action));
       return true; // Went ASYNC.
     }
+
+    // Numbers the action before `before()` runs, since an ASYNC `before` may make an older
+    // action reach its reducer after a newer one. A dispatch that doesn't run the reducer
+    // doesn't make the other actions old.
+    if (action.ignoreOld && !this._pollSkipsReduce(action)) this._takeIgnoreOldEntry(action);
 
     // BEFORE
 
@@ -1719,7 +1847,7 @@ export class Store<St> {
     if (beforeResult instanceof Promise) {
       if (mustBeSync) {
         this._discardAsyncResultOfDispatchSync(action, beforeResult, 'before');
-        throw new StoreException(`You called dispatchSync(${action.constructor.name}), but the action's 'before' method returned a Promise.`);
+        throw this._notSyncError(`You called dispatchSync(${action.constructor.name}), but the action's 'before' method returned a Promise.`);
       }
       this._runAsyncBeforeOnwards(action, beforeResult).then();
       return true; // Get out of here. Went ASYNC.
@@ -1748,7 +1876,7 @@ export class Store<St> {
     else if (reduceResult instanceof Promise) {
       if (mustBeSync) {
         this._discardAsyncResultOfDispatchSync(action, reduceResult, 'reduce');
-        throw new StoreException(`You called dispatchSync(${action.constructor.name}), but the action's 'reduce' method returned a Promise.`);
+        throw this._notSyncError(`You called dispatchSync(${action.constructor.name}), but the action's 'reduce' method returned a Promise.`);
       }
       this._runAsyncReduceOnwards(action, reduceResult);
       return true; // Get out of here. Went ASYNC.
@@ -1772,6 +1900,7 @@ export class Store<St> {
   /**
    * Returns the action's own `wrapReduce`, or, when polling, debounce, retry or
    * unlimitedRetryCheckInternet is on, a wrapper that calls the action's own `wrapReduce`.
+   * With `ignoreOld`, the result is then checked by `_ignoreOldResult`.
    * Never replaces `action.wrapReduce`.
    *
    * Note: An `OptimisticCommand` handles its own retry, by retrying only `sendCommandToServer`,
@@ -1781,6 +1910,16 @@ export class Store<St> {
    * unlimitedRetryCheckInternet can't be combined with any of these.
    */
   private _getWrapReduce(action: KissAction<St>): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
+    const wrapReduce = this._getFeaturesWrapReduce(action);
+    if (action._ignoreOldEntry === null) return wrapReduce;
+    return (reduce) => {
+      const wrapped = wrapReduce(reduce);
+      return () => this._ignoreOldResult(action, wrapped());
+    };
+  }
+
+  // The `wrapReduce` of `_getWrapReduce`, without the `ignoreOld` check.
+  private _getFeaturesWrapReduce(action: KissAction<St>): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
     const userWrapReduce = action.wrapReduce.bind(action);
     if (action.poll !== undefined) return this._pollingWrapReduce(action, userWrapReduce);
     const debounceMillis = action._debounceMillis;
@@ -1794,6 +1933,73 @@ export class Store<St> {
   private static _syncRetryError(action: KissAction<any>): StoreException {
     const feature = action._isUnlimitedRetryCheckInternet ? 'unlimitedRetryCheckInternet' : 'retry';
     return new StoreException(`Action '${action}' uses ${feature}, but its reducer is SYNC. Retry needs an ASYNC reducer, that returns a Promise<(St) => St>, because a SYNC reducer does not fail in a way that retrying can fix.`);
+  }
+
+  private static _nullThrownError(action: KissAction<any>, thrown: null | undefined): Error {
+    return new Error(`Action '${action}' failed with \`${thrown}\` (it threw \`${thrown}\`, or a Promise was rejected with no reason). Throw an Error instead.`);
+  }
+
+  // Gives the `ignoreOld` action its dispatch order, and the entry of its key, creating it if
+  // no other action with that key is running. The other running actions become old, so their
+  // `abortSignal` is aborted.
+  private _takeIgnoreOldEntry(action: KissAction<St>): void {
+    const key = action.computeIgnoreOldKey();
+    let entry = this._ignoreOldEntries.find(other => _isSameNonReentrantKey(other.key, key));
+    if (entry === undefined) {
+      entry = { key, newestOrder: 0, running: new Set() };
+      this._ignoreOldEntries.push(entry);
+    }
+    action._ignoreOldOrder = ++this._ignoreOldOrder;
+    action._ignoreOldEntry = entry;
+    action._abortController ??= new AbortController();
+    entry.newestOrder = action._ignoreOldOrder;
+    for (const other of entry.running) other._abortController!.abort();
+    entry.running.add(action);
+  }
+
+  // Called when an `ignoreOld` action finishes. Removes the entry of its key, if no other
+  // action with that key is running. The action gets a copy of the entry, so that its `isOld`
+  // keeps the value it had when it finished.
+  private _releaseIgnoreOldEntry(action: KissAction<St>): void {
+    const entry = action._ignoreOldEntry!;
+    entry.running.delete(action);
+    if (entry.running.size === 0) this._ignoreOldEntries = this._ignoreOldEntries.filter(other => other !== entry);
+    action._ignoreOldEntry = { key: entry.key, newestOrder: entry.newestOrder, running: new Set() };
+  }
+
+  // True if the action uses polling, and its `poll` value means it won't run the reducer:
+  // `Poll.stop`, or `Poll.start` while polling is already active.
+  private _pollSkipsReduce(action: KissAction<St>): boolean {
+    if (action.poll === Poll.stop) return true;
+    if (action.poll !== Poll.start) return false;
+    const key = action.computePollingKey();
+    return this._pollingCycles.some(cycle => _isSameNonReentrantKey(cycle.key, key));
+  }
+
+  /**
+   * Checks the result of the reducer of an `ignoreOld` action, so that if the action is old,
+   * it's aborted instead of changing the state. The check is done right when the state is
+   * applied: now, for the state returned by a SYNC reducer, or, for the function
+   * `(state) => newState` returned by an ASYNC reducer, when the store calls it.
+   */
+  private _ignoreOldResult(action: KissAction<St>, result: ReduxReducer<St>): ReduxReducer<St> {
+    const throwIfOld = () => {
+      if (action.isOld) throw new AbortDispatchException('A newer action was dispatched (ignoreOld).');
+    };
+    const checked = (fn: (state: St) => (St | null)) => (state: St) => {
+      throwIfOld();
+      return fn(state);
+    };
+
+    if (result instanceof Promise)
+      return result.then(fn => {
+        if (typeof fn === 'function') return checked(fn);
+        throwIfOld();
+        return fn;
+      });
+
+    throwIfOld();
+    return result;
   }
 
   /**
@@ -2019,10 +2225,20 @@ export class Store<St> {
 
     const _syncRetryError = () => Store._syncRetryError(action);
 
+    const _discardedError = () => new AbortDispatchException(
+      'dispatchSync threw because the action is ASYNC, so the action stopped retrying.');
+
     // Counts the failed attempt, and waits before the next one. Throws the error instead, if
     // there are no retries left, or an `AbortDispatchException` if the internal action props
     // were cleared (for example, because the store was shut down).
     async function _waitToRetry(error: any, maxDelay: number): Promise<void> {
+      // When `dispatchSync` threw because the action is ASYNC, its result is ignored, so there's
+      // no point retrying. Note the error is `null` when there is no internet.
+      if (action._isDiscardedByDispatchSync) throw error ?? _discardedError();
+      // When `clearInternalActionProps()` was called (for example, on logout), stops retrying.
+      // This is checked before checking the retries left, so that a last attempt that fails
+      // is aborted too, instead of failing.
+      if (store._wereInternalActionPropsCleared(action)) throw Store._clearedRetryError();
       retry.attempts++;
       if (!retry.unlimitedRetries && (retry.maxRetries >= 0) && (retry.attempts > retry.maxRetries)) throw error;
 
@@ -2057,6 +2273,11 @@ export class Store<St> {
 
             Store._logLazy(() => `${attempt} ${action}${attemptNumber}.`);
           }
+
+          // With unlimitedRetryCheckInternet, `dispatchSync` throws before the reducer runs for
+          // the first time (when the internet is checked). Since its result would be ignored,
+          // the reducer doesn't run.
+          if (action._isDiscardedByDispatchSync) throw _discardedError();
 
           // A SYNC reducer can't be retried. If the reducer throws synchronously, or returns
           // without a Promise (even null, or the unchanged state), fail right away with a
@@ -2530,6 +2751,14 @@ export class Store<St> {
    * milliseconds. If the actions are not finished by then, the state will be deleted anyway.
    * The default `actionsThrottle` is 6000 milliseconds (6 seconds).
    *
+   * While logOut is running, the store doesn't accept new actions, and the persistor doesn't
+   * persist anything but the initial-state. If the app pauses the persistor (`pausePersistor`)
+   * or shuts down the store (`setShutDown`), before or during logOut, they stay that way after
+   * it. Note logOut deletes the persisted state, and persists the initial-state, even if the
+   * persistor is paused.
+   *
+   * If the store has no persistor, logOut does the same, except deleting and persisting.
+   *
    * Throws a `StoreException` if called while the persisted state is still being read at
    * startup (before `store.ready()` resolves). In this case, nothing is changed.
    */
@@ -2544,9 +2773,66 @@ export class Store<St> {
     throttle?: number,
     actionsThrottle?: number,
   }): Promise<void> {
-    return this._processPersistence?.logOut({
-      store: this, initialState, throttle, actionsThrottle
-    });
+    return this._logOut(this._processPersistence, initialState, throttle, actionsThrottle);
+  }
+
+  /**
+   * For Kiss internal use only. Does the `logOut`, using the given persistence (if any).
+   */
+  async _logOut(
+    persistence: ProcessPersistence<St> | null,
+    initialState: St,
+    throttle: number,
+    actionsThrottle: number,
+  ): Promise<void> {
+
+    // Throws if the persisted state is still being read. In this case, nothing is changed.
+    // Otherwise, the persistor doesn't start a new persistence process until logOut finishes.
+    persistence?._startLogOut();
+
+    // The store doesn't start any new actions until logOut finishes.
+    this._logOutsRunning++;
+    this.clearInternalActionProps();
+
+    try {
+      // If the state is currently being persisted, we can't delete it right now.
+      await persistence?._waitWhilePersisting();
+
+      // Wait for the throttle period to finish.
+      await new Promise<void>(resolve => setTimeout(resolve, throttle));
+
+      // Wait for all actions currently running to finish,
+      // but wait at most `actionsThrottle` milliseconds.
+      await this.waitAllActions(null, {
+        timeoutMillis: actionsThrottle,
+        completeImmediately: true
+      })
+        .catch(() => {
+        });
+
+      // Delete the old persisted state.
+      await persistence?.deleteState();
+
+      // Synchronously change the store state to the initial-state. This is done even if the
+      // app shut down the store. Since a logOut is running, this doesn't start a persistence process.
+      this._isApplyingLogOutState = true;
+      try {
+        this.dispatchSync(new UpdateStateAction(() => initialState));
+      } finally {
+        this._isApplyingLogOutState = false;
+      }
+
+      // Persist the new initial-state.
+      await persistence?._persistLogOutState(initialState);
+    }
+      //
+    finally {
+      // The store accepts new actions again, unless the app shut it down.
+      this._logOutsRunning--;
+
+      // Persistence resumes, unless the app paused the persistor.
+      persistence?._endLogOut();
+    }
   }
 
   /**

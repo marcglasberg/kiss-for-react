@@ -6,22 +6,25 @@ Feature: Lint: incompatible-action-features
     Then There is an error in {Second}, saying they can't be combined.
     And The suggestions remove one or the other, and the code compiles without the error.
     Examples: 
-      | First                       | Second        |
-      | debounce                    | retry         |
-      | throttle                    | nonReentrant  |
-      | fresh                       | nonReentrant  |
-      | fresh                       | throttle      |
-      | sequential                  | debounce      |
-      | poll                        | retry         |
-      | poll                        | debounce      |
-      | unlimitedRetryCheckInternet | retry         |
-      | unlimitedRetryCheckInternet | checkInternet |
-      | unlimitedRetryCheckInternet | nonReentrant  |
-      | unlimitedRetryCheckInternet | debounce      |
-      | unlimitedRetryCheckInternet | throttle      |
-      | unlimitedRetryCheckInternet | fresh         |
-      | unlimitedRetryCheckInternet | sequential    |
-      | unlimitedRetryCheckInternet | poll          |
+      | First                       | Second                      |
+      | debounce                    | retry                       |
+      | throttle                    | nonReentrant                |
+      | fresh                       | nonReentrant                |
+      | fresh                       | throttle                    |
+      | sequential                  | debounce                    |
+      | poll                        | retry                       |
+      | poll                        | debounce                    |
+      | unlimitedRetryCheckInternet | retry                       |
+      | unlimitedRetryCheckInternet | checkInternet               |
+      | unlimitedRetryCheckInternet | nonReentrant                |
+      | unlimitedRetryCheckInternet | debounce                    |
+      | unlimitedRetryCheckInternet | throttle                    |
+      | unlimitedRetryCheckInternet | fresh                       |
+      | unlimitedRetryCheckInternet | sequential                  |
+      | unlimitedRetryCheckInternet | poll                        |
+      | ignoreOld                   | nonReentrant                |
+      | ignoreOld                   | sequential                  |
+      | ignoreOld                   | unlimitedRetryCheckInternet |
 
   Scenario Outline: The error explains why, when it helps.
     Given An action with {First} and {Second}.
@@ -34,6 +37,7 @@ Feature: Lint: incompatible-action-features
       | unlimitedRetryCheckInternet | nonReentrant  | `unlimitedRetryCheckInternet` is already non-reentrant.                          |
       | poll                        | retry         | Add `retry` to the action returned by `createPollingAction()` instead.           |
       | sequential                  | debounce      | The debounce period would only start when the action gets its turn in the queue. |
+      | ignoreOld                   | sequential    | The actions already apply their results in the dispatch order.                   |
 
   Scenario: The rule reports exactly the combinations the store does not allow.
     Given Each pair of features, turned on in the same action.

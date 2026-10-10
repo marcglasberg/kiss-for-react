@@ -62,6 +62,16 @@ Feature: Clear internal action props
     When clearInternalActionProps is called, and then the attempt fails.
     Then The action is aborted, without retrying.
 
+  Scenario Outline: The last attempt, if running when the internal action props are cleared, is aborted if it fails.
+    Given An action with "retry = { initialDelay: 100, maxRetries: {Max retries} }", whose attempts fail after 1000 millis.
+    And It is running its last attempt.
+    When clearInternalActionProps is called, and then the attempt fails.
+    Then The action is aborted: it does not count as failed, and its dispatchAndWait resolves.
+    Examples: 
+      | Max retries |
+      | 0           |
+      | 1           |
+
   Scenario: An attempt that is running when the internal action props are cleared still changes the state if it succeeds.
     Given An action with "retry = { maxRetries: -1 }", that takes 1000 millis to succeed.
     And It is running an attempt.
@@ -75,3 +85,56 @@ Feature: Clear internal action props
     And The same action is dispatched again.
     Then The new action runs, and retries as usual until there is internet.
     And The old action does not run anymore.
+
+  Scenario: Clearing the internal action props aborts an optimistic command that is waiting to retry.
+    Given An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }".
+    And Its server call failed, and it is waiting to retry.
+    When clearInternalActionProps is called.
+    Then The command stops retrying right away, without waiting for the retry delay.
+    And It is aborted: it does not count as failed, and its dispatchAndWait resolves.
+    And It does not roll back the optimistic value, and does not reload.
+    And The server call does not run again.
+
+  Scenario: An optimistic command whose server call is running when the internal action props are cleared is not retried if it fails.
+    Given An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }".
+    And Its server call is running, and will fail after 1000 millis.
+    When clearInternalActionProps is called, and then the server call fails.
+    Then The command is aborted, without retrying.
+    And It does not roll back the optimistic value, and does not reload.
+
+  Scenario: An optimistic command whose server call is running when the internal action props are cleared still applies the server response if it succeeds.
+    Given An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }".
+    And Its server call is running, and will succeed after 1000 millis, with a response.
+    When clearInternalActionProps is called, and then the server call succeeds.
+    Then The command completes normally, and applies the server response.
+
+  Scenario Outline: An optimistic command whose last server call is running when the internal action props are cleared is aborted if it fails.
+    Given An optimistic command with "retry = { initialDelay: 1000, maxRetries: {Max retries} }".
+    And Its last server call is running, and will fail after 1000 millis.
+    When clearInternalActionProps is called, and then the server call fails.
+    Then The command is aborted: it does not count as failed.
+    And It does not roll back the optimistic value, and does not reload.
+    Examples: 
+      | Max retries |
+      | 0           |
+      | 1           |
+
+  Scenario: Shutting down the store aborts an optimistic command that is waiting to retry.
+    Given An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }".
+    And Its server call failed, and it is waiting to retry.
+    When The store is shut down.
+    Then The command is aborted right away, without retrying.
+    And It does not roll back the optimistic value.
+
+  Scenario: An optimistic command dispatched after the internal action props were cleared retries as usual.
+    Given An optimistic command with "retry = { initialDelay: 1000, maxRetries: 3 }", waiting to retry.
+    And clearInternalActionProps was called, which aborted it.
+    When The same command is dispatched again, and its server call always fails.
+    Then The new command is not aborted, since the old one released its key.
+    And It retries 3 times, and then fails, rolling back the optimistic value.
+
+  Scenario: An action dispatched after the internal action props were cleared still fails normally on its last attempt.
+    Given clearInternalActionProps was called.
+    And Then, an action with "retry = { initialDelay: 100, maxRetries: 1 }", whose attempts always fail, is dispatched.
+    When Its last attempt fails.
+    Then The action fails, and is not aborted.

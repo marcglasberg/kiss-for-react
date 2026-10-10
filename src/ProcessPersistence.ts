@@ -22,6 +22,8 @@ export class ProcessPersistence<St> {
   private _resolveReady!: () => void;
   // Called when the persistence process currently running finishes. See `_waitForPersisting`.
   private _persistingWaiters: (() => void)[] = [];
+  // How many `logOut` calls are running. See `_startLogOut`.
+  private _logOutsRunning = 0;
 
   /**
    * Called with the persistence errors: the errors thrown by `Persistor.persistDifference`
@@ -107,6 +109,10 @@ export class ProcessPersistence<St> {
         this.isApplyingReadState = false;
       }
       await promise;
+
+      // The state just read is what's saved, even if the persistor is paused. Otherwise, the
+      // next save would diff against the initial-state, which was never saved.
+      this.lastPersistedState = stateReadFromPersistor;
     }
   }
 
@@ -204,6 +210,8 @@ export class ProcessPersistence<St> {
    * - Wait for all actions currently running to finish, but wait at most `actionsThrottle`
    * milliseconds. If the actions are not finished by then, the state will be deleted anyway.
    * The default `actionsThrottle` is 6000 milliseconds (6 seconds).
+   *
+   * Same as `store.logOut`. See it for more details.
    */
   async logOut({
                  store,
@@ -216,7 +224,16 @@ export class ProcessPersistence<St> {
     throttle?: number,
     actionsThrottle?: number,
   }): Promise<void> {
+    return store._logOut(this, initialState, throttle, actionsThrottle);
+  }
 
+  /**
+   * For Kiss internal use only. Called by the store when `logOut` starts.
+   * While a logOut is running, the persistor doesn't start a new persistence process
+   * (except to persist the initial-state). This is kept apart from `pause`/`resume`, so that
+   * a persistor paused by the app, before or during logOut, stays paused after it.
+   */
+  _startLogOut(): void {
     // Logging out while the persisted state is still being read is a developer error:
     // the read would finish afterwards and bring back the old user's state.
     if (!this.isReady)
@@ -224,61 +241,44 @@ export class ProcessPersistence<St> {
         'Called logOut() while the persisted state is still being read. ' +
         'Wait for store.ready() before calling logOut().');
 
-    // Pauses the persistor, so it doesn't start a new persistence process.
-    this.pause();
-
-    // Cancel the persistence timer.
+    this._logOutsRunning++;
     this._cancelTimer();
+  }
 
-    // Set the store to shut down, so it doesn't start any new actions.
-    store.setShutDown(true);
+  /**
+   * For Kiss internal use only. Called by the store during `logOut`.
+   * If the state is currently being persisted, we can't delete it right now. Wait until the
+   * current persistence finishes. Since a logOut is running, no new persistence process will
+   * start after that.
+   */
+  async _waitWhilePersisting(): Promise<void> {
+    while (this.isPersisting) await this._waitForPersisting();
+  }
 
-    try {
-      // If the state is currently being persisted, we can't delete it right now.
-      // Wait until the current persistence finishes. Since the persistor is
-      // paused, no new persistence process will start after that.
-      while (this.isPersisting) await this._waitForPersisting();
+  /**
+   * For Kiss internal use only. Called by the store during `logOut`, to persist the initial-state.
+   * Note this is done even if the persistor is paused.
+   */
+  _persistLogOutState(initialState: St): Promise<void> {
+    return this._persist(new Date(), initialState);
+  }
 
-      // Wait for the throttle period to finish.
-      await new Promise<void>(resolve => setTimeout(resolve, throttle));
-
-      // Wait for all actions currently running to finish,
-      // but wait at most `actionsThrottle` milliseconds.
-      await store.waitAllActions(null, {
-        timeoutMillis: actionsThrottle,
-        completeImmediately: true
-      })
-        .catch(() => {
-        });
-
-      // Delete the old persisted state.
-      await this.deleteState();
-
-      // Synchronously change the store state to the initial-state.
-      // The store must not be shut down, or `dispatchSync` would ignore the action.
-      // The persistor is paused, so this doesn't start a persistence process.
-      store.setShutDown(false);
-      store.dispatchSync(new UpdateStateAction(() => initialState));
-      store.setShutDown(true);
-
-      // Persist the new initial-state.
-      await this._persist(new Date(), initialState);
-    }
-      //
-    finally {
-      // Restart the store accepting new actions.
-      store.setShutDown(false);
-
-      // Resume persisting. If the state changed after the initial-state
-      // was persisted, this persists the new state.
-      this.resume();
-    }
+  /**
+   * For Kiss internal use only. Called by the store when `logOut` finishes (even if it failed).
+   * If no other logOut is running, and the persistor is not paused, persistence resumes: if the
+   * state changed after the initial-state was persisted, this persists the new state.
+   */
+  _endLogOut(): void {
+    this._logOutsRunning--;
+    if (this._logOutsRunning === 0 && !this.isPaused && this.isInit)
+      this.process(null, this.newestState as St);
   }
 
   /**
    * 1) If we're still persisting the last time, don't persist no matter what.
    * 2) If action is of type `UpdateStateAction` with `ifPersists` false,
-   *    don't persist, but consider the state as persisted.
+   *    don't persist, but consider the state as persisted (if no earlier change is waiting to
+   *    be saved). This is done even while the persistor is paused.
    * 3) If throttle period is done (or if action is PersistAction), persist.
    * 4) If throttle period is NOT done, create a timer to persist as soon as it finishes.
    *
@@ -287,19 +287,30 @@ export class ProcessPersistence<St> {
    *
    */
   process(action: KissAction<St> | null, newState: St): boolean {
+    // True if an earlier state change was not saved yet. For example, because it's waiting for
+    // the throttle, for a running save to finish, or for the paused persistor to resume.
+    const hasUnsavedChange = this.isInit && (this.newestState !== this.lastPersistedState);
+
     this.isInit = true;
     this.newestState = newState;
 
-    if (this.isPaused || this.lastPersistedState === newState) return false;
+    if (this.lastPersistedState === newState) return false;
 
+    // This is checked even while the persistor is paused. Otherwise, when it resumes,
+    // it would see a difference, and save the state that should not be persisted.
     if ((action instanceof UpdateStateAction) && (!action.ifPersists)) {
       // Only consider this state as persisted if no earlier change is waiting to be saved.
       // Otherwise, those earlier changes would be lost. In that case, the pending save will
       // save the newest state, which includes this one.
-      if (!this.timer && !this.isPersisting && !this.isANewStateAvailable)
+      if (!hasUnsavedChange && !this.timer && !this.isPersisting && !this.isANewStateAvailable)
         this.lastPersistedState = this.newestState;
       return false;
     }
+
+    if (this.isPaused) return false;
+
+    // While a logOut is running, don't persist. When it finishes, it persists what's needed.
+    if (this._logOutsRunning > 0) return false;
 
     // While the initial state is being read/saved, don't persist. It will be persisted when it finishes.
     if (!this.isReady) return false;
