@@ -13,11 +13,12 @@ Feature: AbortDispatchException
     Then No error is thrown.
     And The action status says the dispatch was aborted.
 
-  Scenario: An AbortDispatchException is not processed as an error.
-    Given A store with an errorObserver.
-    And An action with a wrapError, that throws an AbortDispatchException.
+  Scenario: An AbortDispatchException thrown by the action goes through wrapError and the errorObserver, and then aborts the action.
+    Given A store with an errorObserver that returns the error it gets.
+    And An action with a wrapError that returns the error it gets, and that throws an AbortDispatchException.
     When The action is dispatched.
-    Then The wrapError and the errorObserver are not called.
+    Then The wrapError and then the errorObserver get the AbortDispatchException.
+    And The action is aborted silently.
     And The action does not count as failed, and no error is shown to the user.
 
   Scenario: An action with retry is not retried when it throws an AbortDispatchException.

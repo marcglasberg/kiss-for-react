@@ -1,6 +1,7 @@
 /* eslint-disable kiss-for-react/async-after */
 /* eslint-disable kiss-for-react/after-throws */
 /* eslint-disable kiss-for-react/missing-super-in-override */
+/* eslint-disable kiss-for-react/lifecycle-method-call */
 /* eslint-disable kiss-for-react/retry-requires-async-reduce */
 /* eslint-disable kiss-for-react/retry-without-non-reentrant */
 /* eslint-disable kiss-for-react/incompatible-action-features */
@@ -300,6 +301,21 @@ class BeforeReadsCheckInternetOk extends Action {
   async reduce() {
     const name = await fetchName();
     return (state: State) => state.copy({ name });
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// lifecycle-method-call
+
+function loadUserReducer() {
+  // kiss-for-react/lifecycle-method-call
+  // (Kiss calls `reduce` when the action is dispatched, so dispatch the action instead)
+  return new LoadUser().reduce();
+}
+
+class LoadAdmin extends LoadUser {
+  async reduce() {
+    return super.reduce(); // OK: calls `super`, inside the action itself.
   }
 }
 

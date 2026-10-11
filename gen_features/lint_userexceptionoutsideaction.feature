@@ -75,9 +75,9 @@ class Check extends KissAction<State> {
     if (this.state.count > 10) throw new UserException('Too many');
     return this.state.copy(this.state.count + 1);
   }
-  wrapError(error: any) { throw new UserException('Failed').withHardCause(error); }
+  wrapError(error: any): never { throw new UserException('Failed').withHardCause(error); }
 }
-               |
+        |
       | in plain helper functions, which may be called from actions     | 
 function parseCount(text: string) {
   const count = Number(text);

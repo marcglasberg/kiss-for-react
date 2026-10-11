@@ -144,12 +144,12 @@ export class ClassPersistor<St> extends Persistor<St> {
   }
 
   /**
-   * Read the saved state from the persistence. Should return null if the state is not yet
-   * persisted. This method should be called only once, when the app starts, before the store
-   * is created. The state it returns may become the store's initial-state. If some error
-   * occurs while loading the info, we have to deal with it by fixing the problem. In the worse
-   * case, if we think the state is corrupted and cannot be fixed, one alternative is deleting
-   * all persisted files and returning null.
+   * Read the saved state from the persistence. Returns null if the state is not yet persisted.
+   * Don't call it yourself: the store calls it once, when it's created, and if there is a
+   * saved state, it replaces the store's initial-state. If the saved state can't be read
+   * (for example, it's corrupted, or it has a class that is not in `classesToSerialize`),
+   * this throws. The store then logs the error, gives it to the `errorObserver`, deletes the
+   * saved state, and saves the initial-state instead. See `Persistor.readState`.
    */
   async readState(): Promise<St | null> {
 

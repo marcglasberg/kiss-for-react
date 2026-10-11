@@ -15,7 +15,7 @@ import {
   _OptimisticSyncRevision,
 } from './KissAction';
 import { ProcessPersistence } from './ProcessPersistence';
-import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
+import { AbortDispatchException, isKissAbort, kissAbort, StoreException, TimeoutException } from './StoreException';
 import { capTimeoutMillis, MAX_TIMEOUT_MILLIS } from "./utils";
 
 // An active polling cycle of the given polling key. The `timer` is the one that dispatches the
@@ -148,6 +148,9 @@ interface ConstructorParams<St> {
    *
    * Then, for the errors thrown by actions:
    * - A `UserException` is shown to the user (in the `showUserException` UI), and is not thrown.
+   * - An `AbortDispatchException` aborts the action silently (see `AbortDispatchException`).
+   *   Note the ones Kiss itself uses to abort actions (for example, for `ignoreOld` or
+   *   `sequential`) are not given to the `errorObserver`.
    * - Any other error is thrown by `dispatch` (or rejects `dispatchAndWait`).
    *
    * And for the errors of the `Persistor` (thrown by `persistDifference` after the persistor's
@@ -248,6 +251,9 @@ interface ConstructorParams<St> {
    *
    * - dispatchCount = The sequential number of the dispatch.
    *
+   * The `stateObserver` should not throw errors. If it does, the error is ignored, and the
+   * action runs normally.
+   *
    * <br>
    *
    * The state-observer is a good place to add an interface to the Redux DevTools.
@@ -318,6 +324,10 @@ class RefStore<St, T> {
  * You can create a store with `const store = createStore()` or `const store = new Store()`.
  */
 export class Store<St> {
+
+  // Note: The lifecycle methods of the actions (like `before`, `reduce` and `after`) are
+  // protected, so that only the store calls them, when the action is dispatched. The store
+  // calls them as `action['before']()`, which TypeScript allows for protected members.
 
   public _refStateHooks: Set<React.RefObject<RefState<St, any> | undefined>> = new Set();
   public _refStoreHooks: Set<React.RefObject<RefStore<St, any> | undefined>> = new Set();
@@ -484,8 +494,11 @@ export class Store<St> {
   // before or during logOut, stays shut down after it.
   private _logOutsRunning = 0;
 
-  // True only while `logOut` changes the store state to the initial-state. That's the only
-  // dispatch allowed while a logOut is running, or while the store is shut down.
+  // True only while `logOut` dispatches the action that changes the store state to the
+  // initial-state. That's the only dispatch allowed while a logOut is running, or while the
+  // store is shut down. It's set back to false as soon as that action starts (see
+  // `_processDispatch`), so that the actions dispatched while it runs (by the `stateObserver`,
+  // the `actionObserver`, or `dispatchWhen`) are not accepted.
   private _isApplyingLogOutState = false;
 
   private _isShutDown(): boolean {
@@ -496,6 +509,37 @@ export class Store<St> {
   // How many times `clearInternalActionProps()` was called. An action dispatched before the last
   // call stops retrying. See `KissAction._clearCountAtDispatch`.
   private _clearCount = 0;
+
+  // How many times `logOut()` was called. The result of an action dispatched before the last call
+  // is discarded, and so are the actions it dispatches. See `KissAction._logOutCountAtDispatch`.
+  private _logOutCount = 0;
+
+  // True if a `logOut()` was called after the action was dispatched.
+  private _wasDispatchedBeforeLogOut(action: KissAction<St>): boolean {
+    return action._logOutCountAtDispatch !== this._logOutCount;
+  }
+
+  // The error of an action dispatched before a `logOut()`, when it finishes.
+  private static _logOutDiscardError(): AbortDispatchException {
+    return kissAbort('The action was dispatched before logOut, so its result was discarded.');
+  }
+
+  // Called when the reducer of the action finishes. If a `logOut()` was called after the action
+  // was dispatched, throws, so that the action is aborted, instead of changing the state of the
+  // next user.
+  private _throwIfDispatchedBeforeLogOut(action: KissAction<St>): void {
+    if (this._wasDispatchedBeforeLogOut(action)) throw Store._logOutDiscardError();
+  }
+
+  // Returns true (and logs it) if the action is being dispatched, with `this.dispatch` and
+  // similar, by an action that was dispatched before a `logOut()`. In this case the store
+  // doesn't accept it, since it belongs to the previous user.
+  private _isDispatchedByActionBeforeLogOut(action: KissAction<St>): boolean {
+    const parentCount = action._parentLogOutCount;
+    if (parentCount === null || parentCount === this._logOutCount) return false;
+    Store._logLazy(() => `Can't dispatch action ${action} because it was dispatched by an action that was dispatched before logOut.`);
+    return true;
+  }
 
   // The functions that end the waits of the actions waiting to retry. See `_waitRetryDelay`.
   private _retryWaitEnders = new Set<() => void>();
@@ -509,7 +553,7 @@ export class Store<St> {
 
   // The error of an action that stopped retrying because `clearInternalActionProps()` was called.
   private static _clearedRetryError(): AbortDispatchException {
-    return new AbortDispatchException('The internal action props were cleared, so the action stopped retrying.');
+    return kissAbort('The internal action props were cleared, so the action stopped retrying.');
   }
 
   /**
@@ -533,7 +577,7 @@ export class Store<St> {
     const throwIfMustStop = () => {
       if (this._wereInternalActionPropsCleared(action)) throw Store._clearedRetryError();
       if (action.isOld)
-        throw new AbortDispatchException('A newer action was dispatched (ignoreOld), so the action stopped retrying.');
+        throw kissAbort('A newer action was dispatched (ignoreOld), so the action stopped retrying.');
     };
     throwIfMustStop();
 
@@ -590,7 +634,8 @@ export class Store<St> {
    * Note:
    * - Actions that are already running keep running, and still change the state when they
    *   finish. For example, an action that started loading the data of the previous user before
-   *   the logout can still put that data into the state after the logout.
+   *   the logout can still put that data into the state after the logout. To avoid that, use
+   *   `logOut()`, which also discards the result of the actions dispatched before it.
    * - It doesn't affect `nonReentrant` actions or `OptimisticCommand`s, since their keys belong to
    *   the actions that are running, and are released when those actions finish.
    *
@@ -719,6 +764,21 @@ export class Store<St> {
    * current state change, to be dispatched when `_registerState` finishes.
    */
   private _dispatchWhenQueue: KissAction<St>[] = [];
+
+  /**
+   * Helps implement the `dispatchWhen` method. The functions that cancel the `dispatchWhen`s
+   * that are still waiting for their condition. See `_cancelAllDispatchWhen`.
+   */
+  private _dispatchWhenCancels = new Set<() => void>();
+
+  // Cancels all `dispatchWhen`s that are still waiting for their condition, or queued to be
+  // dispatched. Their actions are not dispatched, and their `onTimeout` is not called.
+  private _cancelAllDispatchWhen(): void {
+    const cancels = [...this._dispatchWhenCancels];
+    this._dispatchWhenCancels.clear();
+    for (const cancel of cancels) cancel();
+    this._dispatchWhenQueue = [];
+  }
 
   /**
    * Helps implement the `waitActionCondition` method.
@@ -989,6 +1049,7 @@ export class Store<St> {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
+    if (this._isDispatchedByActionBeforeLogOut(action)) return;
 
     const mockedActionOrAction = this._mockActionOrNot(action);
 
@@ -1035,6 +1096,8 @@ export class Store<St> {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return Promise.resolve(new ActionStatus({isDispatchAborted: true}));
     }
+    if (this._isDispatchedByActionBeforeLogOut(action))
+      return Promise.resolve(new ActionStatus({isDispatchAborted: true}));
 
     const mockedActionOrAction = this._mockActionOrNot(action);
 
@@ -1184,6 +1247,7 @@ export class Store<St> {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
+    if (this._isDispatchedByActionBeforeLogOut(action)) return;
 
     const mockedActionOrAction = this._mockActionOrNot(action);
 
@@ -1236,8 +1300,10 @@ export class Store<St> {
   // error doesn't show up only sometimes.
   private _mustAbortDispatch(action: KissAction<St>): boolean {
     action._injectStore(this);
+    // Set before `abortDispatch()` runs, since it may already dispatch other actions.
+    action._logOutCountAtDispatch = this._logOutCount;
     try {
-      if (action.abortDispatch()) return true;
+      if (action['abortDispatch']()) return true;
       // Non-reentrant, throttle and fresh can't be combined (it throws when dispatched), so
       // an action only takes one of these keys.
       if (Store._isNonReentrant(action)) return this._isNonReentrantKeyRunning(action);
@@ -1261,7 +1327,7 @@ export class Store<St> {
   // in progress. Saves the key in the action, so that later dispatches can compare against it.
   // The key is released when the action finishes, after its `after()` method runs.
   private _isNonReentrantKeyRunning(action: KissAction<St>): boolean {
-    const key = action.computeNonReentrantKey();
+    const key = action['computeNonReentrantKey']();
     action._nonReentrantKey = key;
     for (const other of this._nonReentrantActionsRunning) {
       if (_isSameNonReentrantKey(other._nonReentrantKey, key))
@@ -1276,7 +1342,7 @@ export class Store<St> {
   private _isThrottled(action: KissAction<St>, throttleMillis: number): boolean {
     const now = Date.now();
     this._removeExpiredThrottleLocks(now);
-    const lock = action.throttleLockBuilder();
+    const lock = action['throttleLockBuilder']();
     const index = this._throttleLocks.findIndex(entry => _isSameNonReentrantKey(entry.lock, lock));
     if (index !== -1) {
       if (!action.ignoreThrottle) return true;
@@ -1320,7 +1386,7 @@ export class Store<St> {
   private _isFresh(action: KissAction<St>, freshMillis: number): boolean {
     const now = Date.now();
     this._removeExpiredFreshKeys(now);
-    const key = action.computeFreshKey();
+    const key = action['computeFreshKey']();
     const index = this._freshKeys.findIndex(entry => _isSameNonReentrantKey(entry.key, key));
     if (index !== -1) {
       if (!action.ignoreFresh) return true;
@@ -1418,7 +1484,7 @@ export class Store<St> {
   // that resolves with `false` when it's the action's turn to run, or with `true` if the action
   // is discarded before that.
   private _enterSequentialQueue(action: KissAction<St>): Promise<boolean> {
-    const key = action.sequentialKeyParams();
+    const key = action['sequentialKeyParams']();
     let queue = this._sequentialQueues.find(entry => _isSameNonReentrantKey(entry.key, key));
     if (queue === undefined) {
       queue = { key, entries: [] };
@@ -1444,8 +1510,8 @@ export class Store<St> {
       action._isWaitingInSequentialQueue = false;
       action._wasDiscardedFromSequentialQueue = discarded;
       const beforeResult = (async () => {
-        if (discarded) throw new AbortDispatchException('Discarded from the sequential queue.');
-        return action.before();
+        if (discarded) throw kissAbort('Discarded from the sequential queue.');
+        return action['before']();
       })();
       this._runAsyncBeforeOnwards(action, beforeResult).then();
     });
@@ -1465,7 +1531,7 @@ export class Store<St> {
     const error = action.status.originalError;
     if (error !== null) {
       try {
-        discard = action.discardQueueOnError(error);
+        discard = action['discardQueueOnError'](error);
       } catch (thrownError) {
         Store._logLazy(() => `The discardQueueOnError() method of the action ${action} threw an error: ${thrownError}.`);
       }
@@ -1527,6 +1593,9 @@ export class Store<St> {
       Store._logLazy(() => `Can't dispatch action ${action} because the store is shut down.`);
       return;
     }
+
+    // If this is the action of `logOut` that applies the initial-state, it's the only one allowed.
+    this._isApplyingLogOutState = false;
 
     this._throwIfAlreadyDispatched(action);
 
@@ -1656,17 +1725,25 @@ export class Store<St> {
     //
     // The errors of an old `ignoreOld` action are ignored, since a newer action was dispatched.
     // This includes the `AbortError` thrown by `fetch` when the action's `abortSignal` is
-    // aborted. Errors that point to a bug (`StoreException`) are still thrown.
-    if (action.isOld && !(error instanceof AbortDispatchException) && !(error instanceof StoreException)) {
+    // aborted, and an `AbortDispatchException` thrown by the action. Errors that point to a bug
+    // (`StoreException`) are still thrown.
+    if (action.isOld && !isKissAbort(error) && !(error instanceof StoreException)) {
       Store._logLazy(() => `Ignored the error of ${action}, since a newer action was dispatched (ignoreOld): ${error}`);
-      error = new AbortDispatchException('A newer action was dispatched (ignoreOld).');
+      error = kissAbort('A newer action was dispatched (ignoreOld).');
+    }
+
+    // The errors of an action dispatched before a `logOut()` are ignored, since they belong to
+    // the previous user. Errors that point to a bug (`StoreException`) are still thrown.
+    if (this._wasDispatchedBeforeLogOut(action) && !isKissAbort(error) && !(error instanceof StoreException)) {
+      Store._logLazy(() => `Ignored the error of ${action}, since it was dispatched before logOut: ${error}`);
+      error = Store._logOutDiscardError();
     }
 
     action._changeStatus({originalError: error});
 
     // Observe the state with an error here. We use the current state; no new state was applied.
     // This is before the action's `after()` and `wrapError()` and the `errorObserver`.
-    this._stateObserver?.(action, this._state, this._state, error, this._dispatchCount);
+    this._observeState(action, this._state, this._state, error);
 
     this._record(action, false, this._state, this._state, error);
 
@@ -1679,11 +1756,12 @@ export class Store<St> {
       throw error;
     }
 
-    // An `AbortDispatchException` aborts the action silently. It's not processed by `wrapError`
-    // or the `errorObserver`, the action doesn't count as failed, and the error is
-    // swallowed.
-    if (error instanceof AbortDispatchException) {
-      action._changeStatus({isDispatchAborted: true});
+    // An `AbortDispatchException` created by Kiss itself (for example, for an `ignoreOld` action
+    // that became old, or a `sequential` action discarded from its queue) aborts the action
+    // silently. It's not processed by `wrapError` or the `errorObserver`, since it didn't come
+    // from the user's code, and they could turn it into an error. See `_abortSilently`.
+    if (isKissAbort(error)) {
+      this._abortSilently(action);
       return;
     }
 
@@ -1692,10 +1770,15 @@ export class Store<St> {
     // action. It's recommended RETURNING the new error, but if `wrapError` throws an error,
     // that will be used too.
     try {
-      error = action.wrapError(error);
+      error = action['wrapError'](error);
     } catch (thrownError) {
       error = thrownError;
     }
+
+    // Returning `undefined` (or nothing) swallows the error, just like returning `null`.
+    // The type of `wrapError` doesn't allow it, but it can still happen, for example in
+    // JavaScript, or if the `wrapError` override is typed `any`.
+    if (error === undefined) error = null;
 
     // Any error may optionally be processed by the `errorObserver` passed to the Store
     // constructor. It may log the error, change it, or swallow it by returning `null`. It's
@@ -1707,6 +1790,13 @@ export class Store<St> {
     // To completely disable the error, `wrapError` or `errorObserver` may return `null`.
     // But if we got an error, we deal with it here.
     if (error !== null) {
+
+      // An `AbortDispatchException` thrown by the action (that `wrapError` and the
+      // `errorObserver` didn't change), or returned by them, aborts the action silently.
+      if (error instanceof AbortDispatchException) {
+        this._abortSilently(action);
+        return;
+      }
 
       action._changeStatus({wrappedError: error});
 
@@ -1724,6 +1814,14 @@ export class Store<St> {
       // Throws all other errors. This means the `dispatch()` method will throw this error.
       else throw error;
     }
+  }
+
+  /**
+   * Aborts the action silently, because of an `AbortDispatchException`: the action doesn't
+   * count as failed, nothing is thrown, and its status has no `wrappedError`.
+   */
+  private _abortSilently(action: KissAction<St>): void {
+    action._changeStatus({isDispatchAborted: true});
   }
 
   /**
@@ -1751,7 +1849,7 @@ export class Store<St> {
     try {
       // The `after()` method should be sync, but TypeScript lets it be overridden as `async`.
       // In that case, we catch its rejection, so that it doesn't become an unhandled rejection.
-      const result: any = action.after();
+      const result: any = action['after']();
       if (result && typeof result.then === 'function') {
         result.then(undefined, logAfterError);
       }
@@ -1796,6 +1894,18 @@ export class Store<St> {
     } catch (error) {
       Store._logLazy(() => `The actionObserver threw an error: ${error}.
       This error will be ignored, but you should fix this, as the actionObserver should not throw errors.`);
+    }
+  }
+
+  // Calls the `stateObserver`, if any. If it throws, the error is ignored. Otherwise, it would
+  // leave the store inconsistent: the state is already applied, but the action would fail, and
+  // the state would not be persisted, nor checked by the wait-conditions and `dispatchWhen`.
+  private _observeState(action: KissAction<St>, prevState: St, newState: St, error: any) {
+    try {
+      this._stateObserver?.(action, prevState, newState, error, this._dispatchCount);
+    } catch (observerError) {
+      Store._logLazy(() => `The stateObserver threw an error: ${observerError}.
+      This error will be ignored, but you should fix this, as the stateObserver should not throw errors.`);
     }
   }
 
@@ -1873,7 +1983,7 @@ export class Store<St> {
 
     // 1) Runs the `before` method.
     // It may be sync or async, but it doesn't return anything.
-    const beforeResult: void | Promise<void> = action.before();
+    const beforeResult: void | Promise<void> = action['before']();
 
     // 2) If it's async, wait for the `before` method to finish.
     if (beforeResult instanceof Promise) {
@@ -1895,11 +2005,12 @@ export class Store<St> {
     // - Runs the SYNC `reduce` method; OR
     // - Runs the initial sync part of the ASYNC `reduce` method.
     const reduceResult: ReduxReducer<St> =
-      wrapReduce(action.reduce.bind(action))();
+      wrapReduce(action['reduce'].bind(action))();
 
     // 4) If the reducer returned null, or if it returned the unaltered state, we simply do nothing.
     if (reduceResult == null || reduceResult === this.state) {
       action._changeStatus({hasFinishedMethodReduce: true});
+      this._throwIfDispatchedBeforeLogOut(action);
       this._registerUnchangedState(action);
       return false; // Kept SYNC.
     }
@@ -1917,8 +2028,9 @@ export class Store<St> {
     // 6) If the reducer is SYNC, we already have the new state, and we simply must apply it.
     else {
       action._changeStatus({hasFinishedMethodReduce: true});
+      this._throwIfDispatchedBeforeLogOut(action);
 
-      if (action.abortReduce(reduceResult)) {
+      if (action['abortReduce'](reduceResult)) {
         action._changeStatus({hasFinishedMethodReduce: true});
         this._registerUnchangedState(action);
         return false; // Kept SYNC.
@@ -1952,7 +2064,7 @@ export class Store<St> {
 
   // The `wrapReduce` of `_getWrapReduce`, without the `ignoreOld` check.
   private _getFeaturesWrapReduce(action: KissAction<St>): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
-    const userWrapReduce = action.wrapReduce.bind(action);
+    const userWrapReduce = action['wrapReduce'].bind(action);
     if (action.poll !== undefined) return this._pollingWrapReduce(action, userWrapReduce);
     const debounceMillis = action._debounceMillis;
     if (debounceMillis !== null) return this._debounceWrapReduce(action, userWrapReduce, debounceMillis);
@@ -1975,7 +2087,7 @@ export class Store<St> {
   // no other action with that key is running. The other running actions become old, so their
   // `abortSignal` is aborted.
   private _takeIgnoreOldEntry(action: KissAction<St>): void {
-    const key = action.computeIgnoreOldKey();
+    const key = action['computeIgnoreOldKey']();
     let entry = this._ignoreOldEntries.find(other => _isSameNonReentrantKey(other.key, key));
     if (entry === undefined) {
       entry = { key, newestOrder: 0, running: new Set() };
@@ -2004,7 +2116,7 @@ export class Store<St> {
   private _pollSkipsReduce(action: KissAction<St>): boolean {
     if (action.poll === Poll.stop) return true;
     if (action.poll !== Poll.start) return false;
-    const key = action.computePollingKey();
+    const key = action['computePollingKey']();
     return this._pollingCycles.some(cycle => _isSameNonReentrantKey(cycle.key, key));
   }
 
@@ -2016,7 +2128,7 @@ export class Store<St> {
    */
   private _ignoreOldResult(action: KissAction<St>, result: ReduxReducer<St>): ReduxReducer<St> {
     const throwIfOld = () => {
-      if (action.isOld) throw new AbortDispatchException('A newer action was dispatched (ignoreOld).');
+      if (action.isOld) throw kissAbort('A newer action was dispatched (ignoreOld).');
     };
     const checked = (fn: (state: St) => (St | null)) => (state: St) => {
       throwIfOld();
@@ -2052,7 +2164,7 @@ export class Store<St> {
     function _wrapReduceDebounce(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
 
       async function _wrapReduceDebounceAsync(): AsyncReducer<St> {
-        const isLast = await store._waitDebounce(action.debounceLockBuilder(), debounceMillis);
+        const isLast = await store._waitDebounce(action['debounceLockBuilder'](), debounceMillis);
         if (!isLast) return null;
 
         const newState = userWrapReduce(reduce)();
@@ -2121,7 +2233,14 @@ export class Store<St> {
     function _wrapReducePolling(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
 
       function _reducePolling(): ReduxReducer<St> {
-        const key = action.computePollingKey();
+        // If all polling was stopped (by `clearInternalActionProps()`, `setShutDown(true)` or
+        // `logOut()`) after the action was dispatched, for example while it was in an async
+        // `before()`, it must not start polling again. It's aborted, like retry is.
+        if ((action.poll === Poll.start || action.poll === Poll.runNowAndRestart)
+          && store._wereInternalActionPropsCleared(action))
+          throw kissAbort('The internal action props were cleared, so the action did not start polling.');
+
+        const key = action['computePollingKey']();
         const cycle = store._pollingCycles.find(entry => _isSameNonReentrantKey(entry.key, key));
 
         switch (action.poll) {
@@ -2207,7 +2326,7 @@ export class Store<St> {
       const waitsForRun = action.pollWaitsForRun !== false;
 
       const tick = (async () => {
-        const tickAction = action.createPollingAction();
+        const tickAction = action['createPollingAction']();
         if (waitsForRun) await this.dispatchAndWait(tickAction);
         else this.dispatch(tickAction);
       })();
@@ -2257,7 +2376,7 @@ export class Store<St> {
 
     const _syncRetryError = () => Store._syncRetryError(action);
 
-    const _discardedError = () => new AbortDispatchException(
+    const _discardedError = () => kissAbort(
       'dispatchSync threw because the action is ASYNC, so the action stopped retrying.');
 
     // Counts the failed attempt, and waits before the next one. Throws the error instead, if
@@ -2401,11 +2520,12 @@ export class Store<St> {
       // - Runs the SYNC `reduce` method; OR
       // - Runs the initial sync part of the ASYNC `reduce` method.
       let reduceResult: ReduxReducer<St> | AsyncReducerResult<St> =
-        wrapReduce(action.reduce.bind(action))();
+        wrapReduce(action['reduce'].bind(action))();
 
       // 2.3) If the reducer returned null, or if it returned the unaltered state, we simply do nothing.
       if (reduceResult == null || reduceResult === this.state) {
         action._changeStatus({hasFinishedMethodReduce: true});
+        this._throwIfDispatchedBeforeLogOut(action);
         this._registerUnchangedState(action);
         return; // Get out of here.
       }
@@ -2414,6 +2534,7 @@ export class Store<St> {
       else if (reduceResult instanceof Promise) {
         reduceResult = await reduceResult as AsyncReducerResult<St>;
         action._changeStatus({hasFinishedMethodReduce: true});
+        this._throwIfDispatchedBeforeLogOut(action);
 
         if (reduceResult == null || reduceResult === this.state) {
           this._registerUnchangedState(action);
@@ -2426,7 +2547,7 @@ export class Store<St> {
           const newAsyncState = reduceResult(this.state);
           if (newAsyncState != null && newAsyncState !== this.state) {
 
-            if (action.abortReduce(newAsyncState)) {
+            if (action['abortReduce'](newAsyncState)) {
               this._registerUnchangedState(action);
             } else
               this._registerState(action, newAsyncState);
@@ -2440,8 +2561,9 @@ export class Store<St> {
       // 2.5) If the reducer is SYNC, we already have the new state, and we simply must apply it.
       else {
         action._changeStatus({hasFinishedMethodReduce: true});
+        this._throwIfDispatchedBeforeLogOut(action);
 
-        if (action.abortReduce(reduceResult)) {
+        if (action['abortReduce'](reduceResult)) {
           action._changeStatus({hasFinishedMethodReduce: true});
           this._registerUnchangedState(action);
         } else
@@ -2459,6 +2581,7 @@ export class Store<St> {
       // 5.1) Method `reduce` is ASYNC, so we wait for it to finish.
       const functionalReduceResult: AsyncReducerResult<St> = await reduceResult;
       action._changeStatus({hasFinishedMethodReduce: true});
+      this._throwIfDispatchedBeforeLogOut(action);
 
       // 5.2) If the reducer returned null, we simply do nothing.
       if (functionalReduceResult == null) {
@@ -2476,7 +2599,7 @@ export class Store<St> {
 
         if (finalReduceState != null && finalReduceState !== this.state) {
 
-          if (action.abortReduce(finalReduceState)) {
+          if (action['abortReduce'](finalReduceState)) {
             this._registerUnchangedState(action);
           } else
             this._registerState(action, finalReduceState);
@@ -2499,7 +2622,7 @@ export class Store<St> {
    * `PersistAction`, the state is persisted right away.
    */
   private _registerUnchangedState(action: KissAction<St>) {
-    this._stateObserver?.(action, this._state, this._state, null, this._dispatchCount);
+    this._observeState(action, this._state, this._state, null);
     this._record(action, false, this._state, this._state, null);
 
     if (action instanceof PersistAction && this._processPersistence != null)
@@ -2524,7 +2647,7 @@ export class Store<St> {
       this._rebuildFromStateHooks();
 
       // Observe the state with null error, because the reducer completed normally.
-      this._stateObserver?.(action, prevState, newState, null, this._dispatchCount);
+      this._observeState(action, prevState, newState, null);
 
       this._record(action, false, prevState, newState, null);
 
@@ -2791,10 +2914,29 @@ export class Store<St> {
    *
    * - Wait for all actions currently running to finish, but wait at most `actionsThrottle`
    * milliseconds. If the actions are not finished by then, the state will be deleted anyway.
-   * The default `actionsThrottle` is 6000 milliseconds (6 seconds).
+   * The default `actionsThrottle` is 6000 milliseconds (6 seconds). An `actionsThrottle` of
+   * zero (or negative) doesn't wait for the actions at all. Note: If you call logOut from inside
+   * an action, and wait for it, that action is still running, so logOut waits the full
+   * `actionsThrottle` for it to finish.
+   *
+   * The actions dispatched before logOut belong to the previous user, so they can't change the
+   * state of the next user. When one of them finishes, during or after logOut, it's aborted
+   * (`status.isDispatchAborted`): its reducer's result is discarded, and its errors are ignored
+   * (they don't go to `wrapError` or the `errorObserver`, and are not shown to the user). Errors
+   * that point to a bug (`StoreException`) are still thrown. Also, the store doesn't accept the
+   * actions they dispatch after logOut, with `this.dispatch`, `this.dispatchAndWait`,
+   * `this.dispatchWhen`, and the others. This includes the `UpdateStateAction`s of the
+   * optimistic actions (like `OptimisticCommand`), so they don't apply the server response,
+   * roll back, or reload, after logOut. Note this means an action that calls logOut can't
+   * change the state or dispatch actions after it. If you need that, call logOut from outside
+   * of actions, and then dispatch the actions you need. Also note it can't undo what the
+   * actions do outside the store, like calling the server, or saving to local storage.
    *
    * While logOut is running, the store doesn't accept new actions, and the persistor doesn't
-   * persist anything but the initial-state. If the app pauses the persistor (`pausePersistor`)
+   * persist anything but the initial-state. This includes the actions dispatched by the
+   * `stateObserver` and the `actionObserver` when logOut changes the state to the
+   * initial-state. Also, logOut cancels the `dispatchWhen`s that are still waiting, so their
+   * actions are not dispatched, and their `onTimeout` is not called. If the app pauses the persistor (`pausePersistor`)
    * or shuts down the store (`setShutDown`), before or during logOut, they stay that way after
    * it. Note logOut deletes the persisted state, and persists the initial-state, even if the
    * persistor is paused.
@@ -2857,6 +2999,13 @@ export class Store<St> {
     this._logOutsRunning++;
     this.clearInternalActionProps();
 
+    // The actions dispatched before this point belong to the previous user. When they finish,
+    // their result is discarded, and the actions they dispatch are not accepted.
+    this._logOutCount++;
+
+    // The `dispatchWhen`s called before this point also belong to the previous user.
+    this._cancelAllDispatchWhen();
+
     // The error logOut throws when it finishes, if deleting or persisting failed.
     let failure: { error: any } | null;
 
@@ -2868,13 +3017,16 @@ export class Store<St> {
       await new Promise<void>(resolve => setTimeout(resolve, capTimeoutMillis(throttle)));
 
       // Wait for all actions currently running to finish,
-      // but wait at most `actionsThrottle` milliseconds.
-      await this.waitAllActions(null, {
-        timeoutMillis: actionsThrottle,
-        completeImmediately: true
-      })
-        .catch(() => {
-        });
+      // but wait at most `actionsThrottle` milliseconds. Note that for `waitAllActions`, a
+      // zero or negative timeout means "no timeout", so in this case we don't wait at all.
+      if (actionsThrottle > 0) {
+        await this.waitAllActions(null, {
+          timeoutMillis: actionsThrottle,
+          completeImmediately: true
+        })
+          .catch(() => {
+          });
+      }
 
       // Delete the old persisted state. If it fails, the error is given to the `errorObserver`,
       // and logOut goes on, so that the store state is still reset. It's thrown at the end.
@@ -2925,8 +3077,10 @@ export class Store<St> {
   /**
    * Persists the current state (if it's not yet persisted), then pauses the Persistor temporarily.
    *
-   * When persistAndPausePersistor is called while the persisted state is still being read, or
-   * while a persistence process is running, it waits for them to finish. Then, if the current
+   * When persistAndPausePersistor is called while the persisted state is still being read,
+   * while a `logOut` is running, or while a persistence process is running, it waits for them
+   * to finish. Note logOut persists its initial-state, and the state of the previous user is
+   * never persisted while logOut is running. Then, if the current
    * state is not yet persisted, it immediately starts a new persistence process (ignoring
    * Persistor.throttle). The returned promise completes when the current state is persisted.
    *
@@ -2958,6 +3112,9 @@ export class Store<St> {
    * Asks the Persistor to save the initialState in the local persistence.
    * If the save fails, this rejects, and nothing is considered persisted
    * (`getLastPersistedStateFromPersistor` returns `null`).
+   *
+   * If a save is running, it waits for it to finish first, so that it can't overwrite the
+   * initialState later. State changes made meanwhile are saved after it finishes.
    */
   async saveInitialStateInPersistence(initialState: St): Promise<void> {
     return this._processPersistence?.saveInitialState(initialState);
@@ -2967,6 +3124,9 @@ export class Store<St> {
    * Asks the Persistor to read the state from the local persistence.
    * Important: If you use this, you MUST put this state into the store.
    * Kiss will assume that's the case, and will not work properly otherwise.
+   *
+   * If a save is running, it waits for it to finish first, so that it reads the saved state.
+   * State changes made meanwhile are saved after the state is read.
    */
   async readStateFromPersistence(): Promise<St | null> {
     return this._processPersistence?.readState() || null;
@@ -2974,6 +3134,9 @@ export class Store<St> {
 
   /**
    * Asks the Persistor to delete the saved state from the local persistence.
+   *
+   * If a save is running, it waits for it to finish first, so that it can't put the deleted
+   * state back. State changes made meanwhile are saved after the state is deleted.
    */
   async deleteStateFromPersistence(): Promise<void> {
     return this._processPersistence?.deleteState();
@@ -3369,7 +3532,7 @@ export class Store<St> {
    *
    *   ```ts
    *   let action = await store.waitActionType(MyAction);
-   *   expect(action.status.originalError).toBeInstanceOf(UserException);
+   *   expect(action?.status.originalError).toBeInstanceOf(UserException);
    *   ```
    *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects
@@ -3388,7 +3551,7 @@ export class Store<St> {
    * dispatch(new ChangeNameAction('Bill'));
    * let action = await store.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
+   * expect(action?.status.isCompletedOk).toBe(true);
    * expect(store.state.name).toBe('Bill');
    * ```
    *
@@ -3633,6 +3796,8 @@ export class Store<St> {
    * stops being checked. In this case, `onTimeout` is called if you provided it. Otherwise, the
    * timeout is logged with `Store.log()`. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
    * (or -1, or `Infinity`), but note that while it waits, the condition runs on every state change.
+   * A `logOut()` cancels the `dispatchWhen`s that are still waiting: their action is not
+   * dispatched, and their `onTimeout` is not called.
    *
    * ```ts
    * store.dispatchWhen(
@@ -3679,23 +3844,34 @@ export class Store<St> {
 
     let cancelTimer = () => {};
 
+    // Called by `logOut`. Stops checking the condition, and stops the timer.
+    const cancel = () => {
+      cancelTimer();
+      this._waitConditions = this._waitConditions.filter(c => c !== entry);
+      Store._logLazy(() => `logOut cancelled the dispatchWhen of ${action}.`);
+    };
+
     const entry = {
       check: condition,
       // Called by `_registerState`, which dispatches the action after checking all conditions.
       resolve: () => {
         cancelTimer();
+        this._dispatchWhenCancels.delete(cancel);
         this._dispatchWhenQueue.push(action);
       },
       reject: (error: unknown) => {
         cancelTimer();
+        this._dispatchWhenCancels.delete(cancel);
         logFailure(error);
       },
     };
     this._waitConditions.push(entry);
+    this._dispatchWhenCancels.add(cancel);
 
     if (timeoutMillis > 0) {
       cancelTimer = _setLongTimeout(() => {
         // Stop checking the condition, since the action will not be dispatched anymore.
+        this._dispatchWhenCancels.delete(cancel);
         this._waitConditions = this._waitConditions.filter(c => c !== entry);
         try {
           if (onTimeout) onTimeout();

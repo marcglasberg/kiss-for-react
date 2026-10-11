@@ -184,7 +184,7 @@ class CheckedAction extends Action {
   }
 
   // OK: in `wrapError`, Kiss shows it to the user.
-  wrapError(error: any) {
+  wrapError(error: any): never {
     throw new UserException('Failed').withHardCause(error);
   }
 }

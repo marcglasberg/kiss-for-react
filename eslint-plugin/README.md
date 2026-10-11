@@ -228,6 +228,7 @@ directories.
 - [`async-after`](#async-after) error
 - [`after-throws`](#after-throws) warning
 - [`missing-super-in-override`](#missing-super-in-override) error
+- [`lifecycle-method-call`](#lifecycle-method-call) error
 - [`retry-requires-async-reduce`](#retry-requires-async-reduce) error
 - [`retry-without-non-reentrant`](#retry-without-non-reentrant) warning
 - [`async-feature-in-sync-action`](#async-feature-in-sync-action) warning
@@ -764,6 +765,38 @@ other files.
 Quick fix (suggestion), for `before`: add `await super.before();` as the first statement, and
 make `before` async if it isn't. Not offered when `before` has a declared return type that is
 not a `Promise`.
+
+---
+
+### lifecycle-method-call
+
+An error for calling a lifecycle method of an action, like `reduce`, `before`, `after` or
+`wrapError`, from outside the action. Kiss calls these methods when the action is dispatched,
+in the right order, with the store, the state and the action features set up. Calling them
+yourself skips all that. Dispatch the action instead:
+
+```ts
+const state = new LoadUser().reduce();                      // Error
+const status = await store.dispatchAndWait(new LoadUser()); // OK
+```
+
+It's also reported in tests, where it's a common way to "test the reducer". Dispatch the
+action with `dispatchAndWait`, and then check the state.
+
+The lifecycle methods are `protected` in `KissAction`, so TypeScript already reports
+`action.reduce()` when `action` is typed as `KissAction`. But an action that overrides one of
+them without writing `protected` makes it public, so `new LoadUser().reduce()` compiles. This
+rule reports it anyway.
+
+The methods are the ones Kiss calls: `reduce`, `before`, `after`, `wrapError`, `wrapReduce`,
+`abortDispatch`, `abortReduce`, the `...KeyParams` and `compute...Key` methods, and the methods
+that `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` and `ServerPush` ask you to
+implement, like `sendCommandToServer` or `applyServerResponseToState`. Calls with `this` or
+`super`, inside the action itself, are not reported.
+
+Without type information, the action must be `new X(...)` (or a `const` initialized with it),
+where `X` is an action class declared in the same file. With
+[type information](#type-information), any expression whose type is an action.
 
 ---
 

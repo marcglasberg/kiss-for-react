@@ -22,6 +22,7 @@ import dispatchSyncAsyncAction from './rules/dispatchSyncAsyncAction.js';
 import expectWithoutWaiting from './rules/expectWithoutWaiting.js';
 import extendBaseAction from './rules/extendBaseAction.js';
 import incompatibleActionFeatures from './rules/incompatibleActionFeatures.js';
+import lifecycleMethodCall from './rules/lifecycleMethodCall.js';
 import pollingActionRestartsPolling from './rules/pollingActionRestartsPolling.js';
 import pollingWithCaveat from './rules/pollingWithCaveat.js';
 import missingInitialState from './rules/missingInitialState.js';
@@ -68,6 +69,7 @@ const rules = {
   'async-after': asyncAfter,
   'after-throws': afterThrows,
   'missing-super-in-override': missingSuperInOverride,
+  'lifecycle-method-call': lifecycleMethodCall,
   'retry-requires-async-reduce': retryRequiresAsyncReduce,
   'retry-without-non-reentrant': retryWithoutNonReentrant,
   'async-feature-in-sync-action': asyncFeatureInSyncAction,
@@ -146,6 +148,7 @@ plugin.configs.recommended = {
     'kiss-for-react/async-after': 'error',
     'kiss-for-react/after-throws': 'warn',
     'kiss-for-react/missing-super-in-override': 'error',
+    'kiss-for-react/lifecycle-method-call': 'error',
     'kiss-for-react/retry-requires-async-reduce': 'error',
     'kiss-for-react/retry-without-non-reentrant': 'warn',
     'kiss-for-react/async-feature-in-sync-action': 'warn',

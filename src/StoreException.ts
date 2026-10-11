@@ -23,7 +23,10 @@ export class StoreException extends Error {
  *
  * - The action status has `isDispatchAborted: true`, and the exception as its `originalError`.
  *   So `status.isCompletedOk` is `false`.
- * - The exception is not passed to `wrapError` or the `errorObserver`.
+ * - Like any other error, the exception is first given to the action's `wrapError`, and then to
+ *   the `errorObserver`. They may return it unaltered (the default), turn it into another error,
+ *   or swallow it by returning `null`. And if they return an `AbortDispatchException` for some
+ *   other error, the action is aborted in the same way.
  * - The action is not added to the failed actions, so `isFailed` is `false` for it.
  * - It's never thrown by `dispatch`, and `dispatchAndWait` resolves with the action status,
  *   instead of rejecting.
@@ -44,6 +47,13 @@ export class StoreException extends Error {
  * }
  * ```
  *
+ * Note Kiss itself also aborts actions with an `AbortDispatchException`: an `ignoreOld` action
+ * that became old, a `sequential` action discarded from its queue, an action with
+ * `checkInternet = { abort: true }` when there is no internet, and an action that stopped
+ * retrying. These are NOT given to `wrapError` or the `errorObserver`, since they didn't come
+ * from your code. So a `wrapError` that turns all errors into a `UserException` doesn't show
+ * them to the user.
+ *
  * See also:
  * - `abortDispatch()`, which is a way to abort the dispatch synchronously, before the action
  *   runs.
@@ -59,6 +69,28 @@ export class AbortDispatchException extends Error {
       Error.captureStackTrace(this, AbortDispatchException);
     }
   }
+}
+
+// The `AbortDispatchException`s created by Kiss itself, and not by the user's code.
+const _kissAborts = new WeakSet<AbortDispatchException>();
+
+/**
+ * For Kiss internal use only.
+ * Creates an `AbortDispatchException` for an action that Kiss itself aborts. It's not given to
+ * the action's `wrapError` or to the `errorObserver`.
+ */
+export function kissAbort(message: string): AbortDispatchException {
+  const error = new AbortDispatchException(message);
+  _kissAborts.add(error);
+  return error;
+}
+
+/**
+ * For Kiss internal use only.
+ * Returns true if the error is an `AbortDispatchException` created by `kissAbort`.
+ */
+export function isKissAbort(error: any): boolean {
+  return (error instanceof AbortDispatchException) && _kissAborts.has(error);
 }
 
 export class TimeoutException extends Error {

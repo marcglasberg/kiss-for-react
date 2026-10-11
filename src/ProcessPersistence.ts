@@ -23,8 +23,13 @@ export class ProcessPersistence<St> {
   private _resolveReady!: () => void;
   // Called when the persistence process currently running finishes. See `_waitForPersisting`.
   private _persistingWaiters: (() => void)[] = [];
+  // True if a `PersistAction` was dispatched while a persistence operation was running.
+  // When it finishes, the state is persisted ignoring the throttle.
+  private _isPersistActionWaiting = false;
   // How many `logOut` calls are running. See `_startLogOut`.
   private _logOutsRunning = 0;
+  // Called when no `logOut` is running anymore. See `_waitForLogOut`.
+  private _logOutWaiters: (() => void)[] = [];
 
   /**
    * Called with the persistence errors: the errors thrown by `Persistor.persistDifference`
@@ -165,42 +170,88 @@ export class ProcessPersistence<St> {
     return this.persistor.throttle || 0;
   }
 
+  /**
+   * Same as `Persistor.saveInitialState` but will remember the `initialState` as the
+   * `lastPersistedState`. If a save is running, waits for it to finish first, so that it can't
+   * overwrite the `initialState` later.
+   */
   async saveInitialState(initialState: St): Promise<void> {
-    this.lastPersistedState = initialState;
-    try {
-      await this.persistor.saveInitialState(initialState);
-    } catch (error) {
-      // Not saved, so it's not considered persisted (unless it was replaced in the meantime).
-      if (this.lastPersistedState === initialState) this.lastPersistedState = null;
-      throw error;
-    } finally {
-      this.processAddedErrors();
-    }
+    return this._runAlone(async () => {
+      this.lastPersistedState = initialState;
+      try {
+        await this.persistor.saveInitialState(initialState);
+      } catch (error) {
+        // Not saved, so it's not considered persisted (unless it was replaced in the meantime).
+        if (this.lastPersistedState === initialState) this.lastPersistedState = null;
+        throw error;
+      }
+    });
   }
 
   /**
    * Same as `Persistor.readState` but will remember the read state as the `lastPersistedState`.
+   * If a save is running, waits for it to finish first, so that it reads the saved state, and
+   * so that the save can't change the `lastPersistedState` later.
    */
   async readState(): Promise<St | null> {
-    try {
+    return this._runAlone(async () => {
       const state = await this.persistor.readState();
       this.lastPersistedState = state;
       return state;
-    } finally {
-      this.processAddedErrors();
-    }
+    });
   }
 
   /**
    * Same as `Persistor.deleteState` but will clear the `lastPersistedState`.
+   * If a save is running, waits for it to finish first, so that it can't put the deleted
+   * state back later.
    */
   async deleteState(): Promise<void> {
-    this.lastPersistedState = null;
-    try {
+    return this._runAlone(async () => {
+      this.lastPersistedState = null;
       await this.persistor.deleteState();
+    });
+  }
+
+  /**
+   * Runs the `operation` when no other persistence operation is running, so that they don't
+   * overlap. While it runs, state changes are not saved. They are saved when it finishes, if
+   * necessary.
+   */
+  private async _runAlone<T>(operation: () => Promise<T>): Promise<T> {
+    while (this.isPersisting) await this._waitForPersisting();
+    this._startOperation();
+    try {
+      return await operation();
     } finally {
-      this.processAddedErrors();
+      this._finishOperation();
     }
+  }
+
+  private _startOperation(): void {
+    this.isPersisting = true;
+  }
+
+  /**
+   * Called when a persistence operation finishes (even if it failed). If the state may have
+   * changed while it was running, persists it if necessary.
+   */
+  private _finishOperation(): void {
+    this.processAddedErrors();
+    this.isPersisting = false;
+    const waiters = this._persistingWaiters;
+    this._persistingWaiters = [];
+    for (const resolve of waiters) resolve();
+
+    const newStateAvailable = this.isANewStateAvailable;
+    const persistActionWaiting = this._isPersistActionWaiting;
+    this.isANewStateAvailable = false;
+    this._isPersistActionWaiting = false;
+
+    // If a new state became available while the operation was running, save it if necessary.
+    // If a PersistAction was dispatched meanwhile, the throttle is ignored.
+    if (newStateAvailable)
+      this._process(null, this.newestState as St, persistActionWaiting);
   }
 
   /**
@@ -220,6 +271,9 @@ export class ProcessPersistence<St> {
    * - Wait for all actions currently running to finish, but wait at most `actionsThrottle`
    * milliseconds. If the actions are not finished by then, the state will be deleted anyway.
    * The default `actionsThrottle` is 6000 milliseconds (6 seconds).
+   *
+   * The result of the actions dispatched before logOut is discarded, and so are the actions
+   * they dispatch after it.
    *
    * Same as `store.logOut`. See it for more details.
    */
@@ -271,6 +325,8 @@ export class ProcessPersistence<St> {
    * returned. Returns `null` if it succeeded.
    */
   async _deleteLogOutState(): Promise<{ error: any } | null> {
+    // Another logOut that runs at the same time may be persisting its initial-state.
+    await this._waitWhilePersisting();
     try {
       await this.deleteState();
       return null;
@@ -286,7 +342,11 @@ export class ProcessPersistence<St> {
    * `Persistor.wrapError`) is reported (only observed, since logOut throws it), and returned.
    * Returns `null` if it succeeded, or if `wrapError` swallowed the error.
    */
-  _persistLogOutState(initialState: St): Promise<{ error: any } | null> {
+  async _persistLogOutState(initialState: St): Promise<{ error: any } | null> {
+    // Another logOut that runs at the same time may be persisting its initial-state. If both
+    // saves ran at the same time, the one that finishes last would win, and it could be the
+    // initial-state of the other logOut.
+    await this._waitWhilePersisting();
     return this._persist(new Date(), initialState, true);
   }
 
@@ -297,12 +357,27 @@ export class ProcessPersistence<St> {
    */
   _endLogOut(): void {
     this._logOutsRunning--;
-    if (this._logOutsRunning === 0 && !this.isPaused && this.isInit)
+    if (this._logOutsRunning > 0) return;
+
+    const waiters = this._logOutWaiters;
+    this._logOutWaiters = [];
+    for (const resolve of waiters) resolve();
+
+    if (!this.isPaused && this.isInit)
       this.process(null, this.newestState as St);
   }
 
   /**
+   * Resolves when no `logOut` is running anymore.
+   * Only call it while `_logOutsRunning` is more than zero.
+   */
+  private _waitForLogOut(): Promise<void> {
+    return new Promise<void>(resolve => this._logOutWaiters.push(resolve));
+  }
+
+  /**
    * 1) If we're still persisting the last time, don't persist no matter what.
+   *    Instead, check again when it finishes.
    * 2) If action is of type `UpdateStateAction` with `ifPersists` false,
    *    don't persist, but consider the state as persisted (if no earlier change is waiting to
    *    be saved). This is done even while the persistor is paused.
@@ -314,6 +389,14 @@ export class ProcessPersistence<St> {
    *
    */
   process(action: KissAction<St> | null, newState: St): boolean {
+    return this._process(action, newState, false);
+  }
+
+  /**
+   * Same as `process`, but if `ignoreThrottle` is true, the throttle is ignored,
+   * as if the action were a `PersistAction`.
+   */
+  private _process(action: KissAction<St> | null, newState: St, ignoreThrottle: boolean): boolean {
     // True if an earlier state change was not saved yet. For example, because it's waiting for
     // the throttle, for a running save to finish, or for the paused persistor to resume.
     const hasUnsavedChange = this.isInit && (this.newestState !== this.lastPersistedState);
@@ -321,11 +404,23 @@ export class ProcessPersistence<St> {
     this.isInit = true;
     this.newestState = newState;
 
+    const isNotPersisted = (action instanceof UpdateStateAction) && (!action.ifPersists);
+
+    // 1) While a persistence operation is running, remember to check again when it finishes.
+    // This is done even if the new state is the last persisted state, since the running
+    // operation will change the last persisted state when it finishes. But not for a state
+    // that should not be persisted.
+    if (this.isPersisting && !isNotPersisted) {
+      this.isANewStateAvailable = true;
+      if ((action instanceof PersistAction || ignoreThrottle) && !this.isPaused)
+        this._isPersistActionWaiting = true;
+    }
+
     if (this.lastPersistedState === newState) return false;
 
     // This is checked even while the persistor is paused. Otherwise, when it resumes,
     // it would see a difference, and save the state that should not be persisted.
-    if ((action instanceof UpdateStateAction) && (!action.ifPersists)) {
+    if (isNotPersisted) {
       // Only consider this state as persisted if no earlier change is waiting to be saved.
       // Otherwise, those earlier changes would be lost. In that case, the pending save will
       // save the newest state, which includes this one.
@@ -343,8 +438,8 @@ export class ProcessPersistence<St> {
     if (!this.isReady) return false;
 
     // 1) If we're still persisting the last time, don't persist no matter what.
+    // It was already remembered above, to check again when it finishes.
     if (this.isPersisting) {
-      this.isANewStateAvailable = true;
       return false;
     }
     //
@@ -356,6 +451,7 @@ export class ProcessPersistence<St> {
       if (
         now.valueOf() - this.lastPersistTime.valueOf() >= this.throttle
         || (action instanceof PersistAction)
+        || ignoreThrottle
       ) {
         this._cancelTimer();
         this._persist(now, newState).then();
@@ -408,7 +504,7 @@ export class ProcessPersistence<St> {
   private async _persist(now: Date, newState: St, observeOnly: boolean = false)
     : Promise<{ error: any } | null> {
     let failure: { error: any } | null = null;
-    this.isPersisting = true;
+    this._startOperation();
     this.lastPersistTime = now;
     this.isANewStateAvailable = false;
 
@@ -440,17 +536,8 @@ export class ProcessPersistence<St> {
     }
       //
     finally {
-      this.processAddedErrors();
-      this.isPersisting = false;
-      const waiters = this._persistingWaiters;
-      this._persistingWaiters = [];
-      for (const resolve of waiters) resolve();
-
       // If a new state became available while the present state was saving, save again.
-      if (this.isANewStateAvailable) {
-        this.isANewStateAvailable = false;
-        this.process(null, this.newestState as St);
-      }
+      this._finishOperation();
     }
 
     return failure;
@@ -476,8 +563,9 @@ export class ProcessPersistence<St> {
    * temporarily.
    *
    *
-   * When `persistAndPause` is called while the persisted state is still being read, or while a
-   * persistence process is running, it waits for them to finish. Then, if the current state is
+   * When `persistAndPause` is called while the persisted state is still being read, while a
+   * `logOut` is running, or while a persistence process is running, it waits for them to
+   * finish. Note logOut persists its initial-state, and the state before it is never persisted. Then, if the current state is
    * not yet persisted, it immediately starts a new persistence process (ignoring `throttle`).
    * The returned promise completes when the current state is persisted.
    *
@@ -501,9 +589,14 @@ export class ProcessPersistence<St> {
     // If the persisted state is still being read, wait until it finishes.
     await this._ready;
 
-    // If the state is being persisted, wait until it finishes. Since the persistor
-    // is paused, no new persistence process will start after that.
-    while (this.isPersisting) await this._waitForPersisting();
+    // If a logOut is running, the current state belongs to the previous user, and must not be
+    // persisted. Wait until the logOut finishes, since it persists its initial-state (even
+    // though the persistor is paused). And if the state is being persisted, wait until it
+    // finishes. Since the persistor is paused, no new persistence process will start after that.
+    while (this._logOutsRunning > 0 || this.isPersisting) {
+      if (this._logOutsRunning > 0) await this._waitForLogOut();
+      else await this._waitForPersisting();
+    }
 
     if (this.isInit && (this.lastPersistedState !== this.newestState)) {
       const now = new Date();

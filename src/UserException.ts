@@ -54,7 +54,7 @@ export class UserException extends Error {
    * Some text to be displayed in the UI element that is responsible for the error.
    * For example, a text field could show this as red text, below it.
    * When building your widgets, you can get the `errorText` from the failed action:
-   * `errorText = store.exceptionFor(MyAction).errorText`.
+   * `errorText = store.exceptionFor(MyAction)?.errorText`.
    */
   readonly errorText: string | null;
 
@@ -179,7 +179,7 @@ export class UserException extends Error {
    * For example, a text field could show this as red text, below it.
    *
    * When building your widgets, you can get the `errorText` from the failed action:
-   * `errorText = store.exceptionFor(MyAction).errorText`.
+   * `errorText = store.exceptionFor(MyAction)?.errorText`.
    *
    * Usage:
    *

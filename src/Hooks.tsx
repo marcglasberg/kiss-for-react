@@ -310,6 +310,35 @@ export interface UseDispatchOptions<St, D> {
  *   `onMount` and `onUnmount` run once, even in React's `StrictMode`, which mounts components
  *   twice during development. And `onDepsChange` runs once per change.
  *
+ * - Like a `useEffect` cleanup, `onUnmount` runs when the component unmounts, before the
+ *   `onMount` of a component mounted in the same render (in a route switch, for example).
+ *
+ * When they run, compared to a `useEffect` (in production and in development):
+ *
+ * - `onMount` runs at the same time as a `useEffect(..., [])` called in the same place of the
+ *   component, if the store is ready. If not, it runs when the store becomes ready.
+ *
+ * - `onDepsChange` runs at the same time as a `useEffect(..., [deps])`, but not after the first
+ *   render. The deps are compared like React does: each value with `Object.is`.
+ *
+ * - `onUnmount` runs at the same time as the cleanup of a `useEffect`, with one exception:
+ *   if the component unmounts in the same synchronous run as its mount (before any microtask),
+ *   `onUnmount` waits one microtask. This is when `StrictMode` does its fake unmount, so if the
+ *   component mounts again in that time, `onUnmount` is cancelled, and `onMount` is not called
+ *   again. A real unmount that soon is rare, but its `onUnmount` also runs one microtask later.
+ *
+ * - So the actions they dispatch are dispatched at the same time as from a `useEffect`. A sync
+ *   action changes the state before `onMount`, `onDepsChange` or `onUnmount` returns.
+ *
+ * - They are not awaited. If one of them is async, the next one may run before it finishes.
+ *
+ * - They are the ones from the latest render, so they see its values.
+ *
+ * - Some React features disconnect the effects and connect them again, without a real unmount.
+ *   As for a `useEffect`, this calls `onUnmount` and then `onMount` again. For example, in
+ *   development, Fast Refresh does it to a component when you edit its code. And `<Activity>`
+ *   does it when it hides the component and shows it again.
+ *
  * Note: Changing `deps` doesn't call `onMount` again. If you want to dispatch the same actions
  * on mount and when `deps` change, call the same function from both `onMount` and
  * `onDepsChange`. Each of them sees the values from the latest render.
@@ -357,6 +386,11 @@ function useLifecycle<St, D>(store: Store<St>, options: UseDispatchOptions<St, D
 
     let isActive = true;
 
+    // True until the end of the current synchronous flush. StrictMode's fake unmount happens
+    // right after the mount, in the same flush, so only an unmount in that time can be fake.
+    let isJustMounted = true;
+    Promise.resolve().then(() => isJustMounted = false);
+
     if (mountedStoreRef.current !== store) {
       const mount = () => {
         if (!isActive) return;
@@ -372,14 +406,26 @@ function useLifecycle<St, D>(store: Store<St>, options: UseDispatchOptions<St, D
       isActive = false;
       if (mountedStoreRef.current !== store) return;
 
-      // Waits a microtask, so that it can be cancelled if this is not a real unmount (see above).
+      const unmount = () => {
+        if (mountedStoreRef.current === store) mountedStoreRef.current = null;
+        optionsRef.current?.onUnmount?.(store);
+      };
+
+      // A real unmount. Runs `onUnmount` right away, like a `useEffect` cleanup, so that it runs
+      // before the `onMount` of a component mounted in the same commit (a route switch, for example).
+      if (!isJustMounted) {
+        unmount();
+        return;
+      }
+
+      // It may be StrictMode's fake unmount. Waits a microtask, so that it can be cancelled if
+      // this is not a real unmount (see above).
       const pendingUnmount = {store, isCancelled: false};
       pendingUnmountRef.current = pendingUnmount;
       Promise.resolve().then(() => {
         if (pendingUnmount.isCancelled) return;
         if (pendingUnmountRef.current === pendingUnmount) pendingUnmountRef.current = null;
-        if (mountedStoreRef.current === store) mountedStoreRef.current = null;
-        optionsRef.current?.onUnmount?.(store);
+        unmount();
       });
     };
   }, [store]);
@@ -770,6 +816,8 @@ class StoreDispatchers<St> {
    * stops being checked. In this case, `onTimeout` is called if you provided it. Otherwise, the
    * timeout is logged with `Store.log()`. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
    * (or -1, or `Infinity`), but note that while it waits, the condition runs on every state change.
+   * A `logOut()` cancels the `dispatchWhen`s that are still waiting: their action is not
+   * dispatched, and their `onTimeout` is not called.
    *
    * ```ts
    * store.dispatchWhen(
@@ -1127,7 +1175,7 @@ class StoreDispatchers<St> {
    *
    *   ```ts
    *   let action = await store.waitActionType(MyAction);
-   *   expect(action.status.originalError).toBeInstanceOf(UserException);
+   *   expect(action?.status.originalError).toBeInstanceOf(UserException);
    *   ```
    *
    * Timeout: If the condition is not met in `timeoutMillis` milliseconds, the promise rejects

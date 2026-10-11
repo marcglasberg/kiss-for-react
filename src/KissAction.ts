@@ -1,5 +1,5 @@
 import { Store } from "./Store";
-import { AbortDispatchException, StoreException } from "./StoreException";
+import { AbortDispatchException, kissAbort, StoreException } from "./StoreException";
 import { UserException } from "./UserException";
 import { describeValue } from "./utils";
 
@@ -75,7 +75,15 @@ export enum Poll {
   once = 'once',
 }
 
-/** Base action. All other actions should extend this one. */
+/**
+ * Base action. All other actions should extend this one.
+ *
+ * The lifecycle methods (like `reduce`, `before`, `after` and `wrapError`, and the other
+ * methods you override to configure the action) are `protected`, since only Kiss should call
+ * them, when the action is dispatched. To run an action, dispatch it. Note your overrides may
+ * also be declared `protected`. If they're not, TypeScript makes them public, but the
+ * `lifecycle-method-call` rule of the Kiss ESLint plugin still reports calling them.
+ */
 export abstract class KissAction<St> {
 
   get attempts(): number {
@@ -92,7 +100,7 @@ export abstract class KissAction<St> {
    * - `Promise<(state: St) => null>`: No state change, decided asynchronously.
    * - `Promise<null>`: No state change, decided asynchronously.
    */
-  abstract reduce(): St | null | Promise<((state: St) => (St | null)) | null>;
+  protected abstract reduce(): St | null | Promise<((state: St) => (St | null)) | null>;
 
   /**
    * The `before()` method MAY be implemented by the action. If implemented, it runs before the
@@ -109,14 +117,14 @@ export abstract class KissAction<St> {
    *
    * Note the `after()` method always runs, even if the `before()` method throws an exception.
    */
-  before(): void | Promise<void> {
+  protected before(): void | Promise<void> {
     if (this.checkInternet) {
       const { dialog, abort } = this.checkInternet;
 
       return this._hasInternet().then((isConnected: boolean) => {
         if (!isConnected) {
           if (abort) {
-            throw new AbortDispatchException('No Internet');
+            throw kissAbort('No Internet');
           } else if (dialog) {
             throw new UserException("Please, verify your connection.").withTitle("There is no Internet");
           } else {
@@ -142,7 +150,7 @@ export abstract class KissAction<St> {
   * in some other way that suits your needs.
   * 
   * For example, in React Native environments, we could use the `NetInfo` package 
-  * (https://www.npmjs.com/package/@rescript-react-native/netinfo) to check for internet connectivity.
+  * (https://www.npmjs.com/package/@react-native-community/netinfo) to check for internet connectivity.
   * 
   * First, add NetInfo to your `package.json`:
   * 
@@ -212,7 +220,7 @@ export abstract class KissAction<St> {
    * The `after()` method is always synchronous, and it will always be called when the action is
    * dispatched, even if errors were thrown by `before` or `reduce`.
    */
-  after(): void {
+  protected after(): void {
   }
 
   /**
@@ -234,15 +242,31 @@ export abstract class KissAction<St> {
    * wrapError(error) { return (error instanceof MyException) ? null : error }
    * ```
    *
+   * The return type doesn't allow `undefined`, so that you don't swallow errors by mistake,
+   * by forgetting to return them. If `undefined` is returned anyway (for example, from
+   * JavaScript), it's treated the same as `null`, and the error is disabled.
+   *
+   * If you want the action to abort silently, you can return an `AbortDispatchException`. The
+   * action doesn't count as failed, and no error is shown or thrown. Note an
+   * `AbortDispatchException` thrown by `before` or `reduce` also gets here, so you may turn it
+   * into another error. But the ones Kiss itself uses to abort actions (for example, for
+   * `ignoreOld` or `sequential`) don't get here.
+   *
    * IMPORTANT: If instead of RETURNING an error you throw an error inside the `wrapError` method,
    * Kiss will catch this error and use it instead the original error. In other words,
    * returning an error or throwing an error works the same way. But it's recommended that you
-   * return the error instead of throwing it anyway.
+   * return the error instead of throwing it anyway. Note: if your `wrapError` always throws,
+   * declare its return type as `never`, since TypeScript would otherwise infer it as `void`:
    *
-   * IMPORTANT: Apart from defining `wrapError()` methods per action, you can also define a
-   * global `wrapError` as a store parameter when you create the Store.
+   * ```
+   * wrapError(error: any): never { throw new UserException("Failed.").withHardCause(error) }
+   * ```
+   *
+   * IMPORTANT: Apart from defining `wrapError()` methods per action, you can also handle
+   * the errors of all actions with the `errorObserver` store parameter, when you create the
+   * Store. It's called after the action's `wrapError`, with the error it returned.
    */
-  wrapError(error: any): any {
+  protected wrapError(error: any): NonNullable<unknown> | null {
     return error;
   };
 
@@ -377,6 +401,7 @@ export abstract class KissAction<St> {
    * Dispatches an action to the Redux store.
    */
   protected dispatch(action: KissAction<St>): void {
+    this._markAsChildren([action]);
     this.store.dispatch(action);
   }
 
@@ -395,6 +420,8 @@ export abstract class KissAction<St> {
    * stops being checked. In this case, `onTimeout` is called if you provided it. Otherwise, the
    * timeout is logged with `Store.log()`. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
    * (or -1, or `Infinity`), but note that while it waits, the condition runs on every state change.
+   * A `logOut()` cancels the `dispatchWhen`s that are still waiting: their action is not
+   * dispatched, and their `onTimeout` is not called.
    *
    * ```ts
    * this.dispatchWhen(
@@ -412,6 +439,7 @@ export abstract class KissAction<St> {
       onTimeout?: () => void
     }
   ): void {
+    this._markAsChildren([action]);
     this.store.dispatchWhen(action, condition, options);
   }
 
@@ -424,7 +452,48 @@ export abstract class KissAction<St> {
    * Usage: `await this.dispatchAndWait(new MyAction())`.
    */
   protected dispatchAndWait(action: KissAction<St>): Promise<ActionStatus> {
+    this._markAsChildren([action]);
     return this.store.dispatchAndWait(action);
+  }
+
+  /**
+   * Dispatches all given actions in parallel, applying their reducer, and possibly changing
+   * the store state. It returns the same list of actions, so that you can instantiate them
+   * inline, but still get a list of them.
+   *
+   * ```ts
+   * let actions = this.dispatchAll([new BuyAction('IBM'), new SellAction('TSLA')]);
+   * ```
+   *
+   * See `Store.dispatchAll`.
+   */
+  protected dispatchAll(actions: KissAction<St>[]): KissAction<St>[] {
+    this._markAsChildren(actions);
+    return this.store.dispatchAll(actions);
+  }
+
+  /**
+   * Dispatches all given actions in parallel, applying their reducers, and possibly changing
+   * the store state. The actions may be sync or async. It returns a Promise that resolves when
+   * ALL actions finish, with the same list of actions.
+   *
+   * ```ts
+   * let actions = await this.dispatchAndWaitAll([new BuyAction('IBM'), new SellAction('TSLA')]);
+   * ```
+   *
+   * Note: While the state change from the action's reducers will have been applied when the
+   * Promise resolves, other independent processes that the action may have started may still
+   * be in progress.
+   *
+   * If some actions fail with an error that is not swallowed (see `dispatchAndWait`), all
+   * actions are still dispatched and allowed to finish. Only then the Promise rejects, with
+   * the error of the first failed action in the list.
+   *
+   * See `Store.dispatchAndWaitAll`.
+   */
+  protected dispatchAndWaitAll(actions: KissAction<St>[]): Promise<KissAction<St>[]> {
+    this._markAsChildren(actions);
+    return this.store.dispatchAndWaitAll(actions);
   }
 
   /**
@@ -440,7 +509,8 @@ export abstract class KissAction<St> {
    * This `StoreException` is always thrown. It's not given to `wrapError` or the
    * `errorObserver`, so they can't swallow it or convert it.
    */
-  dispatchSync(action: KissAction<any>): void {
+  protected dispatchSync(action: KissAction<any>): void {
+    this._markAsChildren([action]);
     return this.store.dispatchSync(action);
   }
 
@@ -516,7 +586,7 @@ export abstract class KissAction<St> {
    * If you return a function that returns St, the action will be SYNC only if the
    * before and reduce methods are also SYNC.
    */
-  wrapReduce(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
+  protected wrapReduce(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
     return reduce;
   }
 
@@ -538,7 +608,7 @@ export abstract class KissAction<St> {
    * `isDispatchAborted: true`. Note `abortDispatch()` must decide synchronously. To abort the
    * action after some ASYNC check, throw an `AbortDispatchException` from `before` instead.
    */
-  abortDispatch(): boolean {
+  protected abortDispatch(): boolean {
     return false;
   }
 
@@ -583,7 +653,7 @@ export abstract class KissAction<St> {
    * and you should only use it if you know what you are doing.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameter documents the signature to override.
-  abortReduce(state: St): boolean {
+  protected abortReduce(state: St): boolean {
     return false;
   }
 
@@ -723,7 +793,7 @@ export abstract class KissAction<St> {
    *
    * This is used by `nonReentrant` actions, and by `OptimisticCommand`.
    */
-  nonReentrantKeyParams(): any {
+  protected nonReentrantKeyParams(): any {
     return null;
   }
 
@@ -757,7 +827,7 @@ export abstract class KissAction<St> {
    * keys, so a `nonReentrant` action and an `OptimisticCommand` with the same key can't run
    * at the same time either.
    */
-  computeNonReentrantKey(): any {
+  protected computeNonReentrantKey(): any {
     return [this.constructor, this.nonReentrantKeyParams()];
   }
 
@@ -773,6 +843,26 @@ export abstract class KissAction<St> {
    * dispatched. If it's called again later, the action stops retrying.
    */
   _clearCountAtDispatch: number = 0;
+
+  /**
+   * For Kiss internal use only.
+   * How many times `store.logOut()` had been called when this action was dispatched. If it's
+   * called again later, the result of this action is discarded when it finishes.
+   */
+  _logOutCountAtDispatch: number = 0;
+
+  /**
+   * For Kiss internal use only.
+   * When this action is dispatched by another action (with `this.dispatch` and similar), it's
+   * the `_logOutCountAtDispatch` of that other action. If `store.logOut()` was called after
+   * that other action was dispatched, the store doesn't accept this action. Otherwise, `null`.
+   */
+  _parentLogOutCount: number | null = null;
+
+  // Marks the given actions as dispatched by this action. See `_parentLogOutCount`.
+  private _markAsChildren(actions: KissAction<any>[]): void {
+    for (const action of actions) action._parentLogOutCount = this._logOutCountAtDispatch;
+  }
 
   /**
    * For Kiss internal use only.
@@ -895,7 +985,7 @@ export abstract class KissAction<St> {
    * Locks are compared with `Object.is`, except arrays and plain objects, which are compared
    * by their contents. For example, `[this.constructor, this.userId]` is a valid lock.
    */
-  debounceLockBuilder(): any {
+  protected debounceLockBuilder(): any {
     return this.constructor;
   }
 
@@ -1061,7 +1151,7 @@ export abstract class KissAction<St> {
    * Params are compared with `Object.is`, except arrays and plain objects, which are compared
    * by their contents. For example, `[1, 'A']` and `{ id: 1 }` are valid params.
    */
-  ignoreOldKeyParams(): any {
+  protected ignoreOldKeyParams(): any {
     return null;
   }
 
@@ -1091,7 +1181,7 @@ export abstract class KissAction<St> {
    * Keys are compared with `Object.is`, except arrays and plain objects, which are compared
    * by their contents.
    */
-  computeIgnoreOldKey(): any {
+  protected computeIgnoreOldKey(): any {
     return [this.constructor, this.ignoreOldKeyParams()];
   }
 
@@ -1366,7 +1456,7 @@ export abstract class KissAction<St> {
    *
    * Note: Expired locks are removed, to prevent memory leaks.
    */
-  throttleLockBuilder(): any {
+  protected throttleLockBuilder(): any {
     return this.constructor;
   }
 
@@ -1692,7 +1782,7 @@ export abstract class KissAction<St> {
    * See also:
    * - `computeFreshKey()` if you want full control over how the key is built.
    */
-  freshKeyParams(): any {
+  protected freshKeyParams(): any {
     return null;
   }
 
@@ -1755,7 +1845,7 @@ export abstract class KissAction<St> {
    * - `freshKeyParams()` when you want to differentiate fresh-keys by some of the fields of
    *   the action.
    */
-  computeFreshKey(): any {
+  protected computeFreshKey(): any {
     return [this.constructor, this.freshKeyParams()];
   }
 
@@ -1994,7 +2084,7 @@ export abstract class KissAction<St> {
    * Keys are compared with `Object.is`, except arrays and plain objects, which are compared
    * by their contents. For example, `[1, 'A']` and `{ id: 1 }` are valid keys.
    */
-  sequentialKeyParams(): any {
+  protected sequentialKeyParams(): any {
     return null;
   }
 
@@ -2017,7 +2107,7 @@ export abstract class KissAction<St> {
    * Note: If `discardQueueOnError()` throws an error, the error is logged, and the queue
    * continues with the next action.
    */
-  discardQueueOnError(error: any): boolean {
+  protected discardQueueOnError(error: any): boolean {
     return false;
   }
 
@@ -2097,8 +2187,11 @@ export abstract class KissAction<St> {
    *
    * To stop all polling at once (for example, on logout), without dispatching `Poll.stop` for
    * each key, call `stopAllPolling()` from any action. Polling also stops when you call
-   * `store.clearInternalActionProps()`, or when the store is shut down with
-   * `store.setShutDown(true)`, and is not restarted if you later turn the shutdown off.
+   * `store.clearInternalActionProps()`, or `store.logOut()`, or when the store is shut down
+   * with `store.setShutDown(true)`, and is not restarted if you later turn the shutdown off.
+   * This includes the actions with `Poll.start` or `Poll.runNowAndRestart` that were
+   * dispatched before, but had not started polling yet (for example, because they were still
+   * in an async `before()`). They don't start polling, and are aborted.
    *
    * You can display loading states and errors in your components by tracking the action
    * class that does the work:
@@ -2404,7 +2497,7 @@ export abstract class KissAction<St> {
    * Every action that uses polling must override this method. Otherwise, dispatching it throws
    * a `StoreException`.
    */
-  createPollingAction(): KissAction<St> {
+  protected createPollingAction(): KissAction<St> {
     throw new StoreException(
       `Action ${this.constructor.name} uses polling, but doesn't override createPollingAction().`);
   }
@@ -2428,7 +2521,7 @@ export abstract class KissAction<St> {
    * Params are compared with `Object.is`, except arrays and plain objects, which are compared
    * by their contents. For example, `[1, 'A']` and `{ id: 1 }` are valid params.
    */
-  pollingKeyParams(): any {
+  protected pollingKeyParams(): any {
     return null;
   }
 
@@ -2451,7 +2544,7 @@ export abstract class KissAction<St> {
    * Keys are compared with `Object.is`, except arrays and plain objects, which are compared
    * by their contents.
    */
-  computePollingKey(): any {
+  protected computePollingKey(): any {
     return [this.constructor, this.pollingKeyParams()];
   }
 
@@ -2796,7 +2889,7 @@ export abstract class KissAction<St> {
    * this.dispatch(new ChangeNameAction('Bill'));
    * let action = await this.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
+   * expect(action?.status.isCompletedOk).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
    * // Wait until some action of the given types is dispatched.
@@ -2895,7 +2988,7 @@ export abstract class KissAction<St> {
    * this.dispatch(new ChangeNameAction('Bill'));
    * let action = await this.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
+   * expect(action?.status.isCompletedOk).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
    * // Wait until some action of the given types is dispatched.
@@ -3010,7 +3103,7 @@ export abstract class KissAction<St> {
    * this.dispatch(new ChangeNameAction('Bill'));
    * let action = await this.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
+   * expect(action?.status.isCompletedOk).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
    * // Wait until some action of the given types is dispatched.
@@ -3080,7 +3173,7 @@ export abstract class KissAction<St> {
    *
    *   ```ts
    *   let action = await this.waitActionType(MyAction);
-   *   expect(action.status.originalError).toBeInstanceOf(UserException);
+   *   expect(action?.status.originalError).toBeInstanceOf(UserException);
    *   ```
    *
    * An action can't wait for its own type, since the action itself is in progress while its
@@ -3133,7 +3226,7 @@ export abstract class KissAction<St> {
    * this.dispatch(new ChangeNameAction('Bill'));
    * let action = await this.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
+   * expect(action?.status.isCompletedOk).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
    * // Wait until some action of the given types is dispatched.
@@ -3246,7 +3339,7 @@ export abstract class KissAction<St> {
    * this.dispatch(new ChangeNameAction('Bill'));
    * let action = await this.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
+   * expect(action?.status.isCompletedOk).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
    * // Wait until some action of the given types is dispatched.
@@ -3364,7 +3457,7 @@ export abstract class KissAction<St> {
    * this.dispatch(new ChangeNameAction('Bill'));
    * let action = await this.waitActionType(ChangeNameAction);
    * expect(action instanceof ChangeNameAction).toBe(true);
-   * expect(action.status.isCompletedOk).toBe(true);
+   * expect(action?.status.isCompletedOk).toBe(true);
    * expect(this.state.name).toBe('Bill');
    *
    * // Wait until some action of the given types is dispatched.
@@ -3740,8 +3833,8 @@ export class ActionStatus {
    * - Because of its `throttle` period, or because its `fresh` data was still fresh.
    * - Because it was mocked as `null`, or the store was shut down.
    * - Because an `AbortDispatchException` was thrown by the action's `before` or `reduce`
-   *   methods. This includes a `sequential` action discarded from its queue, and an
-   *   `ignoreOld` action that became old.
+   *   methods, or returned by its `wrapError` or by the `errorObserver`. This includes a
+   *   `sequential` action discarded from its queue, and an `ignoreOld` action that became old.
    *
    * Note in the last case the action was dispatched and finished (the `after` method ran),
    * but in the other cases it was never dispatched (`isDispatched` is `false`).
@@ -3774,7 +3867,9 @@ export class ActionStatus {
    * if `originalError` is non-null, it means the reducer did not finish running.
    *
    * If the action was aborted by throwing an `AbortDispatchException`, this holds that
-   * exception (which is not processed by `wrapError` and the `errorObserver`).
+   * exception. If it was thrown by your code, it's still processed by `wrapError` and the
+   * `errorObserver`. But not if Kiss itself aborted the action (for example, for `ignoreOld`
+   * or `sequential`).
    *
    * If the before/reduce methods threw `null` or `undefined` (or a Promise was rejected with
    * no reason), this holds an `Error` that says so, and that's the error processed by
@@ -4121,7 +4216,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * optimisticValue() { return this.newTodo; }
    * ```
    */
-  abstract optimisticValue(): T;
+  protected abstract optimisticValue(): T;
 
   /**
    * Using the given `state`, you should apply the given `value` to it, and return the result.
@@ -4132,7 +4227,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * applyValueToState(state: State, todoList: TodoList) { return state.copy({ todoList }); }
    * ```
    */
-  abstract applyValueToState(state: St, value: T): St;
+  protected abstract applyValueToState(state: St, value: T): St;
 
   /**
    * Using the given `state`, you should return the current value from that state. This is used
@@ -4142,7 +4237,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * getValueFromState(state: State) { return state.todoList; }
    * ```
    */
-  abstract getValueFromState(state: St): T;
+  protected abstract getValueFromState(state: St): T;
 
   /**
    * You should save the `optimisticValue` or other related value in the cloud, and optionally
@@ -4161,7 +4256,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * }
    * ```
    */
-  abstract sendCommandToServer(optimisticValue: T): Promise<any>;
+  protected abstract sendCommandToServer(optimisticValue: T): Promise<any>;
 
   /**
    * Override `applyServerResponseToState` to return a new state, where the given
@@ -4184,7 +4279,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * succeeded, the state is not rolled back, and there is no reload.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  applyServerResponseToState(state: St, serverResponse: any): St | null {
+  protected applyServerResponseToState(state: St, serverResponse: any): St | null {
     return null;
   }
 
@@ -4199,7 +4294,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * reloadFromServer() { return loadTodoList(); }
    * ```
    */
-  reloadFromServer?(): Promise<any>;
+  protected reloadFromServer?(): Promise<any>;
 
   /**
    * Returns the state to apply when the command fails and it's safe to roll back.
@@ -4230,7 +4325,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * Return `null` to skip the rollback.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  rollbackState({ initialValue, optimisticValue, error }: {
+  protected rollbackState({ initialValue, optimisticValue, error }: {
     initialValue: T,
     optimisticValue: T,
     error: any,
@@ -4252,7 +4347,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * - You want to roll back only for some errors.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  shouldRollback({ currentValue, initialValue, optimisticValue, error }: {
+  protected shouldRollback({ currentValue, initialValue, optimisticValue, error }: {
     currentValue: T,
     initialValue: T,
     optimisticValue: T,
@@ -4289,11 +4384,16 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * or to skip the reload when the value already changed to something else:
    *
    * ```ts
-   * shouldReload({ currentValue, lastAppliedValue }) { return currentValue === lastAppliedValue; }
+   * shouldReload({ currentValue, lastAppliedValue }: {
+   *   currentValue: Todo | undefined,
+   *   lastAppliedValue: Todo | undefined,
+   * }) {
+   *   return currentValue === lastAppliedValue;
+   * }
    * ```
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  shouldReload({ currentValue, lastAppliedValue, optimisticValue, rollbackValue, error }: {
+  protected shouldReload({ currentValue, lastAppliedValue, optimisticValue, rollbackValue, error }: {
     currentValue: T,
     lastAppliedValue: T,
     optimisticValue: T,
@@ -4320,7 +4420,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * custom rules based on `reloadResult` or `error`.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  shouldApplyReload({ currentValue, lastAppliedValue, optimisticValue, rollbackValue, reloadResult, error }: {
+  protected shouldApplyReload({ currentValue, lastAppliedValue, optimisticValue, rollbackValue, reloadResult, error }: {
     currentValue: T,
     lastAppliedValue: T,
     optimisticValue: T,
@@ -4340,7 +4440,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    *
    * Return `null` to ignore the reload result.
    */
-  applyReloadResultToState(state: St, reloadResult: any): St | null {
+  protected applyReloadResultToState(state: St, reloadResult: any): St | null {
     return this.applyValueToState(state, reloadResult as T);
   }
 
@@ -4348,7 +4448,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * Do NOT override this method. Implement `optimisticValue`, `getValueFromState`,
    * `applyValueToState` and `sendCommandToServer` instead.
    */
-  async reduce(): Promise<null> {
+  protected async reduce(): Promise<null> {
     // Updates the value optimistically.
     const optimistic = this.optimisticValue();
     this._applyState(this.applyValueToState(this.state, optimistic));
@@ -4483,7 +4583,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
 
   private _stopRetrying(): AbortDispatchException {
     this._hasStoppedRetrying = true;
-    return new AbortDispatchException(
+    return kissAbort(
       'The internal action props were cleared, so the command stopped retrying.');
   }
 
@@ -4832,7 +4932,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    *
    * See also: `computeOptimisticSyncKey()`, which uses this method by default to build the key.
    */
-  optimisticSyncKeyParams(): any {
+  protected optimisticSyncKeyParams(): any {
     return null;
   }
 
@@ -4843,7 +4943,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * Keys are compared with `Object.is`, except arrays and plain objects, which are compared by
    * their contents.
    */
-  computeOptimisticSyncKey(): any {
+  protected computeOptimisticSyncKey(): any {
     return [this.constructor, this.optimisticSyncKeyParams()];
   }
 
@@ -4866,7 +4966,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * valueToApply() { return !this.state.items.get(this.itemId).liked; }
    * ```
    */
-  abstract valueToApply(): T;
+  protected abstract valueToApply(): T;
 
   /**
    * Return a new state where the given `optimisticValue` is applied to the given `state`.
@@ -4879,7 +4979,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * }
    * ```
    */
-  abstract applyOptimisticValueToState(state: St, optimisticValue: T): St;
+  protected abstract applyOptimisticValueToState(state: St, optimisticValue: T): St;
 
   /**
    * Return the value from the given `state`. It's compared with the value that was sent to the
@@ -4893,7 +4993,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * getValueFromState(state: State) { return state.items.get(this.itemId).liked; }
    * ```
    */
-  abstract getValueFromState(state: St): T;
+  protected abstract getValueFromState(state: St): T;
 
   /**
    * Send the given `value` to the server, and optionally return the server's response.
@@ -4921,7 +5021,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * }
    * ```
    */
-  abstract sendValueToServer(value: T): Promise<any>;
+  protected abstract sendValueToServer(value: T): Promise<any>;
 
   /**
    * Override `applyServerResponseToState` to return a new state, where the given
@@ -4941,7 +5041,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * (which is the default).
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  applyServerResponseToState(state: St, serverResponse: any): St | null {
+  protected applyServerResponseToState(state: St, serverResponse: any): St | null {
     return null;
   }
 
@@ -5021,7 +5121,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    *   server request succeeded. You can handle it in `wrapError`.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  onFinish(error: any): Promise<St | null> | St | null {
+  protected onFinish(error: any): Promise<St | null> | St | null {
     return null;
   }
 
@@ -5044,7 +5144,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * request). Note the number of follow-up requests is limited by `maxFollowUpRequests`.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  ifShouldSendAnotherRequest({ stateValue, sentValue, requestCount }: {
+  protected ifShouldSendAnotherRequest({ stateValue, sentValue, requestCount }: {
     stateValue: T,
     sentValue: T,
     requestCount: number,
@@ -5056,7 +5156,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * Do NOT override this method. Implement `valueToApply`, `applyOptimisticValueToState`,
    * `getValueFromState` and `sendValueToServer` instead.
    */
-  async reduce(): Promise<null> {
+  protected async reduce(): Promise<null> {
     const value = this.valueToApply();
     this.optimisticValue = value;
 
@@ -5129,7 +5229,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
   }
 
   private _clearedError(): AbortDispatchException {
-    return new AbortDispatchException(
+    return kissAbort(
       'The internal action props were cleared, so the action stopped syncing.');
   }
 
@@ -5435,7 +5535,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    *
    * See also: `computeOptimisticSyncKey()`, which uses this method by default to build the key.
    */
-  optimisticSyncKeyParams(): any {
+  protected optimisticSyncKeyParams(): any {
     return null;
   }
 
@@ -5448,7 +5548,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * Keys are compared with `Object.is`, except arrays and plain objects, which are compared by
    * their contents.
    */
-  computeOptimisticSyncKey(): any {
+  protected computeOptimisticSyncKey(): any {
     return [this.constructor, this.optimisticSyncKeyParams()];
   }
 
@@ -5471,7 +5571,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * valueToApply() { return !this.state.items.get(this.itemId).liked; }
    * ```
    */
-  abstract valueToApply(): T;
+  protected abstract valueToApply(): T;
 
   /**
    * Return a new state where the given `optimisticValue` is applied to the given `state`.
@@ -5484,7 +5584,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * }
    * ```
    */
-  abstract applyOptimisticValueToState(state: St, optimisticValue: T): St;
+  protected abstract applyOptimisticValueToState(state: St, optimisticValue: T): St;
 
   /**
    * Return the value from the given `state`. If a follow-up request is needed, the value
@@ -5494,7 +5594,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * getValueFromState(state: State) { return state.items.get(this.itemId).liked; }
    * ```
    */
-  abstract getValueFromState(state: St): T;
+  protected abstract getValueFromState(state: St): T;
 
   /**
    * Override `sendValueToServer` to:
@@ -5532,7 +5632,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * }
    * ```
    */
-  abstract sendValueToServer(value: T, localRevision: number, deviceId: number): Promise<any>;
+  protected abstract sendValueToServer(value: T, localRevision: number, deviceId: number): Promise<any>;
 
   /**
    * Return the server revision you saved in the given `state` for the given `key`, in
@@ -5546,7 +5646,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * getServerRevisionFromState(state: State, key: any) { return state.revisionOf(key) ?? -1; }
    * ```
    */
-  abstract getServerRevisionFromState(state: St, key: any): number;
+  protected abstract getServerRevisionFromState(state: St, key: any): number;
 
   /**
    * Override `applyServerResponseToState` to return a new state, where the given
@@ -5568,7 +5668,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * (which is the default).
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  applyServerResponseToState(state: St, serverResponse: any): St | null {
+  protected applyServerResponseToState(state: St, serverResponse: any): St | null {
     return null;
   }
 
@@ -5669,7 +5769,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    *   server request succeeded. You can handle it in `wrapError`.
    */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
-  onFinish(error: any): Promise<St | null> | St | null {
+  protected onFinish(error: any): Promise<St | null> | St | null {
     return null;
   }
 
@@ -5677,7 +5777,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * Do NOT override this method. Implement `valueToApply`, `applyOptimisticValueToState`,
    * `getValueFromState`, `sendValueToServer` and `getServerRevisionFromState` instead.
    */
-  async reduce(): Promise<null> {
+  protected async reduce(): Promise<null> {
     const key = this._key = this.computeOptimisticSyncKey();
 
     const value = this.valueToApply();
@@ -5788,7 +5888,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
   }
 
   private _clearedError(): AbortDispatchException {
-    return new AbortDispatchException(
+    return kissAbort(
       'The internal action props were cleared, so the action stopped syncing.');
   }
 
@@ -5949,7 +6049,7 @@ export abstract class ServerPush<St> extends KissAction<St> {
    * associatedAction() { return ToggleLike; }
    * ```
    */
-  abstract associatedAction(): abstract new (...args: any[]) => OptimisticSyncWithPush<St, any>;
+  protected abstract associatedAction(): abstract new (...args: any[]) => OptimisticSyncWithPush<St, any>;
 
   /**
    * Same meaning as in `OptimisticSyncWithPush`: the params that differentiate the keys. It
@@ -5960,7 +6060,7 @@ export abstract class ServerPush<St> extends KissAction<St> {
    * optimisticSyncKeyParams() { return this.itemId; }
    * ```
    */
-  optimisticSyncKeyParams(): any {
+  protected optimisticSyncKeyParams(): any {
     return null;
   }
 
@@ -5969,7 +6069,7 @@ export abstract class ServerPush<St> extends KissAction<St> {
    * `OptimisticSyncWithPush` action. By default, it combines `associatedAction()` with
    * `optimisticSyncKeyParams()`.
    */
-  computeOptimisticSyncKey(): any {
+  protected computeOptimisticSyncKey(): any {
     return [this.associatedAction(), this.optimisticSyncKeyParams()];
   }
 
@@ -5997,7 +6097,7 @@ export abstract class ServerPush<St> extends KissAction<St> {
    * }
    * ```
    */
-  abstract pushMetadata(): PushMetadata;
+  protected abstract pushMetadata(): PushMetadata;
 
   /**
    * Return a new state, where:
@@ -6007,19 +6107,19 @@ export abstract class ServerPush<St> extends KissAction<St> {
    * Return `null` to ignore the push. Note its server revision is still recorded as the newest
    * known one, so older pushes and responses are ignored.
    */
-  abstract applyServerPushToState(state: St, key: any, serverRevision: number): St | null;
+  protected abstract applyServerPushToState(state: St, key: any, serverRevision: number): St | null;
 
   /**
    * Return the server revision you saved in the given `state` for the given `key`, in
    * `applyServerPushToState`. Return `-1` when unknown.
    */
-  abstract getServerRevisionFromState(state: St, key: any): number;
+  protected abstract getServerRevisionFromState(state: St, key: any): number;
 
   /**
    * Do NOT override this method. Implement `associatedAction`, `pushMetadata`,
    * `applyServerPushToState` and `getServerRevisionFromState` instead.
    */
-  reduce(): St | null {
+  protected reduce(): St | null {
     const key = this.computeOptimisticSyncKey();
     const { serverRevision, localRevision, deviceId } = this.pushMetadata();
 
@@ -6137,7 +6237,7 @@ export class UpdateStateAction<St> extends KissAction<St> {
     super();
   }
 
-  reduce(): St | null {
+  protected reduce(): St | null {
     return this.updateFunction(this.state);
   }
 
@@ -6230,7 +6330,7 @@ export class UserExceptionAction<St> extends KissAction<St> {
     super();
   }
 
-  reduce(): null {
+  protected reduce(): null {
     throw new UserException(this.message);
   }
 }

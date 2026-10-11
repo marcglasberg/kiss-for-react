@@ -408,8 +408,8 @@ class LoadText extends Action {
 ### CheckInternet
 
 To check for an internet connection before running the action, add the `checkInternet` property.
-If there is no internet connection, the action stops. You can also show a dialog that says,
-"There is no internet connection. Please check your connection."
+If there is no internet connection, the action stops. You can also show a dialog with the title
+"There is no Internet", and the message "Please, verify your connection."
 
 ```tsx
 class LoadPrices extends Action {    

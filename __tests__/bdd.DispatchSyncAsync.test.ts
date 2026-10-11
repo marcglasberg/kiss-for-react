@@ -466,7 +466,8 @@ Bdd(feature)
     const shown: UserException[] = [];
     const store = new Store<number>({initialState: 0, logger: null, showUserException: (e) => shown.push(e)});
     const action = asyncAction(ctx.example.val('Async because'));
-    action.wrapError = (error: any) => new UserException('Something went wrong.').withHardCause(error);
+    // The brackets give access to the protected `wrapError`.
+    action['wrapError'] = (error: any) => new UserException('Something went wrong.').withHardCause(error);
     const type = action.constructor as new () => KissAction<number>;
 
     expect(() => store.dispatchSync(action)).toThrow(StoreException);

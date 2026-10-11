@@ -7,7 +7,8 @@
 * `useDispatch` now accepts the optional `onMount`, `onUnmount`, and `onDepsChange` with its
   `deps`, to dispatch actions when the component mounts, when some values change, and when it
   unmounts. They get the store, run only after the store is ready, and run once even in
-  React's `StrictMode`:
+  React's `StrictMode`. Like a `useEffect` cleanup, `onUnmount` runs before the `onMount` of a
+  component mounted in the same render (in a route switch, for example):
 
   ```tsx
   const dispatch = useDispatch({
@@ -122,9 +123,13 @@
 
 * New `AbortDispatchException`. Throw it from an action's `before` or `reduce` to abort the
   action silently, for example after some async check (`abortDispatch()` must decide
-  synchronously). The `after` method still runs, but the exception is not passed to
-  `wrapError` or the `errorObserver`, the action doesn't count as failed
-  for `isFailed`, it's not retried, and `dispatchAndWait` resolves instead of rejecting.
+  synchronously). The `after` method still runs, the action doesn't count as failed
+  for `isFailed`, it's not retried, and `dispatchAndWait` resolves instead of rejecting. Like
+  in AsyncRedux, the exception first goes through `wrapError` and the `errorObserver`, which
+  may turn it into another error. And they may also return an `AbortDispatchException` to
+  abort the action silently. The `AbortDispatchException`s that Kiss itself uses to abort
+  actions (`ignoreOld`, `sequential`, `checkInternet` with `abort`, and when retries stop) are
+  not given to `wrapError` or the `errorObserver`.
 
 * New `ActionStatus.isDispatchAborted`. It's `true` when the action threw an
   `AbortDispatchException`, and in the status returned by `dispatchAndWait` when the dispatch
@@ -266,10 +271,70 @@
   reason) now fails with an `Error` that says so. Before, it counted as "completed OK", the
   `stateObserver` got no error, and `throw null` was swallowed, since `wrapError` got `null`.
 
+* The return type of the action's `wrapError` is now `NonNullable<unknown> | null`, so it
+  can't return `undefined`. This catches a `wrapError` that forgets to return the error in
+  some cases, like `if (e instanceof UserException) return e;`. If `undefined` is returned
+  anyway (for example, from JavaScript), the error is swallowed, the same as returning `null`.
+  Before, the action failed with `undefined`: `dispatch` threw `undefined`, and
+  `dispatchAndWait` rejected with it. A `wrapError` that always throws must now declare its
+  return type as `never`, since TypeScript infers it as `void`.
+
 * An error thrown by the `actionObserver` is now ignored (and logged), and the action runs
   and finishes normally. Before, if it threw when the action finished, `dispatchAndWait` of
   an async action never settled, and a sync action's `dispatch` threw the observer's error. If
   it threw when the action started, the action never ran.
+
+* An error thrown by the `stateObserver` is now ignored (and logged), and the action runs
+  and finishes normally. Before, the state was changed, but the action failed with the
+  observer's error, `wrapError` was skipped, the new state was not persisted, and
+  `waitCondition` and `dispatchWhen` didn't see it.
+
+* `logOut({ actionsThrottle: 0 })` (or negative) now doesn't wait for the running actions.
+  Before, it waited for them with no time limit, so it never finished while an action was
+  stuck, or when called from inside an action that waits for it.
+
+* `logOut()` now discards the actions dispatched before it, so they can't put the previous
+  user's data into the state of the next user. When one of them finishes, during or after
+  logOut, it's aborted: its result is not applied (and not persisted), and its errors are
+  ignored, not shown. Also, the store doesn't accept the actions they dispatch after logOut
+  (with `this.dispatch` and the others). For example, an `OptimisticCommand` whose request
+  finishes after logOut doesn't apply the server response, or roll back. Before, an action
+  still running when `actionsThrottle` ended changed the state after logOut. Note an action
+  that calls logOut can't change the state or dispatch actions after it, so call logOut from
+  outside of actions if you need that.
+
+* `logOut()` now cancels the `dispatchWhen`s that are still waiting, so their actions are not
+  dispatched, and their `onTimeout` is not called. Before, a `dispatchWhen` met by the
+  initial-state of logOut was dispatched while logOut applied it, even when the store was
+  shut down, so the previous user's action changed (and persisted) the state right after it
+  was reset. The same happened to actions dispatched by the `stateObserver` or the
+  `actionObserver` at that moment. These are now not accepted.
+
+* `persistAndPausePersistor()` called while `logOut()` is running now waits for logOut to
+  finish, and doesn't persist the previous user's state. Before, it saved that state at the
+  same time as logOut deleted the persisted state and saved its initial-state, and if that
+  save finished last, the previous user's state stayed on disk. Also, two `logOut()`s running
+  at the same time no longer save their initial-states at the same time.
+
+* If the state goes back to the last persisted state object (for example, with an undo)
+  while a save is running, it's now saved again when that save finishes. Before, the saved
+  state was the one before the undo, until the next state change.
+
+* `deleteStateFromPersistence()`, `saveInitialStateInPersistence()` and
+  `readStateFromPersistence()` now wait for a running save to finish first. Before, the
+  running save could finish later and put the deleted state back, or overwrite the initial
+  state. And the read could return the state before that save, while the save then changed
+  the last persisted state, so the next save got the wrong `lastPersistedState`. State
+  changes made while they run are saved after they finish.
+
+* A `PersistAction` dispatched while a save is running now saves the state as soon as that
+  save finishes, ignoring the throttle. Before, it was ignored, and the state waited for the
+  throttle.
+
+* An action with `Poll.start` or `Poll.runNowAndRestart` that was still in an async `before()`
+  when `clearInternalActionProps()`, `setShutDown(true)` or `logOut()` was called no longer
+  starts polling when it reaches its reducer. It's aborted. Before, the previous user's
+  polling kept going after the logout.
 
 * When `dispatchSync` throws because the action is async, its async `before()` or `reduce()`
   has already started. Its result is now ignored (it never changes the state), and its errors
@@ -298,6 +363,16 @@
   time, use `sequential = true`.
 
 * `action.getLog` is now a method: use `action.getLog()`.
+
+* The lifecycle methods of the actions are now `protected`, like in AsyncRedux, since only
+  Kiss should call them, when the action is dispatched. These are `reduce`, `before`, `after`,
+  `wrapError`, `wrapReduce`, `abortDispatch`, `abortReduce`, the `...KeyParams`,
+  `compute...Key` and `...LockBuilder` methods, `discardQueueOnError`, `createPollingAction`,
+  and the methods that `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` and
+  `ServerPush` ask you to implement. To run an action, dispatch it, for example with
+  `dispatchAndWait`. Your overrides may stay public, or be declared `protected`. Overriding one
+  as `private` doesn't compile. The new lint rule `lifecycle-method-call` also reports calling
+  them on an action whose override is public.
 
 * The type declarations now need TypeScript 5.0 or later.
 

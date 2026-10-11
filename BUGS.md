@@ -22,19 +22,19 @@
 
 | # | Severity | Area | Bug | Checked | Fixed |
 |---|---|---|---|---|---|
-| 1 | Medium | Persistence / logOut | `persistAndPausePersistor()` during `logOut()` saves the old user's state, and it can stay on disk. | Reproduced | No |
-| 2 | Medium | Persistence | Going back to the last saved state object while a save is running leaves the wrong state on disk. | Reproduced | No |
-| 3 | Medium | useDispatch | `onUnmount` runs after the `onMount` of a component mounted in the same commit (unlike `useEffect`). | Reproduced | No |
+| 1 | Medium | Persistence / logOut | `persistAndPausePersistor()` during `logOut()` saves the old user's state, and it can stay on disk. | Reproduced | Yes |
+| 2 | Medium | Persistence | Going back to the last saved state object while a save is running leaves the wrong state on disk. | Reproduced | Yes |
+| 3 | Medium | useDispatch | `onUnmount` runs after the `onMount` of a component mounted in the same commit (unlike `useEffect`). | Reproduced | Yes |
 | 4 | Medium | debounce | `debounce` with `nonReentrant`, `throttle` or `fresh` runs the first dispatch, not the last. | Reproduced | No |
-| 5 | Medium | Polling | `clearInternalActionProps()`, `setShutDown(true)` and `logOut()` don't stop polling whose controller was still in an async `before()`. | Reproduced | No |
+| 5 | Medium | Polling | `clearInternalActionProps()`, `setShutDown(true)` and `logOut()` don't stop polling whose controller was still in an async `before()`. | Reproduced | Yes |
 | 6 | Medium | ServerPush | A push ignored by `applyServerPushToState` (returns `null`) still blocks the follow-up of a newer local change. | Reproduced | No |
 | 7 | Medium | OptimisticCommand | A `sequential` command that fails rolls back past earlier commands that succeeded. | Reproduced | No |
 | 8 | Medium | OptimisticSyncWithPush | A push older than the request in flight overwrites a newer local change. | Reproduced | No |
-| 9 | Medium | dispatchWhen / logOut | A `dispatchWhen` action is dispatched in the middle of `logOut()`, even when the store is shut down. | Reproduced | No |
-| 10 | Low | stateObserver | A `stateObserver` that throws leaves the store inconsistent: the state is not persisted, and waits and `dispatchWhen` miss it. | Reproduced | No |
-| 11 | Low | logOut | `logOut({ actionsThrottle: 0 })` waits forever for running actions, instead of at most 0 ms. | Reproduced | No |
-| 12 | Low | wrapError | A `wrapError` that returns `undefined` makes the action fail with `undefined`. | Reproduced | No |
-| 13 | Low | Persistence | `deleteStateFromPersistence()` during a slow save: the save finishes later and puts the deleted state back. | Reproduced | No |
+| 9 | Medium | dispatchWhen / logOut | A `dispatchWhen` action is dispatched in the middle of `logOut()`, even when the store is shut down. | Reproduced | Yes |
+| 10 | Low | stateObserver | A `stateObserver` that throws leaves the store inconsistent: the state is not persisted, and waits and `dispatchWhen` miss it. | Reproduced | Yes |
+| 11 | Low | logOut | `logOut({ actionsThrottle: 0 })` waits forever for running actions, instead of at most 0 ms. | Reproduced | Yes |
+| 12 | Low | wrapError | A `wrapError` that returns `undefined` makes the action fail with `undefined`. | Reproduced | Yes |
+| 13 | Low | Persistence | `deleteStateFromPersistence()` during a slow save: the save finishes later and puts the deleted state back. | Reproduced | Yes |
 | 14 | Low | dispatchWhen | Two `dispatchWhen` met by the same state change: the 2nd is dispatched although the 1st made its condition false. | Reproduced | No |
 | 15 | Low | Logging | `logStateChanges` doesn't log changes of a primitive state, or of a `Date`/`Map`/`Set` field. | Reproduced | No |
 | 16 | Low | Types | `waitAnyActionTypeFinishes` doesn't compile with an optional `onTimeout`. | Reproduced | No |
@@ -46,29 +46,29 @@
 | 22 | Low | ESSerializer | A class with a static `toString()` is restored without running its constructor (private fields are missing). | Reproduced | Yes |
 | 23 | Low | PersistorPrinterDecorator | Every save fails when the state has no prototype. It also prints `[object Object]`. | Reproduced | Yes |
 | 24 | Low | ClassPersistor | The "minified class names" check fires for a class named in lowercase in development, and for a listed `Date`. | Reproduced | Yes |
-| 25 | High | Docs | The error docs describe the removed `globalWrapError` and the old boolean `errorObserver`. | Reproduced | No |
-| 26 | High | Docs / README | README and homepage call `this.dispatchAndWaitAll(...)` inside an action, which doesn't exist. | Reproduced | No |
-| 27 | Medium | Docs | `persistor.md` says persistence errors never crash the app, and describes the old boolean `errorObserver`. | Reproduced | No |
-| 28 | Medium | Docs | The AI docs file `kiss-state-management-docs.md` is out of date (no `ignoreOld`), and the ai-usage page describes it wrongly. | Reproduced | No |
-| 29 | Medium | Docs | The `SellAction` example in `wait-fail-succeed.md` always fails. | Reproduced | No |
-| 30 | Medium | Docs | `isFailed`/`useIsFailed` are documented as true after any failure, but they only count `UserException`s. | Reproduced | No |
-| 31 | Medium | Docs | `dispatching-actions.md` calls `status.isCompletedOk()`, which is a getter. | Reproduced | No |
-| 32 | Medium | Docs | `debugging-the-app.md` calls `useStore().actionsInProgress()`, which doesn't exist. | Reproduced | No |
-| 33 | Medium | Docs | `testing-user-exceptions.md`: the `userExceptionsQueue` example can't pass, and "`isCompletedFailed` equals `!isCompletedOk`" is false. | Reproduced | No |
-| 34 | Medium | Docs (homepage) | The homepage examples don't compile, or contradict themselves. | Reproduced | No |
-| 35 | Medium | Docs | The TanStack comparison is out of date with 2.0.0. | Code reading | No |
-| 36 | Low | Docs | `wait-for-condition.md`: changing the actions set doesn't throw any more, and the `waitActionType` example doesn't compile. | Reproduced | No |
-| 37 | Low | Docs | `testing-the-app.md` describes `store.record` wrongly. | Reproduced | No |
-| 38 | Low | Docs | `mocking-actions.md`: the mock-recording loop doesn't compile. | Reproduced | No |
-| 39 | Low | Docs | `action-status.md` examples don't compile. | Reproduced | No |
-| 40 | Low | Docs | Syntax errors in `tutorial/async-actions.md` and `changing-state-is-optional.md`. | Reproduced | No |
-| 41 | Low | Docs | `optimistic-features.md` overrides don't compile under `strict`. | Reproduced | No |
-| 42 | Low | Docs | `business-logic.md` is cut off. | Code reading | No |
-| 43 | Low | Docs (tutorial) | The tutorial uses Dart syntax, a wrong class name, and says a dialog pops up by default. | Code reading | No |
-| 44 | Low | Docs | The MUI `showUserException` example never calls `next()` when there's no container, so the queue gets stuck. | Code reading | No |
-| 45 | Low | Docs / JSDoc | The NetInfo link points to the wrong package. | Code reading | No |
-| 46 | Low | README | The README quotes the wrong "no internet" dialog text. | Reproduced | No |
-| 47 | Low | JSDoc | Stale or wrong JSDoc: `wrapError`, `exceptionFor(...).errorText`, `ClassPersistor.readState`. | Reproduced | No |
+| 25 | High | Docs | The error docs describe the removed `globalWrapError` and the old boolean `errorObserver`. | Reproduced | Yes |
+| 26 | High | Docs / README | README and homepage call `this.dispatchAndWaitAll(...)` inside an action, which doesn't exist. | Reproduced | Yes |
+| 27 | Medium | Docs | `persistor.md` says persistence errors never crash the app, and describes the old boolean `errorObserver`. | Reproduced | Yes |
+| 28 | Medium | Docs | The AI docs file `kiss-state-management-docs.md` is out of date (no `ignoreOld`), and the ai-usage page describes it wrongly. | Reproduced | Yes |
+| 29 | Medium | Docs | The `SellAction` example in `wait-fail-succeed.md` always fails. | Reproduced | Yes |
+| 30 | Medium | Docs | `isFailed`/`useIsFailed` are documented as true after any failure, but they only count `UserException`s. | Reproduced | Yes |
+| 31 | Medium | Docs | `dispatching-actions.md` calls `status.isCompletedOk()`, which is a getter. | Reproduced | Yes |
+| 32 | Medium | Docs | `debugging-the-app.md` calls `useStore().actionsInProgress()`, which doesn't exist. | Reproduced | Yes |
+| 33 | Medium | Docs | `testing-user-exceptions.md`: the `userExceptionsQueue` example can't pass, and "`isCompletedFailed` equals `!isCompletedOk`" is false. | Reproduced | Yes |
+| 34 | Medium | Docs (homepage) | The homepage examples don't compile, or contradict themselves. | Reproduced | Yes |
+| 35 | Medium | Docs | The TanStack comparison is out of date with 2.0.0. | Code reading | Yes |
+| 36 | Low | Docs | `wait-for-condition.md`: changing the actions set doesn't throw any more, and the `waitActionType` example doesn't compile. | Reproduced | Yes |
+| 37 | Low | Docs | `testing-the-app.md` describes `store.record` wrongly. | Reproduced | Yes |
+| 38 | Low | Docs | `mocking-actions.md`: the mock-recording loop doesn't compile. | Reproduced | Yes |
+| 39 | Low | Docs | `action-status.md` examples don't compile. | Reproduced | Yes |
+| 40 | Low | Docs | Syntax errors in `tutorial/async-actions.md` and `changing-state-is-optional.md`. | Reproduced | Yes |
+| 41 | Low | Docs | `optimistic-features.md` overrides don't compile under `strict`. | Reproduced | Yes |
+| 42 | Low | Docs | `business-logic.md` is cut off. | Code reading | Yes |
+| 43 | Low | Docs (tutorial) | The tutorial uses Dart syntax, a wrong class name, and says a dialog pops up by default. | Code reading | Yes |
+| 44 | Low | Docs | The MUI `showUserException` example never calls `next()` when there's no container, so the queue gets stuck. | Code reading | Yes |
+| 45 | Low | Docs / JSDoc | The NetInfo link points to the wrong package. | Code reading | Yes |
+| 46 | Low | README | The README quotes the wrong "no internet" dialog text. | Reproduced | Yes |
+| 47 | Low | JSDoc | Stale or wrong JSDoc: `wrapError`, `exceptionFor(...).errorText`, `ClassPersistor.readState`. | Reproduced | Yes |
 
 ---
 
@@ -79,48 +79,24 @@
 - **Docs say:** the `logOut` JSDoc (`src/Store.tsx:~2796`): "While logOut is running, ... the persistor doesn't persist anything but the initial-state."
 - **What happens:** the app calls `persistAndPausePersistor()` while `logOut` waits for its `throttle` (for example, the app goes to the background right after the user taps logout). It calls `persistDifference` with the old user's state: `_startLogOut` cancelled the throttle timer, so there's always an unsaved change. That save overlaps logOut's delete and its save of the initial-state. If the old save finishes last, `logOut` resolves with no error, but the storage and `lastPersistedState` hold the old user's state. With equal delays the result is right, but `{n:7}` is still saved during logOut.
 - **Cause:** `ProcessPersistence.persistAndPause` (`src/ProcessPersistence.ts:496-512`) doesn't check `_logOutsRunning`. `Store._logOut` waits for a running save only once, before the throttle wait (`src/Store.tsx:2865`). `_persistLogOutState` (`src/ProcessPersistence.ts:289`) calls `_persist` without waiting for `isPersisting`.
-- **How to trigger:** (`p` logs the start and end of each save, and sets `stored`; persistor throttle 1000)
-  ```ts
-  store.dispatch(new SetState({ n: 7 })); await delayMillis(1);   // waiting for the throttle
-  p.delay = 60;
-  const logout = store.logOut({ initialState: { n: 0 }, throttle: 20, actionsThrottle: 0 });
-  await delayMillis(5);
-  const pp = store.persistAndPausePersistor();
-  await delayMillis(1); p.delay = 0;                              // the initial-state save is fast
-  await logout; await pp; await delayMillis(100);
-  expect(store.state).toEqual({ n: 0 });                          // passes
-  expect(store.getLastPersistedStateFromPersistor()).toEqual({ n: 0 }); // FAILS: {"n": 7}
-  // calls: ['persist start {"n":7}', 'delete', 'persist start {"n":0}', 'persist end {"n":0}', 'persist end {"n":7}']
-  ```
+- **Fixed:** `ProcessPersistence.persistAndPause` now waits while a `logOut` is running (`_waitForLogOut`, resolved by `_endLogOut`), and only then checks if the state needs to be saved. Since logOut saves its initial-state, the old user's state is never saved. The persistor stays paused after logOut, as usual. Also, `_deleteLogOutState` and `_persistLogOutState` now wait for a running save first, so two `logOut`s running at the same time don't save their initial-states at the same time. The JSDoc of `persistAndPausePersistor` says so.
+- **How to trigger:** see the BDDs in `__tests__/bdd.LogOutPersistAndPause.test.ts`. Before the fix, 3 of them failed: `persistDifference` was called with the old user's `{n: 7}` during logOut (with a slow and with a fast save), and with two concurrent logOuts, the slow save of the 1st one finished last, so the storage had `{n: 1}` while the state was `{n: 2}`.
 
 ## 2. Going back to the last saved state object while a save is running leaves the wrong state on disk (Medium)
 
 - **Docs say:** `react/miscellaneous/undo-and-redo.md` recommends `dispatch(new UpdateStateAction(() => stateHistory[41]))`, which goes back to an earlier state object.
 - **What happens:** state `A` is saved. Then `B` is being saved, and meanwhile the state goes back to the same `A` object. `process()` returns early because `lastPersistedState === A`, so it doesn't set `isANewStateAvailable`. Then `B`'s save finishes and sets `lastPersistedState = B`. The store shows `A`, but `B` stays on disk until the next state change. If the app is killed before that, the undo is lost on restart.
 - **Cause:** `src/ProcessPersistence.ts:324` (`if (this.lastPersistedState === newState) return false;`) runs before the `isPersisting` check at `:346`. Then `:423` records `B` as persisted.
-- **How to trigger:** (persistor throttle 0)
-  ```ts
-  const A = { n: 1 }; store.dispatch(new SetState(A)); await delayMillis(5);
-  p.delay = 30; store.dispatch(new SetState({ n: 2 })); await delayMillis(1);
-  store.dispatch(new SetState(A)); await delayMillis(80);
-  expect(p.stored).toEqual(store.state); // FAILS: expected {"n":1}, received {"n":2}
-  ```
+- **Fixed:** while a persistence operation is running, `process()` now remembers to check again when it finishes (`isANewStateAvailable`), before it compares the new state with `lastPersistedState`. When the save finishes, the newest state is compared with the state just saved, so `A` is saved again. This is not done for an `UpdateStateAction` with `ifPersists` false, which is still not saved. The same was fixed in AsyncRedux.
+- **How to trigger:** see the BDDs in `__tests__/bdd.PersistenceProcess.test.ts`, which cover the whole persistence process. Before the fix, these 3 failed: going back to the last persisted state while a save is running (with and without a throttle), and an undo to a saved state while a save is running. The others check the cases that already worked, like going back and then changing again, a save that fails, a paused persistor, and a change that should not be persisted.
 
 ## 3. `useDispatch`: `onUnmount` runs after the `onMount` of a component mounted in the same commit (Medium)
 
 - **Docs say:** `src/Hooks.tsx:302-303` (and `react/basics/hooks-to-dispatch-actions.md:106-107`): "you can still dispatch actions from a `useEffect`, as usual, if you prefer. These options are just more convenient". So users expect the `useEffect` order: the old cleanup first, then the new mount.
 - **What happens:** when one component unmounts and another mounts in the same commit (a route switch, or `<UserProfile key={userId}>`), the order is: new `onMount`, then old `onUnmount`. So the old page's cleanup (for example, clearing the selection) overwrites what the new page's `onMount` just set. Same with and without StrictMode. The plain `useEffect` version works. Also, `onUnmount` doesn't run inside a synchronous `act(() => renderer.unmount())`, only in an async `act`.
 - **Cause:** `src/Hooks.tsx:375-383`. The cleanup delays `onUnmount` by a microtask, so that StrictMode's fake unmount can cancel it. But React runs all unmount cleanups and then all mount effects in one synchronous flush, so the new `onMount` (`:365`) runs before the delayed `onUnmount`.
-- **How to trigger:**
-  ```tsx
-  const Page = ({id}) => { useDispatch({
-      onMount: (s) => { log.push('mount ' + id); s.dispatch(new Select(id)); },
-      onUnmount: (s) => { log.push('unmount ' + id); s.dispatch(new Select(null)); } }); return null; };
-  await act(async () => { r = TestRenderer.create(wrap(store, <Page key="A" id="A"/>)); });
-  await act(async () => { r.update(wrap(store, <Page key="B" id="B"/>)); }); await flush();
-  expect(log).toEqual(['mount A', 'unmount A', 'mount B']); // FAILS: ["mount A","mount B","unmount A"]
-  expect(store.state.selected).toBe('B');                    // route-switch variant: FAILS, received null
-  ```
+- **Fixed:** `onUnmount` is now delayed by a microtask only when the unmount happens in the same synchronous flush as the mount, which is when StrictMode's fake unmount happens. Any other unmount is real, so `onUnmount` runs right away, like a `useEffect` cleanup: before the `onMount` of a component mounted in the same commit, and inside a synchronous `act`. A component that really mounts and unmounts in the same flush still gets its `onUnmount` a microtask later. The `useDispatch` JSDoc and the CHANGELOG now say `onUnmount` runs before the `onMount` of a component mounted in the same render.
+- **How to trigger:** see the BDDs in `__tests__/bdd.UseDispatchUnmountOrder.test.ts`. Before the fix, 6 of the 7 failed, with and without StrictMode: replacing a component by one with another key, and replacing a page by another page, logged `["mount A", "mount B", "unmount A"]` and left the selection `null`, and after a synchronous `act(() => renderer.unmount())` the log had no `unmount A`. The last one checks that, in StrictMode, a component mounted next to another one still calls `onMount` and `onUnmount` once.
 
 ## 4. `debounce` with `nonReentrant`, `throttle` or `fresh` runs the first dispatch, not the last (Medium)
 
@@ -134,16 +110,8 @@
 - **Docs say:** `src/KissAction.ts:2097-2100`: "Polling also stops when you call `store.clearInternalActionProps()`, or when the store is shut down with `store.setShutDown(true)`, and is not restarted if you later turn the shutdown off." `clearInternalActionProps` "Stops all polling" (`src/Store.tsx:574`), "so that the actions of the previous user stop, and don't affect the next user" (`action-features.md`).
 - **What happens:** a `Poll.start` (or `Poll.runNowAndRestart`) action that is still in an async `before()` when the props are cleared later reaches `reduce`, finds no polling cycle, and starts a new one. The previous user's polling then keeps going after `logOut`. After `setShutDown(true)`, it ticks (and is blocked) during the shutdown, and then for real once the shutdown is turned off. Any base action with an async `before()` triggers this.
 - **Cause:** `_reducePolling` / `_runNowAndStartPollingCycle` (`src/Store.tsx:2123-2164`) don't check `_wereInternalActionPropsCleared(action)`, as retry does with `_clearCountAtDispatch`.
-- **How to trigger:**
-  ```ts
-  abstract class Action extends KissAction<State> { async before() { await delayMillis(30); } }
-  class PollTicks extends Action { pollInterval = 50; constructor(readonly poll = Poll.once) { super(); }
-    createPollingAction() { return new Tick(); } reduce() { return null; } }   // Tick does ticks++
-  store.dispatch(new PollTicks(Poll.start)); await delayMillis(5);
-  await store.logOut({ initialState: new State(''), throttle: 0, actionsThrottle: 1000 });
-  ticks = 0; await delayMillis(300);
-  expect(ticks).toBe(0);   // FAILS: 5. Also fails with clearInternalActionProps() (7), and with setShutDown(true/false) (6).
-  ```
+- **Fixed:** `_reducePolling` now checks `_wereInternalActionPropsCleared(action)`, as retry does. A `Poll.start` or `Poll.runNowAndRestart` action dispatched before the props were cleared (by `clearInternalActionProps()`, `setShutDown(true)` or `logOut()`) doesn't start polling when it reaches its reducer, and is aborted. `Poll.stop` and `Poll.once` are not affected. The polling JSDoc in `KissAction` says so.
+- **How to trigger:** see the BDDs in `__tests__/bdd.PollingStoppedDuringBefore.test.ts`. Before the fix, all 6 combinations of `Poll.start`/`Poll.runNowAndRestart` with `clearInternalActionProps()`/`setShutDown(true)` then `false`/`logOut()` failed: the polling started, and ticked 5 or 6 times in 150 ms.
 
 ## 6. `ServerPush`: an ignored push still blocks the follow-up of a newer local change (Medium)
 
@@ -192,15 +160,8 @@
 
 - **Docs say:** `src/Store.tsx:2796-2799`: "While logOut is running, the store doesn't accept new actions ... If the app ... shuts down the store (`setShutDown`), before or during logOut, they stay that way after it." `setShutDown` (`:461`): "abort any new actions that are dispatched".
 - **What happens:** `logOut` applies the initial state with `dispatchSync(UpdateStateAction)` while `_isApplyingLogOutState` is true (`:2885-2890`). `_registerState` then flushes `_dispatchWhenQueue` (`:2571-2575`), and the queued actions run, because `_isShutDown()` returns `false` while `_isApplyingLogOutState` is true (`:491-494`). So the old user's action changes the state right after it was reset, and with a persistor that state is saved. The same happens to anything the `stateObserver` or `actionObserver` dispatches during that step.
-- **How to trigger:**
-  ```ts
-  const store = new Store<St>({ initialState: { n: 0, user: 'bob' }, logger: null });
-  const login = new Login();               // sync: sets user to 'bob'
-  store.dispatchWhen(login, s => s.user === null, { timeoutMillis: 0 });
-  store.setShutDown(true);                 // optional, same result
-  await store.logOut({ initialState: { n: 0, user: null }, throttle: 0, actionsThrottle: 10 });
-  expect(login.status.isDispatched).toBe(false); // FAILS: true, and store.state is {n:0, user:'bob'}
-  ```
+- **Fixed:** The store now accepts only the `logOut` action that applies the initial-state: `_isApplyingLogOutState` is set back to `false` as soon as that action starts (in `_processDispatch`). So the actions dispatched while it runs, by `dispatchWhen`, the `stateObserver` or the `actionObserver`, are not accepted. Also, `logOut` now cancels all `dispatchWhen`s that are still waiting (`_cancelAllDispatchWhen`), so a `dispatchWhen` called before logOut is not dispatched after it either, and its `onTimeout` is not called. The JSDoc of `logOut` and `dispatchWhen` says so.
+- **How to trigger:** see the BDDs in `__tests__/bdd.LogOutDispatchWhen.test.ts`. Before the fix, 5 of them failed: the `dispatchWhen` action was dispatched while logOut applied the initial-state (with and without `setShutDown(true)`), so did the actions dispatched by the `stateObserver` and the `actionObserver`, and a `dispatchWhen` called before logOut was dispatched after it.
 
 ## 10. A `stateObserver` that throws leaves the store inconsistent (Low)
 
@@ -211,47 +172,31 @@
   - The new state is never persisted, and `persistAndPausePersistor()` doesn't save it either, since `newestState` was not updated.
   - `waitCondition` never sees the change, so it times out, and a `dispatchWhen` met by the change is never dispatched.
 - **Cause:** `_stateObserver` is called at `src/Store.tsx:2527`, after `this._state = newState`, but before removing the action from in-progress, checking `_waitConditions`, calling `_processPersistence.process` (`:2562`) and flushing `_dispatchWhenQueue`.
-- **How to trigger:**
-  ```ts
-  // The stateObserver throws on its 1st call. `saved` records persistDifference calls. errorObserver: () => null
-  const wait = store.waitCondition(s => s.n === 5, { timeoutMillis: 200 });
-  try { store.dispatch(new SetN(5)); } catch {}       // throws 'observer'; store.state.n is 5
-  expect(await wait.then(() => 'resolved', () => 'rejected')).toBe('resolved'); // FAILS: TimeoutException
-  await store.persistAndPausePersistor();
-  expect(p.stored).toEqual({ n: 5 });                 // FAILS: {"n": 0}
-  ```
+- **Fixed:** An error thrown by the `stateObserver` is now ignored (and logged), the same as one thrown by the `actionObserver`. All its calls go through the new `_observeState` in `src/Store.tsx`. So the action runs normally: it completes OK (or fails with its own error, after `wrapError` and the `errorObserver`), the state is persisted, and the wait-conditions and `dispatchWhen` see it. The `stateObserver` JSDoc now says it should not throw, and what happens if it does.
+- **How to trigger:** see the BDDs in `__tests__/bdd.StateObserverThrows.test.ts`. Before the fix, all 13 failed: `dispatchAndWait` rejected with `observer error`, `wrapError` was called 0 times, the persistor kept `{n: 0}`, the `waitCondition` was rejected, and the `dispatchWhen` action was not dispatched.
 
 ## 11. `logOut({ actionsThrottle: 0 })` waits forever, instead of "at most 0 ms" (Low)
 
 - **Docs say:** "Wait for all actions currently running to finish, but wait at most `actionsThrottle` milliseconds" (`src/Store.tsx:2792-2794`, `react/miscellaneous/persistor.md:563`).
 - **What happens:** with an action that never finishes, `logOut` never resolves. Also, `logOut()` called from inside an action always waits the full `actionsThrottle`, because the calling action is in progress, so with `actionsThrottle: 0` it deadlocks.
 - **Cause:** `actionsThrottle` is passed as `timeoutMillis` to `waitAllActions` (`src/Store.tsx:2872-2877`), where 0 means "no timeout" (`:3233`).
-- **How to trigger:**
-  ```ts
-  store.dispatch(new Never());   // async reduce that never resolves
-  const r = await Promise.race([store.logOut({ initialState, throttle: 0, actionsThrottle: 0 }).then(() => 'done'),
-                                sleep(1000).then(() => 'still running')]);
-  expect(r).toBe('done');        // FAILS: "still running"
-  ```
+- **Fixed:** `logOut` now doesn't wait for the running actions at all when `actionsThrottle` is zero or negative, instead of passing it to `waitAllActions`, where it means "no timeout". So an action can now call `logOut({ actionsThrottle: 0 })` and wait for it. The `logOut` JSDoc now says what an `actionsThrottle` of zero does, and that logOut called (and awaited) from inside an action waits the full `actionsThrottle`, since that action is still running.
+- **How to trigger:** see the BDDs in `__tests__/bdd.LogOutActionsThrottleZero.test.ts`. Before the fix, `logOut` with an `actionsThrottle` of `0` or `-1` and an action that never finishes was still running after 500 ms, and so was an action that awaited `logOut({ actionsThrottle: 0 })`.
 
 ## 12. A `wrapError` that returns `undefined` makes the action fail with `undefined` (Low)
 
 - **Docs say:** the `errorObserver` JSDoc (`src/Store.tsx:139`) says returning `null`, `undefined` or nothing swallows the error, and `Persistor.wrapError` does the same (`src/ProcessPersistence.ts:436`). The store turns a thrown `null`/`undefined` into an `Error` (`src/Store.tsx:1651-1654`), "since a null error means 'no error'". The action's `wrapError` JSDoc only mentions `null`.
 - **What happens:** a `wrapError` that falls through (a common TS mistake) makes `dispatch` throw `undefined`, or `dispatchAndWait` reject with `undefined`. `status.wrappedError` stays `null`, but the action is in the failed list. With the documented pass-through `errorObserver` (`({error}) => error`), the error is instead silently swallowed.
 - **Cause:** `src/Store.tsx:1694-1725` only checks `error !== null`, then throws it.
-- **How to trigger:**
-  ```ts
-  class W extends KissAction<State> { reduce(): State { throw new Error('boom'); }
-    wrapError(e: any): any { if (e instanceof UserException) return e; } }
-  try { await store.dispatchAndWait(new W()); } catch (e) { caught = e; }
-  expect(caught).toBeInstanceOf(Error);   // FAILS: undefined
-  ```
+- **Fixed:** a `wrapError` that returns `undefined` now swallows the error, the same as returning `null`, which is also what the `errorObserver` and `Persistor.wrapError` do (`src/Store.tsx`, right after calling `wrapError`). So the `errorObserver` is not called, the action is not in the failed list, and `dispatch`/`dispatchAndWait` don't throw. Also, the return type of `KissAction.wrapError` is now `NonNullable<unknown> | null` instead of `any`, so a `wrapError` that may fall through doesn't compile (an override typed `: any` still does, and then gets the runtime fix). A `wrapError` that always throws now needs `: never`, since TypeScript infers `void`; the two in the ESLint plugin demos were changed. The JSDoc and the CHANGELOG say all this.
+- **How to trigger:** see the BDDs in `__tests__/bdd.WrapErrorReturnsUndefined.test.ts`. Before the fix, all the ones that return `undefined` failed: `dispatchAndWait` rejected with `undefined` (sync and async actions), `dispatch` threw `undefined`, an async `dispatch` caused an unhandled rejection with `undefined`, and the `errorObserver` was called with `undefined`. The type scenario didn't compile: `Unused '@ts-expect-error' directive` for a `wrapError` that falls through, and `Type 'false' is not assignable to type 'true'` for "the return type doesn't accept `undefined`". The examples that return `null` check that both behave the same.
 
 ## 13. `deleteStateFromPersistence()` during a slow save: the save finishes later and puts the state back (Low)
 
 - **Docs say:** `deleteStateFromPersistence` deletes the persisted state.
 - **What happens:** a save that's in progress is not waited for. It finishes after the delete, and writes the state back to storage. `saveInitialStateInPersistence` has the same cause (not tested). This was in the "Plausible" list of the previous review, and is now reproduced.
-- **How to trigger:** with a persistor whose save takes 30 ms: change the state to `{n:5}`, wait 1 ms, call `await store.deleteStateFromPersistence()`, wait 60 ms. `expect(p.stored).toBeNull()` fails: received `{"n":5}`.
+- **Fixed:** `deleteStateFromPersistence()`, `saveInitialStateInPersistence()` and `readStateFromPersistence()` now wait for a running save to finish first, and no save starts while they run (`ProcessPersistence._runAlone`). State changes made while they run are saved after they finish. Also, a `PersistAction` dispatched while a save is running now saves the state when it finishes, ignoring the throttle (before, it was ignored). The same was fixed in AsyncRedux.
+- **How to trigger:** see the BDDs in `__tests__/bdd.PersistenceProcess.test.ts`. Before the fix, 7 of them failed: deleting the state while a save is running put the state back; a state change while the state was being deleted or read was saved at the same time; saving the initial state while a save is running was overwritten by it; reading the state while a save is running returned the state before it (and also when the read failed); and a `PersistAction` while a save is running waited for the throttle.
 
 ## 14. Two `dispatchWhen` met by the same state change: the 2nd is dispatched although the 1st made its condition false (Low)
 
@@ -357,52 +302,61 @@
   - The homepage `src/components/HomepageFeatures/overview-react.mdx:653-678` (copied into the AI docs file) uses `globalWrapError` and `errorObserver: (error, action, store) => ...`.
 - **Code:** `globalWrapError` was removed (`CHANGELOG.md:189`). The signature is `errorObserver?({error, originalError, action, store}): any` (`src/Store.tsx:197-202`). Its result is used as the error, and only `null`/`undefined` swallows it (`:1701-1743`). A returned `UserException` is shown, never thrown. The real order is `wrapError`, `errorObserver`, then `after()` (`:1693-1705`, `:1745`). Persistor errors are covered in bug 27.
 - **How to trigger:** compiling gives `TS2353: ... 'globalWrapError' does not exist in type 'ConstructorParams<State>'`, and for the observer `TS2322 ... Target signature provides too few arguments`. In JS, an observer that returns `false` (documented as "swallow") makes `dispatch` throw `false`, and `true` makes it throw `true`, even for a `UserException`. Recording the calls gives `wrapError -> errorObserver -> after`.
+- **Fixed:** In the website, `errors-thrown-by-actions.md`, `log-and-metrics.md` and the homepage no longer mention `globalWrapError`. Converting errors for all actions is now shown with the `errorObserver({error, originalError, action, store})`, which returns the error to use, or `null` to swallow it. The order is now `wrapError`, `errorObserver`, then `after()`. The `wrapError` JSDoc (`src/KissAction.ts`) now points to the `errorObserver`.
 
 ## 26. README and homepage call `this.dispatchAndWaitAll(...)` inside an action, which doesn't exist (High)
 
 - **Where:** `README.md:307` and `src/components/HomepageFeatures/overview-react.mdx:288`: `await this.dispatchAndWaitAll([new BuyAction('IBM'), new SellAction('TSLA')])`.
 - **Code:** `KissAction` only has `dispatch`, `dispatchWhen`, `dispatchAndWait` and `dispatchSync` (`src/KissAction.ts:378-442`). Either the docs are wrong, or `KissAction` should get `dispatchAll` and `dispatchAndWaitAll`, like `useStore()` got them (previous bug 26).
-- **How to trigger:** `TS2551: Property 'dispatchAndWaitAll' does not exist on type 'BuyAndSell'. Did you mean 'dispatchAndWait'?`
+- **Fixed:** The code was changed, not the docs. `KissAction` now has `dispatchAll` and `dispatchAndWaitAll`, which call the ones in the store, like the other dispatch methods. Also, `dispatchSync` is now `protected`, like the others.
+- **How to trigger:** see the BDDs in `__tests__/bdd.ActionDispatchAll.test.ts`. Before the fix, they didn't compile: `TS2551: Property 'dispatchAll' does not exist on type 'DispatchAllAction'. Did you mean 'dispatch'?`, and the same for `dispatchAndWaitAll`.
 
 ## 27. `persistor.md` says persistence errors never crash the app, and describes the old boolean `errorObserver` (Medium)
 
 - **Where:** `react/miscellaneous/persistor.md:227`: "Kiss never lets these errors crash your app." Lines 248-256: the `UserException` is shown, then "Finally, the error is given to the errorObserver"; "returning `true` logs the error with `Store.log()`, and returning `false` ignores it. If you didn't define an `errorObserver`, errors that are not `UserException`s are logged with `Store.log()`." Also `advanced-actions/errors-thrown-by-actions.md:384-386`.
 - **Code:** the `errorObserver` runs before the `UserException` is shown, and a non-null error that is not a `UserException` becomes an unhandled rejection (`src/Store.tsx:2658-2670`). The `Persistor` JSDoc (`src/Store.tsx:150-153`) is correct.
 - **How to trigger:** a persistor whose `persistDifference` throws "disk full": with no observer, Jest fails with an unhandled "disk full" rejection, and nothing is logged. With `() => false`, it fails with an unhandled "thrown: false".
+- **Fixed:** `persistor.md` no longer says these errors never crash the app. It now gives the real order: the persistor's `wrapError`, then the `errorObserver` (with a `null` action). Then a `UserException` is shown, and any other error becomes an unhandled promise rejection, unless the observer returns `null`. The persistence part of `errors-thrown-by-actions.md` says the same.
 
 ## 28. The AI docs file is out of date, and the ai-usage page describes it wrongly (Medium)
 
 - **Where:** `kiss-state-management-docs.md` and its copy in `static/` say "Last updated: 2026-10-10", and have no mention of `ignoreOld`, which the `react/` pages document. Regenerating it with `scripts/generate-consolidated-docs.js` changes about 20 places, all about `ignoreOld` (new sections, the compatibility matrix, `clearInternalActionProps`, the incompatibility lists). Since it includes the homepage, it also carries bugs 25, 26, 31 and 34.
 - **Also:** `react/ai-usage/using-ai-documentation.md:25` says the file includes "Migration guides - Comparing with Redux, Zustand, MobX, and TanStack", but the generator's `SECTION_ORDER` (`scripts/generate-consolidated-docs.js:17-25`) has no comparisons section. Line 196 says "~259KB", but it's about 363KB.
+- **Fixed:** Regenerated with `npm run generate:docs` (the file is git-ignored, and the website build regenerates it), so it now has `ignoreOld` and the docs fixes in this file. `using-ai-documentation.md` no longer says it has comparisons, and gives the size as ~370KB.
 
 ## 29. The `SellAction` example in `wait-fail-succeed.md` always fails (Medium)
 
 - **Where:** `react/basics/wait-fail-succeed.md:36-46`: `if (this.isWaiting(SellAction) || this.isWaiting(BuyAction)) throw new UserException('Please wait for the current order to complete.')`, meaning "if there is already a SellAction running".
 - **Code:** the running action is itself in progress (`src/Store.tsx:1567`), so `this.isWaiting(SellAction)` is always `true` inside it. See also bug 18.
 - **How to trigger:** `(await store.dispatchAndWait(new SellAction('IBM'))).originalError` is `UserException: Please wait for the current order to complete.`, instead of `null`.
+- **Fixed:** The example now only checks `this.isWaiting(BuyAction)`, says why `this.isWaiting(SellAction)` can't work inside a `SellAction`, and shows `nonReentrant` to avoid two `SellAction`s at once.
 
 ## 30. `isFailed`/`useIsFailed` are documented as true after any failure, but they only count `UserException`s (Medium)
 
 - **Where:** `react/basics/wait-fail-succeed.md:23`: "Is true if the given action type just failed", and the same for `useIsFailed` at line 108. The `LoadText` examples at lines 154-168 promise a "Loading failed..." message. Also check `tutorial/async-actions.md:115-128`, `comparisons/comparing-tanstack.md:316-320` and `comparing-redux.md:208-221`.
 - **Code:** `isFailed` is `exceptionFor(type) !== null`, and `exceptionFor` only returns a `UserException` (`src/Store.tsx:2705-2721`). The JSDoc (`src/Store.tsx:2702`, `src/Hooks.tsx:591`) is correct.
 - **How to trigger:** after an async action throws `TypeError('Failed to fetch')`, `isFailed` is `false` and `exceptionFor` is `null`.
+- **Fixed:** `wait-fail-succeed.md` now says `isFailed`, `exceptionFor` and `useIsFailed` only consider `UserException`s, and its `LoadText` example uses `wrapError` to turn any error into a `UserException`. `tutorial/async-actions.md`, `comparing-redux.md` and `comparing-tanstack.md` say the same, and their examples now show `?.message` instead of the `errorText` the action never sets.
 
 ## 31. `dispatching-actions.md` calls `status.isCompletedOk()`, which is a getter (Medium)
 
 - **Where:** `react/basics/dispatching-actions.md:65, 74, 119`. Line 119, `expect(sellAction.status.isCompletedOk()).toBe(true));`, also has an extra `)`.
 - **How to trigger:** `TS6234: This expression is not callable because it is a 'get' accessor`, and in JS `TypeError: status.isCompletedOk is not a function`. Line 119 also gives `TS1005: ';' expected`.
+- **Fixed:** Now uses the getter `isCompletedOk`, and the extra `)` is removed.
 
 ## 32. `debugging-the-app.md` calls `useStore().actionsInProgress()`, which doesn't exist (Medium)
 
 - **Where:** `react/testing/debugging-the-app.md:41-48`: "using `actionsInProgress()` from inside any component: `const store = useStore(); console.log(store.actionsInProgress());`". It also says it returns "an array".
 - **Code:** `useStore()` returns `StoreDispatchers` (`src/Hooks.tsx:733-788`), which has no `actionsInProgress`. `Store.actionsInProgress()` returns a `Set` (`src/Store.tsx:3617`).
 - **How to trigger:** `TS2339: Property 'actionsInProgress' does not exist on type 'StoreDispatchers<any>'`, and a `TypeError` at runtime.
+- **Fixed:** Now uses `const { store } = useStore(); store.actionsInProgress()`, and says it returns a `Set` (a copy).
 
 ## 33. `testing-user-exceptions.md`: the queue example can't pass, and `isCompletedFailed` is not `!isCompletedOk` (Medium)
 
 - **Where:** `react/testing/testing-user-exceptions.md:56-77` dispatches 3 failing actions, and expects `store.userExceptionsQueue` to have length 3. Line 26 says `isCompletedFailed` equals `!isCompletedOk`.
 - **Code:** each exception is taken out of the queue when it's shown (`src/Store.tsx:2606-2641`, `:2614`), and the default `showUserException` calls `next()` right away (`:872-875`). Both getters require `isCompleted` (`src/KissAction.ts:3836-3851`).
 - **How to trigger:** the length is 0 with the default UI, and 2 with a dialog that never calls `next`. While an action is running, or not yet dispatched, `isCompletedOk` and `isCompletedFailed` are both `false`.
+- **Fixed:** The page now says the queue only holds the exceptions not yet shown. The example uses a `showUserException` that never calls `next()`, so it expects 1 exception shown and 2 in the queue (checked with a test). It now says `isCompletedFailed` is `isCompleted && !isCompletedOk`.
 
 ## 34. The homepage examples don't compile, or contradict themselves (Medium)
 
@@ -412,6 +366,7 @@
   - `:623-642`: the test declares `selectedItem: number`, then expects `.toBe('B')`. And the only `SelectItem` on the page (`:726-733`) throws a plain `Error`, so `dispatchAndWait` rejects, and `status.originalError` at `:642` is never reached.
   - `:221-222` and `:669-670` say a dialog pops up for a `UserException`, but by default nothing opens: `_defaultShowUserException` only logs (`src/Store.tsx:872-875`). `handling-action-errors.md:232-236` says this correctly.
   - See also bugs 25 and 26.
+- **Fixed:** The homepage now uses `new MyPersistor()` (as the README), gives `createStore` an `initialState`, and its test and `SelectItem` agree (items with an `id`, `selectedItem` is the id, and `SelectItem` throws a `UserException`). It no longer says a dialog opens by default.
 
 ## 35. The TanStack comparison is out of date with 2.0.0 (Medium)
 
@@ -419,68 +374,81 @@
   - Lines 146-169 do freshness with `throttle`. There is now a dedicated `fresh` feature (`src/KissAction.ts:1609`), which behaves differently on failure (a failed `fresh` action doesn't stay fresh).
   - Line 37: "Smart refetches ... Yes (soon)". Lines 209-265 say `refetchOnMount` and `refetchInterval` are "not yet present", and show a hypothetical `useAutoDispatch`. 2.0.0 has `useDispatch({deps, onMount, onDepsChange, onUnmount})` (`src/Hooks.tsx:323`) and polling (`src/KissAction.ts:2356`).
   - Line 309 links to `http://localhost:3000/react/basics/wait-fail-succeed`.
+- **Fixed:** Freshness is now done with `fresh`. The "soon" and "not yet present" parts, and the hypothetical `useAutoDispatch`, are replaced by `useDispatch({ onMount })` with `fresh`, and a polling example with `Poll.start`/`Poll.stop`. The localhost link is now relative.
 
 ## 36. `wait-for-condition.md`: changing the actions set doesn't throw any more, and the `waitActionType` example doesn't compile (Low)
 
 - **Where:** `react/miscellaneous/wait-for-condition.md:433-435`: "Your condition function should not try and modify the set ... If you do, Kiss will throw an error." Lines 366-370: `let action = await store.waitActionType(MyAction); expect(action.status.isCompletedOk)...`. The `waitActionType` JSDoc (`src/Store.tsx:~3365`, `~3383`) has the same example.
 - **Code:** since commit `5f50b1b`, the condition gets a copy of the set (`src/Store.tsx:3138-3141`), so changing it doesn't throw. `waitActionType` returns `Promise<KissAction<St> | null>` (`:3405-3417`).
 - **How to trigger:** `clear()` and `add()` inside the condition don't throw, and the wait resolves. The example gives `TS18047: 'action' is possibly 'null'`.
+- **Fixed:** `wait-for-condition.md` now says the condition gets a copy of the set, so changing it has no effect. The `waitActionType` examples, in the page and in the JSDoc (`src/Store.tsx`, `src/Hooks.tsx`, `src/KissAction.ts`), now use `action?.status`.
 
 ## 37. `testing-the-app.md` describes `store.record` wrongly (Low)
 
 - **Where:** `react/testing/testing-the-app.md:80` says `store.record.result` "contains an array", and lines 116-124 show the output numbered from "1.".
 - **Code:** `result` is a function (`result: () => this.record.changes`), and `toString()` numbers from 0 (`src/Store.tsx:834-862`).
 - **How to trigger:** `store.record.result[0]` gives `TS7053`. The output starts with `0. SetN ini(1): ...`.
+- **Fixed:** Now says `store.record.result()` returns the array, and the output matches `toString()`, numbered from 0. Also fixed a missing comma in its `it(...)` examples.
 
 ## 38. `mocking-actions.md`: the mock-recording loop doesn't compile (Low)
 
 - **Where:** `react/testing/mocking-actions.md:99-104`: `for (const actionType of [AddAction, IncrementAction, LoadUserAction]) store.mocks.add(actionType, ...)`.
 - **Code:** `add<T>(actionType: new (...args) => T, ...)` (`src/Store.tsx:3747`). TypeScript infers `T` from only one member of the union.
 - **How to trigger:** with a sync action, an action with constructor parameters and an async action: `TS2345: Argument of type 'typeof IncrementAction | typeof AddAction | typeof LoadUserAction' is not assignable ...`.
+- **Fixed:** The loop now goes over an array typed as `Array<new (...args: any[]) => KissAction<State>>`.
 
 ## 39. `action-status.md` examples don't compile (Low)
 
 - **Where:** `react/advanced-actions/action-status.md:16-23` declares `let status` twice in the same block (`TS2451`). Line 60: `console.log(action.isCompletedOk);` should be `action.status.isCompletedOk` (`TS2339`).
+- **Fixed:** The two variables are now `statusBefore` and `statusAfter`, and it uses `action.status.isCompletedOk`.
 
 ## 40. Syntax errors in `tutorial/async-actions.md` and `changing-state-is-optional.md` (Low)
 
 - **Where:** `react/tutorial/async-actions.md:134-141` (React tab of "Combining isWaiting and isFailed"): the `<button onClick=... disabled={isLoading}` tag has no closing `>`. Gives `TS1005` and `TS17002: Expected corresponding JSX closing tag for 'div'`.
 - `react/basics/changing-state-is-optional.md:35`: `: state.copy({counter: state.counter + amount}));` has an extra `)`. Gives `TS1005: ';' expected`.
+- **Fixed:** Added the missing `>`, and removed the extra `)`.
 
 ## 41. `optimistic-features.md` overrides don't compile under `strict` (Low)
 
 - **Where:** `react/advanced-actions/optimistic-features.md:205` (`rollbackState`), `:219` (`shouldRollback`), `:258` (`shouldApplyReload`), `:527` (`ifShouldSendAnotherRequest`), and the `shouldReload` JSDoc (`src/KissAction.ts:4308`) destructure their parameter without types. Overrides don't get their types from the base class.
 - **How to trigger:** `TS7031: Binding element 'initialValue' implicitly has an 'any' type.`
+- **Fixed:** The overrides in `optimistic-features.md`, and the `shouldReload` JSDoc example, now type their parameters.
 
 ## 42. `business-logic.md` is cut off (Low)
 
 - **Where:** `react/miscellaneous/business-logic.md:95-96` ends with "Finally, here is the code that actually toggles the todo item..." and no code follows.
+- **Fixed:** The page now explains that `toggleTodo()` calls `TodoItem.toggleCompleted()`, shows the `TodoItem` class, and has a short ending.
 
 ## 43. The tutorial uses Dart syntax, a wrong class name, and says a dialog pops up by default (Low)
 
 - `react/tutorial/handling-action-errors.md:222`: `UserException("message", errorText: "errorText")` is Dart. It should be `new UserException(message, { errorText })` (`src/UserException.ts:73-82`).
 - `react/tutorial/persisting-the-state.md:142, 159` call it `ClassSerialized`. It's `ClassPersistor`. Line 159 also says the npm `esserializer` package is "used internally", but it's now an adapted copy in `src/Esserializer/`.
 - `react/tutorial/sync-actions.md:360` says a dialog pops up automatically for a `UserException`, at a step where the store has no `showUserException`. By default nothing opens (see bug 34).
+- **Fixed:** Now `new UserException("message", { errorText: "errorText" })` and `ClassPersistor`, and it says Kiss includes an adapted copy of esserializer. `sync-actions.md` now says the message is only logged by default. The same "opens a dialog automatically" claim was also fixed in `errors-thrown-by-actions.md` and `basics/user-exceptions.md`.
 
 ## 44. The MUI `showUserException` example never calls `next()` when there's no container (Low)
 
 - **Where:** `react/basics/user-exceptions.md:121` and `react/tutorial/handling-action-errors.md:75`: `if (!container) return;`.
 - **What happens:** the store waits for `next()` to show the next exception, so if `dialog-root` is missing once, no `UserException` is ever shown again.
+- **Fixed:** Both examples now call `next()` before returning when there's no container.
 
 ## 45. The NetInfo link points to the wrong package (Low)
 
 - **Where:** `react/advanced-actions/internet-features.md:81` and the JSDoc at `src/KissAction.ts:144` link to `@rescript-react-native/netinfo`, but the code next to it uses `@react-native-community/netinfo`.
+- **Fixed:** Both links now point to `@react-native-community/netinfo`.
 
 ## 46. The README quotes the wrong "no internet" dialog text (Low)
 
 - **Where:** `README.md:411-412`: "There is no internet connection. Please check your connection."
 - **Code:** `src/KissAction.ts:121` and the website say "There is no Internet" / "Please, verify your connection.".
+- **Fixed:** The README now quotes the title "There is no Internet" and the message "Please, verify your connection.".
 
 ## 47. Stale or wrong JSDoc (Low)
 
 - `src/KissAction.ts:241-242` (`wrapError`): "you can also define a global `wrapError` as a store parameter when you create the Store." That parameter was removed. It's now the `errorObserver`.
 - `src/UserException.ts:57, 182`: `store.exceptionFor(MyAction).errorText` gives `TS2531: Object is possibly 'null'`. It should be `?.errorText`.
 - The `ClassPersistor.readState` JSDoc says to call it "only once ... before the store is created", while the `Persistor` JSDoc and the website say the store calls `readState` itself.
+- **Fixed:** The `wrapError` JSDoc now points to the `errorObserver`, the `UserException` JSDoc uses `exceptionFor(MyAction)?.errorText`, and the `ClassPersistor.readState` JSDoc now says the store calls it, and what happens when it throws.
 
 ---
 

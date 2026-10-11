@@ -89,11 +89,12 @@ Bdd(feature)
   });
 
 Bdd(feature)
-  .scenario('An AbortDispatchException is not processed as an error.')
-  .given('A store with an errorObserver.')
-  .and('An action with a wrapError, that throws an AbortDispatchException.')
+  .scenario('An AbortDispatchException thrown by the action goes through wrapError and the errorObserver, and then aborts the action.')
+  .given('A store with an errorObserver that returns the error it gets.')
+  .and('An action with a wrapError that returns the error it gets, and that throws an AbortDispatchException.')
   .when('The action is dispatched.')
-  .then('The wrapError and the errorObserver are not called.')
+  .then('The wrapError and then the errorObserver get the AbortDispatchException.')
+  .and('The action is aborted silently.')
   .and('The action does not count as failed, and no error is shown to the user.')
   .run(async (_) => {
     const calls: string[] = [];
@@ -101,7 +102,7 @@ Bdd(feature)
       initialState: new State(0),
       logger: logger,
       errorObserver: ({ error }) => {
-        calls.push('errorObserver');
+        calls.push(`errorObserver: ${error.name}`);
         return error;
       },
     });
@@ -113,7 +114,7 @@ Bdd(feature)
       }
 
       wrapError(error: any) {
-        calls.push('wrapError');
+        calls.push(`wrapError: ${error.name}`);
         return error;
       }
     }
@@ -122,7 +123,9 @@ Bdd(feature)
     const status = await store.dispatchAndWait(new AbortWithWrapError());
 
     expect(status.isDispatchAborted).toBe(true);
-    expect(calls).toEqual([]);
+    expect(status.originalError).toBeInstanceOf(AbortDispatchException);
+    expect(status.wrappedError).toBeNull();
+    expect(calls).toEqual(['wrapError: AbortDispatchException', 'errorObserver: AbortDispatchException']);
     expect(store.isFailed(AbortWithWrapError)).toBe(false);
     expect(store.exceptionFor(AbortWithWrapError)).toBeNull();
     expect(store.userExceptionsQueue.length).toBe(0);
