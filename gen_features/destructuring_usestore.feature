@@ -10,6 +10,8 @@ Feature: Destructuring useStore
       | dispatchSync              |
       | dispatchAndWait           |
       | dispatchWhen              |
+      | dispatchAll               |
+      | dispatchAndWaitAll        |
       | waitCondition             |
       | waitActionCondition       |
       | waitAllActions            |

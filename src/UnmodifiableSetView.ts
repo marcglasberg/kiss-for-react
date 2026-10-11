@@ -21,7 +21,8 @@ export class UnmodifiableSetView<T> implements Set<T> {
   }
 
   forEach(callbackfn: (value: T, value2: T, set: Set<T>) => void, thisArg?: any): void {
-    return this._set.forEach(callbackfn, thisArg);
+    // Pass the view (not the wrapped set) as the third argument, so the callback can't modify the set.
+    this._set.forEach((value, value2) => callbackfn.call(thisArg, value, value2, this));
   }
 
   [Symbol.iterator](): ReturnType<Set<T>[typeof Symbol.iterator]> {

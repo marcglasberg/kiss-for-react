@@ -12,7 +12,9 @@ import { KissAction, ActionStatus } from './KissAction';
  * ```
  *
  * The component will rebuild only when the `name` changes, ignoring the
- * change in other parts of the state.
+ * change in other parts of the state. The selected value is compared with
+ * the previous one using `Object.is`, like React does. So `NaN` is equal
+ * to `NaN`, but `0` is different from `-0`.
  *
  * Note: You can use `useSelect` and `useSelector` interchangeably.
  * Prefer `useSelect` because it's shorter.
@@ -171,6 +173,9 @@ export function useAllState<St>(): St {
  * - `dispatch` - Dispatches the action to the Redux store, to potentially change the state.
  * - `dispatchAndWait` - Dispatches an action and returns a promise that resolves when the action finishes.
  * - `dispatchSync` - Same as the regular dispatch, except it throws an error if the action is ASYNC.
+ * - `dispatchWhen` - Waits until the state is in a given condition, and then dispatches an action.
+ * - `dispatchAll` - Dispatches all given actions in parallel.
+ * - `dispatchAndWaitAll` - Dispatches all given actions, and returns a promise that resolves when they all finish.
  * - `waitCondition` - Waits until the state is in a given condition.
  * - `waitActionCondition` - Waits until the actions in progress meet a given condition.
  * - `waitAllActions` - Waits until the given actions are NOT in progress, or no actions are in progress.
@@ -185,6 +190,8 @@ export function useAllState<St>(): St {
  * store.dispatch(new MyAction());
  * await store.dispatchAndWait(new MyAction());
  * store.dispatchSync(new MyAction());
+ * store.dispatchAll([new BuyAction('IBM'), new SellAction('TSLA')]);
+ * await store.dispatchAndWaitAll([new BuyAction('IBM'), new SellAction('TSLA')]);
  * await store.waitCondition((state) => state.user.name === "Bill", { timeoutMillis: 1000 });
  * await store.waitAllActionTypes([BuyAction, SellAction]);
  * ```
@@ -199,6 +206,9 @@ export function useAllState<St>(): St {
  * - `useDispatch()` - Hook equivalent to `useStore().dispatch`
  * - `useDispatchAndWait` - Hook equivalent to `useStore().dispatchAndWait`
  * - `useDispatchSync` - Hook equivalent to `useStore().dispatchSync`
+ * - `useDispatchWhen` - Hook equivalent to `useStore().dispatchWhen`
+ * - `useDispatchAll` - Hook equivalent to `useStore().dispatchAll`
+ * - `useDispatchAndWaitAll` - Hook equivalent to `useStore().dispatchAndWaitAll`
  */
 export function useStore(): StoreDispatchers<any> {
   const store = useStoreFromContext<any>();
@@ -669,7 +679,7 @@ function useSubscribedSelector<In, T, R>(
     if (isInputImmutable && getInput() === renderedInputRef.current) return;
     try {
       const [latestSelector, renderedValue] = (ref.current as any).selectorAndValueAndSetValue;
-      if (latestSelector(getInput()) !== renderedValue) forceRender();
+      if (!Object.is(latestSelector(getInput()), renderedValue)) forceRender();
     } catch {
       forceRender();
     }
@@ -714,6 +724,8 @@ function useStoreFromContext<St>(): Store<St> {
  * store.dispatch(new MyAction());
  * store.dispatchSync(new MyAction());
  * await store.dispatchAndWait(new MyAction());
+ * store.dispatchAll([new MyAction(), new OtherAction()]);
+ * await store.dispatchAndWaitAll([new MyAction(), new OtherAction()]);
  * ```
  */
 class StoreDispatchers<St> {
@@ -724,6 +736,8 @@ class StoreDispatchers<St> {
     this.dispatchWhen = this.dispatchWhen.bind(this);
     this.dispatchAndWait = this.dispatchAndWait.bind(this);
     this.dispatchSync = this.dispatchSync.bind(this);
+    this.dispatchAll = this.dispatchAll.bind(this);
+    this.dispatchAndWaitAll = this.dispatchAndWaitAll.bind(this);
     this.waitCondition = this.waitCondition.bind(this);
     this.waitActionCondition = this.waitActionCondition.bind(this);
     this.waitAllActions = this.waitAllActions.bind(this);
@@ -796,6 +810,52 @@ class StoreDispatchers<St> {
    */
   dispatchSync(action: KissAction<any>): void {
     return this.store.dispatchSync(action);
+  }
+
+  /**
+   * Dispatches all given actions in parallel, applying their reducer, and possibly changing
+   * the store state. It returns the same list of actions, so that you can instantiate them
+   * inline, but still get a list of them.
+   *
+   * ```ts
+   * let actions = store.dispatchAll([new BuyAction('IBM'), new SellAction('TSLA')]);
+   * ```
+   *
+   * See also:
+   * - `dispatch` which dispatches both sync and async actions.
+   * - `dispatchAndWait` which dispatches both sync and async actions, and returns a Promise.
+   * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
+   * - `dispatchSync` which dispatches sync actions, and throws if the action is async.
+   */
+  dispatchAll(actions: KissAction<any>[]): KissAction<any>[] {
+    return this.store.dispatchAll(actions);
+  }
+
+  /**
+   * Dispatches all given actions in parallel, applying their reducers, and possibly changing
+   * the store state. The actions may be sync or async. It returns a Promise that resolves when
+   * ALL actions finish, with the same list of actions.
+   *
+   * ```ts
+   * let actions = await store.dispatchAndWaitAll([new BuyAction('IBM'), new SellAction('TSLA')]);
+   * ```
+   *
+   * Note: While the state change from the action's reducers will have been applied when the
+   * Promise resolves, other independent processes that the action may have started may still
+   * be in progress.
+   *
+   * If some actions fail with an error that is not swallowed (see `dispatchAndWait`), all
+   * actions are still dispatched and allowed to finish. Only then the Promise rejects, with
+   * the error of the first failed action in the list.
+   *
+   * See also:
+   * - `dispatch` which dispatches both sync and async actions.
+   * - `dispatchAndWait` which dispatches both sync and async actions, and returns a Promise.
+   * - `dispatchSync` which dispatches sync actions, and throws if the action is async.
+   * - `dispatchAll` which dispatches all given actions in parallel.
+   */
+  dispatchAndWaitAll(actions: KissAction<any>[]): Promise<KissAction<any>[]> {
+    return this.store.dispatchAndWaitAll(actions);
   }
 
   /**

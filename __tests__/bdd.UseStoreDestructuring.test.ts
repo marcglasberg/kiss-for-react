@@ -36,6 +36,8 @@ function renderAndDestructure(store: Store<State>): Record<string, (...args: any
       dispatchSync,
       dispatchAndWait,
       dispatchWhen,
+      dispatchAll,
+      dispatchAndWaitAll,
       waitCondition,
       waitActionCondition,
       waitAllActions,
@@ -48,6 +50,8 @@ function renderAndDestructure(store: Store<State>): Record<string, (...args: any
       dispatchSync,
       dispatchAndWait,
       dispatchWhen,
+      dispatchAll,
+      dispatchAndWaitAll,
       waitCondition,
       waitActionCondition,
       waitAllActions,
@@ -82,6 +86,16 @@ const callAndCheck: Record<string, (method: (...args: any[]) => any, store: Stor
     dispatchWhen(new Inc(), (state: State) => state.count === 0, { timeoutMillis: 0 });
     await store.waitCondition((state) => state.count === 1, { timeoutMillis: 1000 });
     expect(store.state.count).toBe(1);
+  },
+  dispatchAll: async (dispatchAll, store) => {
+    const actions = [new Inc(), new Inc()];
+    expect(dispatchAll(actions)).toBe(actions);
+    expect(store.state.count).toBe(2);
+  },
+  dispatchAndWaitAll: async (dispatchAndWaitAll, store) => {
+    const actions = [new Inc(), new Inc()];
+    expect(await dispatchAndWaitAll(actions)).toBe(actions);
+    expect(store.state.count).toBe(2);
   },
   waitCondition: async (waitCondition, store) => {
     const promise = waitCondition((state: State) => state.count === 1, { timeoutMillis: 1000 });
@@ -124,6 +138,8 @@ Bdd(feature)
   .example(val('Method', 'dispatchSync'))
   .example(val('Method', 'dispatchAndWait'))
   .example(val('Method', 'dispatchWhen'))
+  .example(val('Method', 'dispatchAll'))
+  .example(val('Method', 'dispatchAndWaitAll'))
   .example(val('Method', 'waitCondition'))
   .example(val('Method', 'waitActionCondition'))
   .example(val('Method', 'waitAllActions'))

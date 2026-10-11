@@ -348,7 +348,7 @@ export class Store<St> {
           setValue(currentValue);
           return;
         }
-        if (newSelectedValue !== currentValue) {
+        if (!Object.is(newSelectedValue, currentValue)) {
           setValue(newSelectedValue);
           hookRef.current.selectorAndValueAndSetValue[1] = newSelectedValue; // Update the current value in the ref
         }
@@ -382,7 +382,7 @@ export class Store<St> {
           setValue(currentValue);
           return;
         }
-        if (newSelectedValue !== currentValue) {
+        if (!Object.is(newSelectedValue, currentValue)) {
           setValue(newSelectedValue);
           hookRef.current.selectorAndValueAndSetValue[1] = newSelectedValue; // Update the current value in the ref
         }
@@ -673,6 +673,13 @@ export class Store<St> {
   private readonly _actionsInProgress: Set<KissAction<St>>;
 
   /**
+   * The non-reentrant actions that are running, which hold their non-reentrant keys.
+   * Unlike `_actionsInProgress`, an action only leaves this set after its `after()` method
+   * runs, even if its state was already applied.
+   */
+  private readonly _nonReentrantActionsRunning: Set<KissAction<St>>;
+
+  /**
    * Async actions that we may put into `_asyncActionsInProgress`.
    * This helps to know when to rebuild to make `isWaiting` work.
    */
@@ -880,6 +887,7 @@ export class Store<St> {
     this._stateObserver = stateObserver;
     this.userExceptionsQueue = [];
     this._actionsInProgress = new Set();
+    this._nonReentrantActionsRunning = new Set();
     this._awaitableActions = new Set();
     this._failedActions = new Map<new (...args: any[]) => KissAction<St>, KissAction<St>>();
     this._actionsWeCanCheckFailed = new Set();
@@ -888,7 +896,8 @@ export class Store<St> {
 
     if (this._processPersistence != null) {
       this._processPersistence.onError =
-        (error: any, originalError: any) => this._processPersistorError(error, originalError);
+        (error: any, originalError: any, observeOnly: boolean) =>
+          this._processPersistorError(error, originalError, observeOnly);
       this._processPersistence.readInitialState(this, initialState).catch(() => {});
     }
 
@@ -1077,6 +1086,11 @@ export class Store<St> {
    * actions are still dispatched and allowed to finish. Only then the Promise rejects, with
    * the error of the first failed action in the list.
    *
+   * This is also true when the dispatch of an action throws right away (for example, when the
+   * action was already dispatched, or the store is not ready): the other actions are still
+   * dispatched and allowed to finish, and that error counts as the error of that action.
+   * Note `dispatchAndWaitAll` itself never throws, but returns a Promise that rejects.
+   *
    * See also:
    * - `dispatch` which dispatches both sync and async actions.
    * - `dispatchAndWait` which dispatches both sync and async actions, and returns a Promise.
@@ -1086,7 +1100,14 @@ export class Store<St> {
   async dispatchAndWaitAll(actions: KissAction<St>[]): Promise<KissAction<St>[]> {
     const promises: Promise<ActionStatus> [] = [];
     for (const action of actions) {
-      promises.push(this.dispatchAndWait(action));
+      // If the dispatch throws right away (for example, the action was already dispatched,
+      // or the store is not ready), we keep its error as a rejected promise, in the action's
+      // position, so that the other actions are still dispatched and awaited.
+      try {
+        promises.push(this.dispatchAndWait(action));
+      } catch (error) {
+        promises.push(Promise.reject(error));
+      }
     }
 
     // All actions are dispatched and finish, even if some of them fail.
@@ -1232,12 +1253,12 @@ export class Store<St> {
 
   // Returns true if a non-reentrant action with the same non-reentrant key as the given one is
   // in progress. Saves the key in the action, so that later dispatches can compare against it.
-  // The key is released when the action leaves the set of actions in progress.
+  // The key is released when the action finishes, after its `after()` method runs.
   private _isNonReentrantKeyRunning(action: KissAction<St>): boolean {
     const key = action.computeNonReentrantKey();
     action._nonReentrantKey = key;
-    for (const other of this._actionsInProgress) {
-      if (Store._isNonReentrant(other) && _isSameNonReentrantKey(other._nonReentrantKey, key))
+    for (const other of this._nonReentrantActionsRunning) {
+      if (_isSameNonReentrantKey(other._nonReentrantKey, key))
         return true;
     }
     return false;
@@ -1538,6 +1559,7 @@ export class Store<St> {
     // Note: We do this BEFORE notifying the UI, so that a single rebuild sees both changes.
     // Otherwise, the `isWaiting` selectors would still see the action as not in progress.
     this._actionsInProgress.add(action);
+    if (Store._isNonReentrant(action)) this._nonReentrantActionsRunning.add(action);
 
     // The action just entered the set of actions in progress, so we check the wait conditions.
     this._checkAllActionConditions(action);
@@ -1737,6 +1759,10 @@ export class Store<St> {
     if (action._freshMillis !== null) this._releaseFreshKey(action);
     if (action.sequential) this._releaseSequentialQueue(action);
     if (action._ignoreOldEntry !== null) this._releaseIgnoreOldEntry(action);
+
+    // Releases the non-reentrant key. This is only done here, after `after()`, and not when the
+    // state is applied (which removes the action from `_actionsInProgress` before `after()`).
+    this._nonReentrantActionsRunning.delete(action);
 
     // Remove the wait state for the action in progress.
     // Note: If the state was applied, this was already removed and the UI updated.
@@ -2609,13 +2635,14 @@ export class Store<St> {
   // Processes the errors of the Persistor. The `error` was already processed by the persistor's
   // `wrapError`, and `originalError` is the error before it. The error is given to the
   // `errorObserver`, with a `null` action. Then:
+  // - If `observeOnly` is true, nothing else is done, since the error is thrown by `logOut`.
   // - If it's a `UserException`, it's shown to the user.
   // - If it's `null`, it's swallowed.
   // - Otherwise, it's thrown as an unhandled promise rejection, since there is no `dispatch`
   //   call to throw it to.
-  private _processPersistorError(error: any, originalError: any) {
+  private _processPersistorError(error: any, originalError: any, observeOnly: boolean) {
     if (this._errorObserver) error = this._observeError(error, originalError, null);
-    if (error === null) return;
+    if (observeOnly || (error === null)) return;
 
     if (error instanceof UserException) {
       if (error.ifOpenDialog) {
@@ -2759,6 +2786,27 @@ export class Store<St> {
    *
    * If the store has no persistor, logOut does the same, except deleting and persisting.
    *
+   * The store state is always changed to the initial-state, even if deleting the persisted
+   * state fails, and logOut then still tries to persist the initial-state. If deleting or
+   * persisting fails, the error is given to the `errorObserver` (with a `null` action), so it
+   * can be logged, and when logOut finishes, it rejects with the error. If both fail, it rejects
+   * with the delete error. In this case, the old user's data may still be in the persistence,
+   * so you should check if logOut rejected, and if so, tell the user it was not possible to log
+   * out correctly. For example:
+   *
+   * ```ts
+   * try {
+   *   await store.logOut({ initialState: AppState.initialState() });
+   *   goToLoginScreen();
+   * } catch (error) {
+   *   goToLogOutFailedScreen(error);
+   * }
+   * ```
+   *
+   * Note the save errors are processed by `Persistor.wrapError` first, and if it returns `null`,
+   * the save doesn't count as failed. The errors the persistor reports with `Persistor.addError`
+   * are given to the `errorObserver` as usual, and don't make logOut reject.
+   *
    * Throws a `StoreException` if called while the persisted state is still being read at
    * startup (before `store.ready()` resolves). In this case, nothing is changed.
    */
@@ -2794,6 +2842,9 @@ export class Store<St> {
     this._logOutsRunning++;
     this.clearInternalActionProps();
 
+    // The error logOut throws when it finishes, if deleting or persisting failed.
+    let failure: { error: any } | null;
+
     try {
       // If the state is currently being persisted, we can't delete it right now.
       await persistence?._waitWhilePersisting();
@@ -2810,8 +2861,9 @@ export class Store<St> {
         .catch(() => {
         });
 
-      // Delete the old persisted state.
-      await persistence?.deleteState();
+      // Delete the old persisted state. If it fails, the error is given to the `errorObserver`,
+      // and logOut goes on, so that the store state is still reset. It's thrown at the end.
+      const deleteFailure = await persistence?._deleteLogOutState() ?? null;
 
       // Synchronously change the store state to the initial-state. This is done even if the
       // app shut down the store. Since a logOut is running, this doesn't start a persistence process.
@@ -2822,8 +2874,12 @@ export class Store<St> {
         this._isApplyingLogOutState = false;
       }
 
-      // Persist the new initial-state.
-      await persistence?._persistLogOutState(initialState);
+      // Persist the new initial-state. Even if deleting failed, since this may overwrite the old
+      // persisted state. If it fails, the error is given to the `errorObserver`.
+      const persistFailure = await persistence?._persistLogOutState(initialState) ?? null;
+
+      // If both failed, the delete error is thrown, since the old persisted state may be there.
+      failure = deleteFailure ?? persistFailure;
     }
       //
     finally {
@@ -2833,6 +2889,8 @@ export class Store<St> {
       // Persistence resumes, unless the app paused the persistor.
       persistence?._endLogOut();
     }
+
+    if (failure !== null) throw failure.error;
   }
 
   /**

@@ -31,8 +31,10 @@ export class ProcessPersistence<St> {
    * while reading the persisted state, and the errors added with `Persistor.addError`.
    * The `originalError` is the error before `Persistor.wrapError` (or the same error, if it
    * didn't go through `wrapError`). If not set, the errors are logged with `Store.log()`.
+   * The `observeOnly` is true when the error is also thrown to the caller (by `logOut`), so it
+   * should only be observed (given to the `errorObserver`), and not thrown again.
    */
-  onError: ((error: any, originalError: any) => void) | null = null;
+  onError: ((error: any, originalError: any, observeOnly: boolean) => void) | null = null;
 
   constructor(persistor: Persistor<St>, lastPersistedState: St | null) {
     this.persistor = persistor;
@@ -127,10 +129,10 @@ export class ProcessPersistence<St> {
   /**
    * Gives the error to `onError`, or logs it if `onError` is not set.
    */
-  private reportError(error: any, originalError: any = error) {
+  private reportError(error: any, originalError: any = error, observeOnly: boolean = false) {
     if (this.onError) {
       try {
-        this.onError(error, originalError);
+        this.onError(error, originalError, observeOnly);
       } catch (_error) {
         this.log('Error processing a persistence error:' + _error + '.');
       }
@@ -256,11 +258,28 @@ export class ProcessPersistence<St> {
   }
 
   /**
-   * For Kiss internal use only. Called by the store during `logOut`, to persist the initial-state.
-   * Note this is done even if the persistor is paused.
+   * For Kiss internal use only. Called by the store during `logOut`, to delete the persisted
+   * state. If it fails, the error is reported (only observed, since logOut throws it), and
+   * returned. Returns `null` if it succeeded.
    */
-  _persistLogOutState(initialState: St): Promise<void> {
-    return this._persist(new Date(), initialState);
+  async _deleteLogOutState(): Promise<{ error: any } | null> {
+    try {
+      await this.deleteState();
+      return null;
+    } catch (error) {
+      this.reportError(error, error, true);
+      return { error };
+    }
+  }
+
+  /**
+   * For Kiss internal use only. Called by the store during `logOut`, to persist the initial-state.
+   * Note this is done even if the persistor is paused. If it fails, the error (after
+   * `Persistor.wrapError`) is reported (only observed, since logOut throws it), and returned.
+   * Returns `null` if it succeeded, or if `wrapError` swallowed the error.
+   */
+  _persistLogOutState(initialState: St): Promise<{ error: any } | null> {
+    return this._persist(new Date(), initialState, true);
   }
 
   /**
@@ -373,7 +392,14 @@ export class ProcessPersistence<St> {
 
   // Never rejects. A `persistDifference` that throws synchronously, or returns a rejected
   // promise, is handled the same way: its error is reported, and the state is not saved.
-  private async _persist(now: Date, newState: St): Promise<void> {
+  /**
+   * Returns the error (after `Persistor.wrapError`) if the save failed, or `null` if it
+   * succeeded, or if `wrapError` swallowed the error. If `observeOnly` is true, the error is
+   * only observed, since the caller throws it.
+   */
+  private async _persist(now: Date, newState: St, observeOnly: boolean = false)
+    : Promise<{ error: any } | null> {
+    let failure: { error: any } | null = null;
     this.isPersisting = true;
     this.lastPersistTime = now;
     this.isANewStateAvailable = false;
@@ -399,7 +425,10 @@ export class ProcessPersistence<St> {
         // If `wrapError` throws, the thrown error is used instead.
         processedError = _error;
       }
-      if (processedError !== null && processedError !== undefined) this.reportError(processedError, error);
+      if (processedError !== null && processedError !== undefined) {
+        this.reportError(processedError, error, observeOnly);
+        failure = { error: processedError };
+      }
     }
       //
     finally {
@@ -415,6 +444,8 @@ export class ProcessPersistence<St> {
         this.process(null, this.newestState as St);
       }
     }
+
+    return failure;
   }
 
   /**
@@ -468,7 +499,7 @@ export class ProcessPersistence<St> {
 
     if (this.isInit && (this.lastPersistedState !== this.newestState)) {
       const now = new Date();
-      return this._persist(now, this.newestState as St); // TypeScript forced cast
+      await this._persist(now, this.newestState as St); // TypeScript forced cast
     }
   }
 

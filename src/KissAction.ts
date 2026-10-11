@@ -677,7 +677,9 @@ export abstract class KissAction<St> {
    * to share the same non-reentrant key. Check the documentation of that method for more
    * information.
    *
-   * The key is released when the action finishes, with or without errors.
+   * The key is released when the action finishes, with or without errors, after its `after()`
+   * method runs. This means dispatching the same action from its own `after()` method is
+   * aborted. To run it again when it finishes, dispatch it from where you awaited it instead.
    *
    * Notes:
    * - It can be combined with `retry` and `checkInternet`. With `retry`, the key is only

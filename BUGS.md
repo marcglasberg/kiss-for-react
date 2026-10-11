@@ -31,24 +31,24 @@
 | 8 | Medium | useObject | `useObject` returns a stale value when the selector returns a `Map`, `Set` or `Date`. | Reproduced | Yes |
 | 9 | Medium | useStore | `const { dispatch } = useStore()` crashes when `dispatch` is called. | Reproduced | Yes |
 | 10 | Medium | Wait helpers (docs) | The documented `await this.waitAllActions([])` inside an action always times out. | Reproduced | Yes |
-| 11 | Low | dispatchAndWaitAll | Stops dispatching the rest if one `dispatchAndWait` throws synchronously. | Reproduced | No |
+| 11 | Low | dispatchAndWaitAll | Stops dispatching the rest if one `dispatchAndWait` throws synchronously. | Reproduced | Yes |
 | 12 | Low | ActionStatus | An action that fails with `undefined` is "completed OK", and `throw null` is swallowed. | Reproduced |Yes |
 | 13 | Low | retry / OptimisticCommand | An invalid `retry` option leaves the action half-dispatched: `after()` never runs. | Reproduced | Yes |
 | 14 | Low | retry / dispatchSync | After `dispatchSync` throws, the retry loop keeps calling `reduce()`. | Reproduced | Yes |
-| 15 | Low | nonReentrant | The non-reentrant key is released before `after()`, but only if the state changed. | Reproduced | No |
+| 15 | Low | nonReentrant | The non-reentrant key is released before `after()`, but only if the state changed. | Reproduced | Yes |
 | 16 | Low | OptimisticCommand | If applying the server response throws, the state is rolled back as if the command failed. | Reproduced | Yes |
 | 17 | Low | OptimisticCommand | A misconfigured command is silently aborted, instead of throwing, when its key is already running. | Reproduced | Yes |
 | 18 | Low | actionObserver | If the `actionObserver` throws when the action finishes, `dispatchAndWait` never settles. | Reproduced | Yes |
 | 19 | Low | logOut | `store.logOut()` does nothing when there is no persistor. | Reproduced | Yes |
 | 20 | Low | logOut | `logOut()` un-pauses a paused persistor, and un-shuts a shut-down store. | Reproduced | Yes |
-| 21 | Low | logOut | If `deleteState` fails, the old user's state stays in the store and is saved again. | Reproduced | No |
+| 21 | Low | logOut | If `deleteState` fails, the old user's state stays in the store and is saved again. | Reproduced | Yes |
 | 22 | Low | Persistence | `persistAndPausePersistor()` resolves even when the save failed. | Reproduced | Not a bug |
 | 23 | Low | Persistence | A failed `saveInitialState` still counts as persisted. | Reproduced | No |
 | 24 | Low | ESSerializer | A read-only property holding a class instance or a `Map` is restored wrongly. | Reproduced | Yes |
 | 25 | Low | ESSerializer | A saved field that is now a getter-only property makes reading throw, and the saved state is deleted. | Reproduced | Yes |
-| 26 | Low | useStore | `useStore()` has no `dispatchAll` and no `dispatchAndWaitAll`. | Reproduced | No |
-| 27 | Low | useSelect | A selector that returns `NaN` re-renders on every state change. | Reproduced | No |
-| 28 | Low | Wait helpers | `UnmodifiableSetView.forEach` hands out the real set, so the store's actions can be deleted. | Reproduced | No |
+| 26 | Low | useStore | `useStore()` has no `dispatchAll` and no `dispatchAndWaitAll`. | Reproduced | Yes |
+| 27 | Low | useSelect | A selector that returns `NaN` re-renders on every state change. | Reproduced | Yes |
+| 28 | Low | Wait helpers | `UnmodifiableSetView.forEach` hands out the real set, so the store's actions can be deleted. | Reproduced | Yes |
 | 29 | Low | Wait helpers | A timeout larger than about 24.8 days fires after about 1 ms. | Reproduced | No |
 | 30 | Low | dispatchWhen | "If the condition is already true, the action is dispatched right away" is not true: it's dispatched in a later microtask. | Reproduced | No |
 | 31 | Low | Types | `actionsInProgress()` is typed `Set`, but lacks the ES2025 `Set` methods (`union`, etc.). | Reproduced | No |
@@ -149,14 +149,8 @@
 - **Docs say:** "all actions are still dispatched and allowed to finish. Only then the Promise rejects, with the error of the first failed action" (`src/Store.tsx:838-840`).
 - **What happens:** if one `dispatchAndWait` throws synchronously (the action was already dispatched, the store is not ready, or a mock throws), the later actions are never dispatched. The promises of the earlier actions are not awaited either, so their errors become unhandled rejections.
 - **Cause:** no `try/catch` around `this.dispatchAndWait(action)` in `src/Store.tsx:850-852`.
-- **How to trigger:**
-  ```ts
-  const used = new Inc();
-  store.dispatch(used);
-  const later = new AsyncInc();
-  await store.dispatchAndWaitAll([new AsyncFail(), used, later]).catch(() => {});
-  expect(later.status.isDispatched).toBe(true);  // Fails. And AsyncFail's error is an unhandled rejection.
-  ```
+- **Fixed:** `dispatchAndWaitAll` now catches a synchronous throw of `dispatchAndWait`, and keeps it as a rejected promise in that action's position. So all the other actions are still dispatched and awaited, and the Promise rejects with the error of the first failed action in the list, whether it failed while running or when dispatched. The JSDoc now says so.
+- **How to trigger:** see the BDDs in `__tests__/bdd.DispatchAndWaitAllSyncThrow.test.ts`. Before the fix, these failed: the actions after one whose dispatch throws right away (already dispatched, mocked by a function that throws, or mocked as an action that was already dispatched) were never dispatched; the same with the same action twice in the list; the Promise rejected with the dispatch error even when an earlier action in the list failed while running; and that earlier action's error was an unhandled rejection. The BDD "returns a rejected Promise when the store is not ready" already passed, and guards that behavior.
 
 ## 12. An action that fails with `undefined` is "completed OK", and `throw null` is swallowed (Low)
 
@@ -194,18 +188,8 @@
 
   So a polling action that re-dispatches itself in `after()` works or not, depending on whether the poll changed the state.
 - **Cause:** `_registerState` deletes the action from `_actionsInProgress` (`src/Store.tsx:1622`) before `_processWrapsFinally` calls `after()` (`:1231`). The unchanged and error paths delete it only after `after()` (`:1243`).
-- **How to trigger:**
-  ```ts
-  class NR extends KissAction<number> {
-    nonReentrant = true;
-    constructor(readonly n: number) { super(); }
-    async reduce() { log.push('reduce ' + this.n); await flush(); return (s: number) => s + 1; }
-    after() { if (this.n === 1) this.dispatch(new NR(2)); }
-  }
-  await store.dispatchAndWait(new NR(1));
-  await flush(5);
-  expect(log).not.toContain('reduce 2');  // Fails. With `return null` in reduce, it passes.
-  ```
+- **Fixed:** the non-reentrant key no longer depends on `_actionsInProgress`. The store keeps the non-reentrant actions that are running in a separate set (`_nonReentrantActionsRunning`), and only removes the action from it in `_processWrapsFinally`, after `after()` runs, whatever the reducer did. So, as documented, the key is released when the action finishes, and dispatching the same action from its own `after()` is always aborted. This applies to everything that uses the non-reentrant keys: `nonReentrant` actions, `OptimisticCommand`s and `unlimitedRetryCheckInternet` actions. `isWaiting` is unchanged: it still becomes `false` when the state is applied, so the UI is rebuilt once, with the new state and without the spinner. The JSDoc of `nonReentrant` now says the key is released after `after()`, so re-dispatching from `after()` is aborted.
+- **How to trigger:** see the BDDs in `__tests__/bdd.NonReentrantKeyReleasedAfterAfter.test.ts`. Before the fix, these failed: dispatching the same non-reentrant action from its `after()` ran it when the SYNC or ASYNC reducer changed the state; the same for an `unlimitedRetryCheckInternet` action, and for an `OptimisticCommand` dispatched from the `after()` of a non-reentrant action that shares its key; and dispatching the same action right after the state changed, before `after()` ran, also ran it. The other BDDs already passed, and guard the behavior: the dispatch from `after()` is aborted when the reducer returns `null` or fails, and when an `OptimisticCommand` dispatches a non-reentrant action with its key; an action with a different key does run from `after()`; and once the action finished, the same action can be dispatched again (for example, from the `actionObserver`).
 
 ## 16. `OptimisticCommand`: if applying the server response throws, the state is rolled back (Low)
 
@@ -260,6 +244,8 @@
   expect(store.state).toEqual({ a: 0 });  // Fails: {a: 7}.
   expect(persistor.stored).toBeNull();    // Fails: {a: 7}.
   ```
+- **Fixed:** the delete is now best effort, and resetting the store state always happens. If `deleteState()` throws, the error is given to the `errorObserver` (with a `null` action), and logOut goes on: it resets the store state to the initial-state, and still tries to persist the initial-state. If saving the initial-state fails (after `Persistor.wrapError`, and only if it didn't return `null`), that error also goes to the `errorObserver`. When logOut finishes, if the delete or the save failed, it rejects with the error (with the delete error, if both failed), since the old user's data may still be in the persistence. The app should check if logOut rejected, and if so tell the user it was not possible to log out correctly. A failed delete rejects even if the save works, since saving the initial-state can't be trusted to remove the old data: a custom persistor that saves differences may leave some behind. These errors are only observed: they are not also thrown as unhandled rejections, or shown as `UserException`s, since logOut throws them. Errors the persistor reports with `addError` don't make logOut reject. If the save failed, persistence tries again to save the initial-state when logOut finishes (unless the persistor is paused). See `Store._logOut`, and `ProcessPersistence._deleteLogOutState` and `_persistLogOutState`.
+- **How to trigger:** see the BDDs in `__tests__/bdd.LogOutFailures.test.ts`. All of them failed before the fix, except the two about errors that don't make logOut reject.
 
 ## 22. `persistAndPausePersistor()` resolves even when the save failed (Not a bug)
 
@@ -302,36 +288,24 @@
 - **Docs say:** the `useStore` JSDoc says "You can get the store to use all dispatch and wait methods" (`src/Hooks.tsx:122`). The ESLint plugin's `DISPATCH_METHODS` (`eslint-plugin/src/storeUsage.ts:18`) includes both.
 - **What happens:** `useStore().dispatchAll` and `useStore().dispatchAndWaitAll` are `undefined`.
 - **Cause:** `StoreDispatchers` (`src/Hooks.tsx:672`) doesn't have them.
-- **How to trigger:**
-  ```tsx
-  const C = () => { kind = typeof useStore().dispatchAll; return null; };
-  expect(kind).toBe('function');  // Fails: 'undefined'.
-  ```
+- **Fixed:** `StoreDispatchers` (what `useStore()` returns) now has `dispatchAll` and `dispatchAndWaitAll`, which call the store's methods. They are bound in the constructor, like the other methods, so they also work when destructured. The JSDoc of `useStore` now lists them (and `dispatchWhen`), and the hooks `useDispatchWhen`, `useDispatchAll` and `useDispatchAndWaitAll`.
+- **How to trigger:** see the BDDs in `__tests__/bdd.UseStoreDispatchAll.test.ts`, and the `dispatchAll` and `dispatchAndWaitAll` examples in `__tests__/bdd.UseStoreDestructuring.test.ts`. Before the fix, all of these failed: they didn't compile (`Property 'dispatchAll' does not exist on type 'StoreDispatchers<any>'`), and with type-checking off they failed with `dispatchAll is not a function`. The BDDs check that, from `useStore()`: `dispatchAll` dispatches all actions and returns the same list; `dispatchAndWaitAll` resolves with the same list only after all actions finish; it rejects with the error of the first failed action in the list, only after all actions finish; and both work when destructured.
 
 ## 27. A `useSelect` selector that returns `NaN` re-renders on every state change (Low)
 
 - **Docs say:** "The component will rebuild only when the `name` changes, ignoring the change in other parts of the state" (`src/Hooks.tsx:14`).
 - **What happens:** since `NaN !== NaN`, the component re-renders on every state change. `useObject` and the `useDispatch` deps use `Object.is`, so they don't have this problem.
 - **Cause:** `newSelectedValue !== currentValue` in `src/Store.tsx:330, 364` and `src/Hooks.tsx:625`. It should use `Object.is`.
-- **How to trigger:**
-  ```tsx
-  // State is new State(NaN, 0). The component uses useSelect(s => s.a) and counts its renders.
-  act(() => store.dispatch(new IncB()));
-  act(() => store.dispatch(new IncB()));
-  expect(renders).toBe(1);  // Fails: 3.
-  ```
+- **Fixed:** the store, and the check `useSelect` does when it subscribes or commits, now compare the selected value with `Object.is`, like React does. So a selector that returns `NaN` only re-renders when the value really changes. This also means `0` and `-0` are now different values, so a change from `0` to `-0` re-renders, as it would with React's `useState`. The JSDoc of `useSelect` now says the values are compared with `Object.is`. The same change was made to the store hooks (`useIsWaiting`, `useIsFailed`, `useExceptionFor`), though their selectors can't return `NaN`.
+- **How to trigger:** see the BDDs in `__tests__/bdd.UseSelectNaN.test.ts`. Before the fix, these failed: a `useSelect` or `useSelector` selector that returns `NaN` re-rendered the component on every change to other parts of the state; it also rendered again when a child changed the state on mount, before the component subscribed to the store; and a change from `0` to `-0` didn't re-render. The BDDs where the selected value changes to or from `NaN` already passed, and guard that the component still re-renders when the value really changes.
 
 ## 28. `UnmodifiableSetView.forEach` hands out the real set (Low)
 
 - **Docs say:** "Your condition function should NOT try and modify the set of actions it got in the `actionsInProgress` parameter. If you do, Kiss will throw an error" (`src/Store.tsx:2090`). `UnmodifiableSetView` "prevents that set from being changed through the view" (`src/UnmodifiableSetView.ts:3`).
 - **What happens:** `forEach((x, _, set) => set.delete(x))` gets the store's own `_actionsInProgress`, and deletes from it with no error. The running action disappears from `isWaiting`. When it finishes, the wait conditions are not checked for it, so waits on it hang until they time out.
 - **Cause:** `src/UnmodifiableSetView.ts:23-25` calls `this._set.forEach(callbackfn, thisArg)` directly. It should wrap the callback, and pass the view as the third argument.
-- **How to trigger:**
-  ```ts
-  store.dispatch(new Slow());  // Async action, 30 ms.
-  store.actionsInProgress().forEach((x, _y, set) => set.delete(x));  // Doesn't throw.
-  expect(store.isWaiting(Slow)).toBe(true);  // Fails: false.
-  ```
+- **Fixed:** `UnmodifiableSetView.forEach` now wraps the callback, and passes the view itself as the third argument (and still passes `thisArg` as `this`). So deleting through that set throws, like deleting through the view does.
+- **How to trigger:** see the BDDs in `__tests__/bdd.ActionsInProgressUnmodifiable.test.ts`. Before the fix, both failed: deleting a running action through the set given by `forEach` didn't throw, and the set given to the callback was the store's own set, not the view. The BDDs also check that the action is still in progress, and that waiting for it still completes when it finishes.
 
 ## 29. A timeout larger than about 24.8 days fires after about 1 ms (Low)
 

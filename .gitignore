@@ -14,7 +14,8 @@ coverage/
 fixtures/dom/public/react-dom.js
 fixtures/dom/public/react.js
 test/the-files-to-test.generated.js
-*.log*
+# Rotated logs, like `app.log.1`. Not `*.log*`, since it ignores `bdd.LogOut.test.ts` (git on Windows ignores case).
+*.log.[0-9]*
 chrome-user-data
 *.sublime-project
 *.sublime-workspace
