@@ -22,6 +22,7 @@ import dispatchSyncAsyncAction from './rules/dispatchSyncAsyncAction.js';
 import expectWithoutWaiting from './rules/expectWithoutWaiting.js';
 import extendBaseAction from './rules/extendBaseAction.js';
 import incompatibleActionFeatures from './rules/incompatibleActionFeatures.js';
+import pollingActionRestartsPolling from './rules/pollingActionRestartsPolling.js';
 import pollingWithCaveat from './rules/pollingWithCaveat.js';
 import missingInitialState from './rules/missingInitialState.js';
 import missingKeyParams from './rules/missingKeyParams.js';
@@ -37,6 +38,8 @@ import reduceWithoutAwait from './rules/reduceWithoutAwait.js';
 import retryRequiresAsyncReduce from './rules/retryRequiresAsyncReduce.js';
 import retryWithoutNonReentrant from './rules/retryWithoutNonReentrant.js';
 import routeInState from './rules/routeInState.js';
+import sequentialDeadlock from './rules/sequentialDeadlock.js';
+import serverPushAssociatedAction from './rules/serverPushAssociatedAction.js';
 import staleStateAfterAwait from './rules/staleStateAfterAwait.js';
 import stateClassMustBeImmutable from './rules/stateClassMustBeImmutable.js';
 import storeInSelector from './rules/storeInSelector.js';
@@ -70,6 +73,8 @@ const rules = {
   'async-feature-in-sync-action': asyncFeatureInSyncAction,
   'incompatible-action-features': incompatibleActionFeatures,
   'polling-with-caveat': pollingWithCaveat,
+  'polling-action-restarts-polling': pollingActionRestartsPolling,
+  'server-push-associated-action': serverPushAssociatedAction,
   'extend-base-action': extendBaseAction,
   'avoid-abort-dispatch': avoidAbortDispatch,
   'avoid-wrap-reduce': avoidWrapReduce,
@@ -79,6 +84,7 @@ const rules = {
   'dispatch-before-store-ready': dispatchBeforeStoreReady,
   'dispatch-in-effect': dispatchInEffect,
   'dispatch-and-wait-unlimited-retries': dispatchAndWaitUnlimitedRetries,
+  'sequential-deadlock': sequentialDeadlock,
   'wait-fail-never-matches': waitFailNeverMatches,
   'wait-condition-without-timeout': waitConditionWithoutTimeout,
   'state-class-must-be-immutable': stateClassMustBeImmutable,
@@ -145,12 +151,15 @@ plugin.configs.recommended = {
     'kiss-for-react/async-feature-in-sync-action': 'warn',
     'kiss-for-react/incompatible-action-features': 'error',
     'kiss-for-react/polling-with-caveat': 'error',
+    'kiss-for-react/polling-action-restarts-polling': 'warn',
+    'kiss-for-react/server-push-associated-action': 'error',
     'kiss-for-react/extend-base-action': 'warn',
     'kiss-for-react/dispatch-sync-async-action': 'error',
     'kiss-for-react/dispatch-same-action-twice': 'error',
     'kiss-for-react/dispatch-before-store-ready': 'error',
     'kiss-for-react/dispatch-in-effect': 'warn',
     'kiss-for-react/dispatch-and-wait-unlimited-retries': 'warn',
+    'kiss-for-react/sequential-deadlock': 'error',
     'kiss-for-react/wait-fail-never-matches': 'warn',
     'kiss-for-react/wait-condition-without-timeout': 'warn',
     'kiss-for-react/state-class-must-be-immutable': 'warn',

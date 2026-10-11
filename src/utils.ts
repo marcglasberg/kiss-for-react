@@ -12,3 +12,20 @@ export const MAX_TIMEOUT_MILLIS = 2 ** 31 - 1;
 export function capTimeoutMillis(millis: number): number {
   return Math.min(millis, MAX_TIMEOUT_MILLIS);
 }
+
+/**
+ * Turns a value into a string, for logging. Never throws, so that a circular, BigInt,
+ * prototype-less or otherwise unserializable value can still be logged.
+ */
+export function describeValue(value: any): string {
+  if (typeof value === 'bigint') return `${value}n`;
+  try {
+    return JSON.stringify(value, (_key, v) => typeof v === 'bigint' ? `${v}n` : v);
+  } catch {
+    try {
+      return String(value);
+    } catch {
+      return '[object]';
+    }
+  }
+}

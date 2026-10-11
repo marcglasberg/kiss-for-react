@@ -1,5 +1,5 @@
 import { ClassOrEnum, ESSerializer } from './Esserializer';
-import { getClassKey, isClass } from './Esserializer/general';
+import { getClassKey, isClass, isNativeFunction } from './Esserializer/general';
 import { Persistor } from './Persistor';
 import { StoreException } from './StoreException';
 
@@ -48,7 +48,10 @@ import { StoreException } from './StoreException';
  *
  * A `typeName` is not inherited: subclasses need their own. The `ClassPersistor` throws a
  * `StoreException` when it's created, if it finds class names are minified and some class has
- * no `typeName`, or if two classes are saved under the same name.
+ * no `typeName`, or if two classes are saved under the same name. A class with no `typeName`
+ * whose name looks minified (one or two characters, starting with a lowercase letter, `_` or
+ * `$`, like `e` or `ab`) also makes it throw, even if the rest of the code is not minified.
+ * Built-in classes, like `Date`, are not checked, as they are not saved by their name.
  */
 export class ClassPersistor<St> extends Persistor<St> {
 
@@ -97,12 +100,21 @@ export class ClassPersistor<St> extends Persistor<St> {
     return ClassPersistor.name !== 'ClassPersistor';
   }
 
+  /**
+   * Returns true if the class name looks minified: one or two characters, starting with a
+   * lowercase letter, `_` or `$`, like `e`, `ab` or `$e`. Normal names, like `myState`, don't.
+   */
+  private static looksMinified(name: string | undefined): boolean {
+    return /^[a-z_$][\w$]?$/.test(name ?? '');
+  }
+
   private checkClassNames() {
     const minified = this.classNamesAreMinified();
     const classByKey = new Map<string, any>();
 
     for (const c of this.classesToSerialize) {
       if (typeof c !== 'function' || !isClass(c)) continue; // Enums.
+      if (isNativeFunction(c)) continue; // Built-in classes, like Date, are not saved by their name.
 
       const hasTypeName = Object.prototype.hasOwnProperty.call(c, 'typeName');
       const key = getClassKey(c);
@@ -113,7 +125,7 @@ export class ClassPersistor<St> extends Persistor<St> {
             `The static typeName of class "${c.name}" must be a non-empty string.`);
       }
       //
-      else if (minified || /^[a-z]/.test(key ?? ''))
+      else if (minified || ClassPersistor.looksMinified(key))
         throw new StoreException(
           `Class names are being minified (found class "${key}"), so the ClassPersistor can't ` +
           `save the state by class name. Either turn off class name minification in your ` +

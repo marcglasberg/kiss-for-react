@@ -2,6 +2,7 @@
 /* eslint-disable kiss-for-react/dispatch-same-action-twice */
 /* eslint-disable kiss-for-react/dispatch-before-store-ready */
 /* eslint-disable kiss-for-react/dispatch-and-wait-unlimited-retries */
+/* eslint-disable kiss-for-react/sequential-deadlock */
 /* eslint-disable kiss-for-react/wait-fail-never-matches */
 /* eslint-disable kiss-for-react/wait-condition-without-timeout */
 
@@ -27,7 +28,7 @@ import {
   useIsWaiting,
   useStore,
 } from 'kiss-for-react';
-import { Action, fetchName, Increment, LoadUser, SaveUser, State, store } from './state';
+import { Action, fetchName, Increment, LoadUser, saveName, SaveUser, State, store } from './state';
 
 declare const persistor: Persistor<State>;
 
@@ -482,4 +483,55 @@ function WaitConditionInComponent() {
     );
   };
   return { onBuy };
+}
+
+// ---------------------------------------------------------------------------------------------
+// sequential-deadlock
+
+class SaveItem extends Action {
+  sequential = true;
+
+  async reduce() {
+    await saveName(this.state.name);
+    return null;
+  }
+}
+
+class SaveAll extends Action {
+  sequential = true;
+
+  async reduce() {
+    // kiss-for-react/sequential-deadlock
+    // (`SaveItem` uses the same queue, so it only runs after `SaveAll` finishes: deadlock)
+    // Fix (suggestion): Will use `dispatch`, without waiting.
+    await this.dispatchAndWait(new SaveItem());
+
+    this.dispatch(new SaveItem()); // OK: runs after `SaveAll` finishes.
+    return null;
+  }
+}
+
+class LoadAndSave extends Action {
+  sequential = true;
+
+  async reduce() {
+    await this.store.dispatchAndWaitAll([
+      new LoadUser(), // OK: not sequential.
+      // kiss-for-react/sequential-deadlock
+      // (In a list, only the actions of the same queue are reported)
+      // Fix (suggestion): Will use `dispatchAll`, without waiting.
+      new SaveItem(),
+    ]);
+    return null;
+  }
+}
+
+class SaveInOtherQueue extends Action {
+  sequential = true;
+  sequentialKeyParams() { return 'users'; }
+
+  async reduce() {
+    await this.dispatchAndWait(new SaveItem()); // OK: `SaveItem` uses another queue.
+    return null;
+  }
 }

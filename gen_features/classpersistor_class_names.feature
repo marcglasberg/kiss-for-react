@@ -19,10 +19,41 @@ Feature: ClassPersistor class names
     When The ClassPersistor is created.
     Then It throws a StoreException that names the problem.
 
-  Scenario: The ClassPersistor throws when a class name starts with a lowercase letter.
-    Given A state class with no typeName, whose name starts with a lowercase letter, as a minifier would name it.
+  Scenario Outline: The ClassPersistor throws when a class name looks minified.
+    Given A state class with no typeName, named <Name>, as a minifier would name it.
     When The ClassPersistor is created.
     Then It throws a StoreException that names the problem.
+    Examples: 
+      | Name |
+      | e    |
+      | ab   |
+      | _e   |
+      | $e   |
+
+  Scenario Outline: A class whose name starts with a lowercase letter is accepted, when class names are not minified.
+    Given A state class with no typeName, named <Name>.
+    And Class names are not being minified.
+    When The ClassPersistor is created.
+    And The state is saved by the ClassPersistor, and then read back.
+    Then Creating the ClassPersistor does not throw.
+    And The state read back is an instance of the same class, with the same fields.
+    Examples: 
+      | Name     |
+      | myState  |
+      | todoItem |
+      | abc      |
+
+  Scenario Outline: A built-in class may be listed, also when class names are minified.
+    Given Class names are being minified.
+    And The listed classes are a state class with a typeName, and the built-in <Builtin>.
+    When The ClassPersistor is created.
+    And A state with a <Builtin> is saved by the ClassPersistor, and then read back.
+    Then Creating the ClassPersistor does not throw.
+    And The <Builtin> is read back.
+    Examples: 
+      | Builtin |
+      | Date    |
+      | Map     |
 
   Scenario: A subclass does not inherit the typeName of its parent class.
     Given A state class with a typeName.

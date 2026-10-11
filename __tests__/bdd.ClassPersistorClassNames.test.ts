@@ -1,5 +1,5 @@
 import { expect } from '@jest/globals';
-import { Bdd, Feature, FeatureFileReporter, reporter } from 'easy-bdd-tool-jest';
+import { Bdd, Feature, FeatureFileReporter, reporter, val } from 'easy-bdd-tool-jest';
 import { ClassPersistor, StoreException } from '../src';
 import { ESSerializer } from '../src/Esserializer';
 
@@ -62,14 +62,68 @@ Bdd(feature)
   });
 
 Bdd(feature)
-  .scenario('The ClassPersistor throws when a class name starts with a lowercase letter.')
-  .given('A state class with no typeName, whose name starts with a lowercase letter, as a minifier would name it.')
+  .scenario('The ClassPersistor throws when a class name looks minified.')
+  .given('A state class with no typeName, named <Name>, as a minifier would name it.')
   .when('The ClassPersistor is created.')
   .then('It throws a StoreException that names the problem.')
-  .run(async (_) => {
+  .example(val('Name', 'e'))
+  .example(val('Name', 'ab'))
+  .example(val('Name', '_e'))
+  .example(val('Name', '$e'))
+  .run(async (ctx) => {
     const storage = new MemoryStorage();
-    expect(() => storage.persistor<any>([makeClassNamedE()])).toThrow(StoreException);
-    expect(() => storage.persistor<any>([makeClassNamedE()])).toThrow(/minif/i);
+    const c = makeClassNamed(ctx.example.val('Name'));
+    expect(() => storage.persistor<any>([c])).toThrow(StoreException);
+    expect(() => storage.persistor<any>([c])).toThrow(/minif/i);
+  });
+
+Bdd(feature)
+  .scenario('A class whose name starts with a lowercase letter is accepted, when class names are not minified.')
+  .given('A state class with no typeName, named <Name>.')
+  .and('Class names are not being minified.')
+  .when('The ClassPersistor is created.')
+  .and('The state is saved by the ClassPersistor, and then read back.')
+  .then('Creating the ClassPersistor does not throw.')
+  .and('The state read back is an instance of the same class, with the same fields.')
+  .example(val('Name', 'myState'))
+  .example(val('Name', 'todoItem'))
+  .example(val('Name', 'abc'))
+  .run(async (ctx) => {
+    const c = makeClassNamed(ctx.example.val('Name'));
+    expect(c.name).toBe(ctx.example.val('Name'));
+    const storage = new MemoryStorage();
+
+    const persistor = storage.persistor<any>([c]);
+    const state = new c();
+    state.value = 7;
+    await persistor.saveInitialState(state);
+    const read = await persistor.readState();
+
+    expect(read).toBeInstanceOf(c);
+    expect(read.value).toBe(7);
+  });
+
+Bdd(feature)
+  .scenario('A built-in class may be listed, also when class names are minified.')
+  .given('Class names are being minified.')
+  .and('The listed classes are a state class with a typeName, and the built-in <Builtin>.')
+  .when('The ClassPersistor is created.')
+  .and('A state with a <Builtin> is saved by the ClassPersistor, and then read back.')
+  .then('Creating the ClassPersistor does not throw.')
+  .and('The <Builtin> is read back.')
+  .example(val('Builtin', 'Date'))
+  .example(val('Builtin', 'Map'))
+  .run(async (ctx) => {
+    const builtin = ctx.example.val('Builtin');
+    const value = builtin === 'Date' ? new Date(1234567) : new Map([['a', 1]]);
+    const storage = new MemoryStorage();
+
+    const persistor = storage.persistor<any>([Renamed, builtin === 'Date' ? Date : Map], true);
+    await persistor.saveInitialState(new Renamed(value as any));
+    const read = await persistor.readState();
+
+    expect(read).toBeInstanceOf(Renamed);
+    expect(read.value).toEqual(value);
   });
 
 Bdd(feature)
@@ -165,6 +219,15 @@ class MemoryStorage {
       classes,
     );
   }
+}
+
+/** Returns a new class with the given name, and a `value` field. */
+function makeClassNamed(name: string): any {
+  return {
+    [name]: class {
+      value = 0;
+    },
+  }[name];
 }
 
 /** Returns a new class whose name is "e", like a minified class. */

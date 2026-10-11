@@ -391,7 +391,7 @@ function optimisticSyncClass(classNode: ClassNode, context: Context, typeInfo: T
  * True if the class is a `ServerPush`. Without type information, its superclasses in this file
  * must reach `ServerPush`, or declare its methods.
  */
-function isServerPush(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+export function isServerPush(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
   if (typeInfo) return extendsClassNamed(instanceTypeOfClass(classNode, typeInfo), 'ServerPush', typeInfo.checker);
   const chain = classChain(classNode, context);
   return chain.end === 'ServerPush' || (chain.end === null &&

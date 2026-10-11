@@ -325,6 +325,32 @@
   a `TypeError`, and the saved state was deleted. A property with a setter in the class also
   keeps the value the constructor gave it, and its setter is not called.
 
+* The `ClassPersistor` now reads back a `Map` or `Set` filled by its constructor (a subclass,
+  or a read-only property) with only the saved entries. Before, the saved entries were added
+  to the ones the constructor created, so entries the user deleted came back after a restart.
+
+* The `ClassPersistor` now reads back an `Error` subclass with an empty message with an empty
+  message. Before, it came back as `"[object Object]"`, or as the default message of its
+  constructor.
+
+* The `ClassPersistor` now reads back an object with no prototype (made with
+  `Object.create(null)`) with no prototype. Before, it came back as a plain object, so keys
+  like `constructor` were inherited from `Object.prototype`.
+
+* The `ClassPersistor` now runs the constructor of a class with a static `toString()` method
+  when reading it back. Before, the constructor was skipped, so its private `#fields` were
+  missing, and reading them threw a `TypeError`.
+
+* The `PersistorPrinterDecorator` now prints the states it saves as JSON. Before, it printed
+  `[object Object]`, and for a state with no prototype it threw, so the state was never saved.
+  When the logger is `null`, it no longer describes the states at all.
+
+* The `ClassPersistor` no longer throws "Class names are being minified" for a class whose name
+  starts with a lowercase letter, like `myState`, in a build that is not minified. It still
+  throws for a class with no `typeName` whose name looks minified, like `e` or `ab`. Built-in
+  classes listed in `classesToSerialize`, like `Date`, are no longer checked, so they can be
+  listed when class names are minified.
+
 * `store.mocks.remove(actionType)` and `store.mocks.get(actionType)` now accept an action
   whose constructor has parameters, like `store.mocks.remove(AddAction)`. Before, it didn't
   compile. Also, the function returned by `get` now accepts that action type.

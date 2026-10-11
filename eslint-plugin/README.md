@@ -233,6 +233,8 @@ directories.
 - [`async-feature-in-sync-action`](#async-feature-in-sync-action) warning
 - [`incompatible-action-features`](#incompatible-action-features) error
 - [`polling-with-caveat`](#polling-with-caveat) error
+- [`polling-action-restarts-polling`](#polling-action-restarts-polling) warning
+- [`server-push-associated-action`](#server-push-associated-action) error
 - [`extend-base-action`](#extend-base-action) warning
 - [`avoid-abort-dispatch`](#avoid-abort-dispatch) opt-in warning
 - [`avoid-wrap-reduce`](#avoid-wrap-reduce) opt-in warning
@@ -243,7 +245,9 @@ directories.
 - [`dispatch-sync-async-action`](#dispatch-sync-async-action) error
 - [`dispatch-same-action-twice`](#dispatch-same-action-twice) error
 - [`dispatch-before-store-ready`](#dispatch-before-store-ready) error
+- [`dispatch-in-effect`](#dispatch-in-effect) warning
 - [`dispatch-and-wait-unlimited-retries`](#dispatch-and-wait-unlimited-retries) warning
+- [`sequential-deadlock`](#sequential-deadlock) error
 - [`wait-fail-never-matches`](#wait-fail-never-matches) warning
 - [`wait-condition-without-timeout`](#wait-condition-without-timeout) warning
 
@@ -977,6 +981,83 @@ tick action.
 
 ---
 
+### polling-action-restarts-polling
+
+A warning for a `createPollingAction()` that creates the action with `Poll.start`, `Poll.stop`
+or `Poll.runNowAndRestart`. The action dispatched on each tick must use `Poll.once` (or no
+`poll` at all), so that the ticks don't start, stop or restart the polling:
+
+```ts
+class PollPrices extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+  createPollingAction() { return new PollPrices(Poll.start); } // Warning
+  createPollingAction() { return new PollPrices(this.poll); }  // Warning
+  createPollingAction() { return new PollPrices(Poll.once); }  // OK
+  createPollingAction() { return new PollPrices(); }           // OK: `Poll.once` by default.
+  ...
+}
+```
+
+It checks the `new` expressions that `createPollingAction()` returns:
+
+- An argument that is `Poll.start`, `Poll.stop` or `Poll.runNowAndRestart`.
+- An argument that is `this.poll`, which is `Poll.start` or `Poll.runNowAndRestart` while the
+  polling runs.
+- A missing `poll` argument, when the default value of the class's `poll` parameter is not
+  `Poll.once`, like `constructor(readonly id: string, readonly poll = Poll.start)`. Also a class
+  whose `poll` property is not `Poll.once`. Without [type information](#type-information), the
+  class (and its superclasses) must be declared in the same file.
+
+Also reported in tests.
+
+Quick fix (suggestion): use `Poll.once`, or add it as the last argument (when `Poll` is
+imported, and `poll` is the next parameter).
+
+---
+
+### server-push-associated-action
+
+An error for a `ServerPush` whose key never matches the key of its associated action, the
+`OptimisticSyncWithPush` class that `associatedAction()` returns. Its pushes are then never
+matched with that action's requests:
+
+```ts
+class ToggleLike extends OptimisticSyncWithPush<State, boolean> {
+  optimisticSyncKeyParams() { return this.itemId; }
+  ...
+}
+
+class PushLike extends ServerPush<State> {
+  associatedAction() { return ToggleLike; }         // Error: no optimisticSyncKeyParams().
+  ...
+}
+
+class PushLike extends ServerPush<State> {
+  associatedAction() { return ToggleLike; }
+  optimisticSyncKeyParams() { return this.itemId; } // OK
+  ...
+}
+```
+
+By default, the key of an `OptimisticSyncWithPush` is
+`[this.constructor, this.optimisticSyncKeyParams()]`, and the key of a `ServerPush` is
+`[this.associatedAction(), this.optimisticSyncKeyParams()]`. They never match when:
+
+- `associatedAction()` returns an abstract class. The actions that are dispatched are of its
+  subclasses, so their keys use the subclasses. Not reported when the push overrides
+  `computeOptimisticSyncKey()`.
+- The associated action overrides `computeOptimisticSyncKey()`, and the push doesn't.
+- Only one of them overrides `optimisticSyncKeyParams()`. This is checked in the concrete
+  push classes, when neither overrides `computeOptimisticSyncKey()`.
+
+Methods inherited from superclasses count too. `associatedAction()` must return the class
+directly, like `return ToggleLike;`. Without [type information](#type-information), that class
+(and the superclasses of both) must be declared in the same file. Returning a class that is not
+an `OptimisticSyncWithPush` is already a TypeScript error, so this rule doesn't report it. Also
+reported in tests.
+
+---
+
 ### extend-base-action
 
 A warning for an action that extends `KissAction` directly, instead of your app's base
@@ -1190,6 +1271,36 @@ Quick fix (suggestion): add `await store.ready();` before the dispatch, when the
 
 ---
 
+### dispatch-in-effect
+
+A warning for a dispatch in an effect (`useEffect` or `useLayoutEffect`), which runs when the
+component mounts. When the store has a persistor, it may still be reading the persisted state,
+and dispatching before the store is ready throws a `StoreException`:
+
+```tsx
+function Cards() {
+  const dispatch = useDispatch();
+  useEffect(() => { dispatch(new FetchCards()); }, []);                // Warning
+  useDispatch({ onMount: (store) => store.dispatch(new FetchCards()) }); // OK
+}
+```
+
+The `onMount`, `onDepsChange` and `onUnmount` options of `useDispatch` only run after the store
+is ready.
+
+Only effects with a dependency array, in components and custom hooks, are checked. The dispatch
+must run when the effect runs (not in a callback inside it), and must use a dispatch function of
+the component: from `useDispatch()` and the other dispatch hooks, or from `useStore()`. Effects
+that check `useIsStoreReady()`, or call `ready()`, are not reported. With
+[type information](#type-information), it's only reported when some file of the project creates
+a store with a `persistor`, since otherwise the store is always ready.
+
+Quick fix (suggestion): replace the effect with `useDispatch({ onMount })`. The dependencies
+become `deps` and `onDepsChange`, and the cleanup function becomes `onUnmount` (no suggestion
+when the effect has both).
+
+---
+
 ### dispatch-and-wait-unlimited-retries
 
 A warning for `dispatchAndWait` or `dispatchAndWaitAll` with an action that retries forever,
@@ -1216,6 +1327,48 @@ The rule only reports when the action's class is known. With
 [type information](#type-information), that's whenever the action's type is a specific
 action class. Without it, the action must be created with `new` (in the call, or in a
 `const`), and its class must be declared in the same file.
+
+---
+
+### sequential-deadlock
+
+An error for a sequential action (`sequential = true`) that waits for another action of the
+same queue. A sequential action holds its queue until it finishes, from `before` to `after`.
+So the other action only starts after the first one finishes, and both wait for each other
+forever:
+
+```ts
+class Parent extends Action {
+  sequential = true;
+  async reduce() {
+    await this.dispatchAndWait(new Child()); // Error: Child also uses the queue.
+    this.dispatch(new Child());              // OK: Child runs after Parent finishes.
+    return null;
+  }
+}
+
+class Child extends Action {
+  sequential = true;
+  ...
+}
+```
+
+It checks waits with `dispatchAndWait`, `dispatchAndWaitAll`, `waitAllActions`,
+`waitActionType` and `waitAllActionTypes` (like `this.dispatchAndWait(...)` or
+`this.store.dispatchAndWaitAll(...)`) that are awaited or returned, in the action's own methods
+(not in closures). Waiting for the action's own class with `waitActionType` or
+`waitAllActionTypes` is not reported, since Kiss throws (or ignores it) instead of waiting.
+
+Two actions use the same queue when neither overrides `sequentialKeyParams()` (the key is then
+`null`), when both return the same literal (like `'saves'` or `1`), or when both return the
+same class (like `this.constructor`, in the same concrete class). Keys that depend on fields
+are not checked. `sequential` and `sequentialKeyParams()` inherited from superclasses count
+too. Without [type information](#type-information), the classes (and their superclasses) must
+be declared in the same file, and the waited action must be created with `new` (in the call,
+or in a `const`). Also reported in tests.
+
+Quick fix (suggestion): use `dispatch` instead of `dispatchAndWait` (or `dispatchAll` instead
+of `dispatchAndWaitAll`), when the result is not used.
 
 ---
 

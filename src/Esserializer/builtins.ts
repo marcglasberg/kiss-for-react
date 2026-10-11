@@ -64,9 +64,8 @@ function _encodeError(error: any, serialize: Converter): any {
   if (error.name !== Object.getPrototypeOf(error).name) {
     saved.name = error.name;
   }
-  if (error.message) {
-    saved.message = error.message;
-  }
+  // Always saved, even when empty, as the constructor may give the error a different message.
+  saved.message = error.message;
   if (error.stack) {
     saved.stack = error.stack;
   }
@@ -154,6 +153,7 @@ const _BUILTIN_TYPES: BuiltinType[] = [
     encode: (target, serialize) => serialize(Array.from(target)),
     decode: (saved, deserialize) => new Map(deserialize(saved)),
     fill(instance, saved, deserialize) {
+      instance.clear(); // Removes the entries the constructor may have added.
       for (const [key, value] of deserialize(saved)) instance.set(key, value);
     },
   },
@@ -163,6 +163,7 @@ const _BUILTIN_TYPES: BuiltinType[] = [
     encode: (target, serialize) => serialize(Array.from(target)),
     decode: (saved, deserialize) => new Set(deserialize(saved)),
     fill(instance, saved, deserialize) {
+      instance.clear(); // Removes the items the constructor may have added.
       for (const item of deserialize(saved)) instance.add(item);
     },
   },

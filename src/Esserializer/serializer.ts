@@ -7,6 +7,7 @@ import {
   TYPE_BIGINT,
   TYPE_FIELD,
   TYPE_HOLE,
+  TYPE_NULL_PROTOTYPE,
   TYPE_NUMBER,
   TYPE_UNDEFINED,
   VALUE_FIELD,
@@ -66,9 +67,16 @@ class Serializer {
   }
 
   private _serializeObject(target: object, options: SerializeOptions): Record<string, any> {
+    // An object with no prototype.
+    if (Object.getPrototypeOf(target) === null) {
+      const serializedObj = this._serializeProperties(target, options);
+      serializedObj[TYPE_FIELD] = TYPE_NULL_PROTOTYPE;
+      return serializedObj;
+    }
+
     const constructor = _getConstructor(target);
 
-    // A plain object.
+    // A plain object (or one whose prototype has no constructor).
     if (constructor === undefined || constructor === Object) {
       return this._serializeProperties(target, options);
     }
@@ -155,17 +163,14 @@ class Serializer {
 }
 
 /**
- * Returns the class of `target`, or undefined if it has no prototype.
+ * Returns the class of `target`, which must have a prototype. Returns undefined if the
+ * prototype has no constructor.
  * Usually it's the constructor of the prototype, but when that is `Object`, it's the
  * `constructor` property of the object itself, as in Big from big.js. That property is used
  * only if it's a function, as a plain object may have a `constructor` key with any value.
  */
 function _getConstructor(target: any): any {
-  const proto = Object.getPrototypeOf(target);
-  if (proto === null) {
-    return undefined;
-  }
-  const constructor = proto.constructor;
+  const constructor = Object.getPrototypeOf(target).constructor;
   if (constructor === Object) {
     const ownConstructor = target.constructor;
     return typeof ownConstructor === 'function' ? ownConstructor : Object;

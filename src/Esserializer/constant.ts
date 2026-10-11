@@ -23,6 +23,8 @@ const TYPE_NUMBER = '@number';
 const TYPE_BIGINT = '@bigint';
 /** A missing item of a sparse array. */
 const TYPE_HOLE = '@hole';
+/** An object with no prototype, like one made with `Object.create(null)`. Its properties are saved as usual. */
+const TYPE_NULL_PROTOTYPE = '@nullPrototype';
 
 /**
  * User keys starting with this are saved with one more of it, so that they are not
@@ -38,5 +40,6 @@ export {
   TYPE_NUMBER,
   TYPE_BIGINT,
   TYPE_HOLE,
+  TYPE_NULL_PROTOTYPE,
   KEY_ESCAPE,
 };

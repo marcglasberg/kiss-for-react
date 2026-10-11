@@ -5,6 +5,8 @@
 /* eslint-disable kiss-for-react/retry-without-non-reentrant */
 /* eslint-disable kiss-for-react/incompatible-action-features */
 /* eslint-disable kiss-for-react/polling-with-caveat */
+/* eslint-disable kiss-for-react/polling-action-restarts-polling */
+/* eslint-disable kiss-for-react/server-push-associated-action */
 /* eslint-disable kiss-for-react/async-feature-in-sync-action */
 /* eslint-disable kiss-for-react/extend-base-action */
 /* eslint-disable kiss-for-react/avoid-abort-dispatch */
@@ -22,7 +24,15 @@
 // The last 3 rules (`avoid-abort-dispatch`, `avoid-wrap-reduce` and `missing-key-params`) are
 // opt-in: they're not in `kiss.configs.recommended`, but the demo config turns them on.
 
-import { KissAction, OptimisticCommand, Poll, ReduxReducer } from 'kiss-for-react';
+import {
+  KissAction,
+  OptimisticCommand,
+  OptimisticSyncWithPush,
+  Poll,
+  PushMetadata,
+  ReduxReducer,
+  ServerPush,
+} from 'kiss-for-react';
 import { Action, fetchName, LoadUser, saveName, State } from './state';
 
 // ---------------------------------------------------------------------------------------------
@@ -537,6 +547,111 @@ class PollUserOk extends Action {
   reduce() {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// polling-action-restarts-polling
+
+class PollUserRestarting extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+
+  createPollingAction() {
+    // kiss-for-react/polling-action-restarts-polling
+    // (Each tick would start the polling again, instead of just running the action)
+    // Fix (suggestion): Will use `Poll.once`.
+    return new PollUserRestarting(Poll.start);
+  }
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+class PollUserCopyingPoll extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+
+  createPollingAction() {
+    // kiss-for-react/polling-action-restarts-polling
+    // (`this.poll` is `Poll.start` or `Poll.runNowAndRestart` while the polling runs)
+    // Fix (suggestion): Will use `Poll.once`.
+    return new PollUserCopyingPoll(this.poll);
+  }
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+class PollUserStartByDefault extends Action {
+  constructor(readonly userId: string, readonly poll = Poll.start) { super(); }
+
+  createPollingAction() {
+    // kiss-for-react/polling-action-restarts-polling
+    // (Created without a `poll`, so it uses its default `Poll.start`)
+    // Fix (suggestion): Will add `Poll.once`.
+    return new PollUserStartByDefault(this.userId);
+  }
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+class PollUserOnce extends Action {
+  constructor(readonly poll = Poll.once) { super(); }
+
+  createPollingAction() {
+    return new PollUserOnce(); // OK: `Poll.once` by default.
+  }
+
+  async reduce() {
+    const name = await fetchName();
+    return (state: State) => state.copy({ name });
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// server-push-associated-action
+
+class ToggleName extends OptimisticSyncWithPush<State, string> {
+  constructor(readonly userId: string, readonly name: string) { super(); }
+
+  optimisticSyncKeyParams() { return this.userId; }
+  valueToApply() { return this.name; }
+  applyOptimisticValueToState(state: State, name: string) { return state.copy({ name }); }
+  getValueFromState(state: State) { return state.name; }
+  async sendValueToServer(name: string) { await saveName(name); }
+  getServerRevisionFromState(state: State) { return state.counter; }
+}
+
+class PushName extends ServerPush<State> {
+  constructor(readonly userId: string, readonly name: string, readonly metadata: PushMetadata) { super(); }
+
+  // kiss-for-react/server-push-associated-action
+  // (`ToggleName` overrides `optimisticSyncKeyParams()`, but this push doesn't. Their keys never match)
+  associatedAction() { return ToggleName; }
+
+  pushMetadata() { return this.metadata; }
+  applyServerPushToState(state: State, _key: any, serverRevision: number) {
+    return state.copy({ name: this.name, counter: serverRevision });
+  }
+  getServerRevisionFromState(state: State) { return state.counter; }
+}
+
+class PushNameOk extends ServerPush<State> {
+  constructor(readonly userId: string, readonly name: string, readonly metadata: PushMetadata) { super(); }
+
+  associatedAction() { return ToggleName; }
+  optimisticSyncKeyParams() { return this.userId; } // OK: the same key as `ToggleName`.
+
+  pushMetadata() { return this.metadata; }
+  applyServerPushToState(state: State, _key: any, serverRevision: number) {
+    return state.copy({ name: this.name, counter: serverRevision });
+  }
+  getServerRevisionFromState(state: State) { return state.counter; }
 }
 
 // ---------------------------------------------------------------------------------------------

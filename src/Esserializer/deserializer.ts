@@ -16,6 +16,7 @@ import {
   TYPE_BIGINT,
   TYPE_FIELD,
   TYPE_HOLE,
+  TYPE_NULL_PROTOTYPE,
   TYPE_NUMBER,
   TYPE_UNDEFINED,
   VALUE_FIELD,
@@ -89,6 +90,8 @@ function deserializeFromParsedObjWithClassMapping(
         return getValueFromToStringResult(value);
       case TYPE_BIGINT:
         return BigInt(value);
+      case TYPE_NULL_PROTOTYPE:
+        return _copyDeserializedValues(Object.create(null), parsedObj, classMapping, options);
     }
     const builtinType = getBuiltinTypeBySavedType(type);
     if (!builtinType) {
@@ -138,7 +141,8 @@ function _deserializeArray(parsedArray: any[], deserializeNested: (value: any) =
  * calling the constructor.
  */
 function _createInstance(classObj: any, constructorParameters: any[]): object {
-  const isEs6Class = REGEXP_BEGIN_WITH_CLASS.test(classObj.toString());
+  // Not `classObj.toString()`, which may be a static method of the class.
+  const isEs6Class = REGEXP_BEGIN_WITH_CLASS.test(Function.prototype.toString.call(classObj));
   const missingParameterCount = Math.max(classObj.length - constructorParameters.length, 0);
 
   // When no parameter is missing, the fallback values are not used, so we try only once.

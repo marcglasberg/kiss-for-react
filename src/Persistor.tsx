@@ -1,5 +1,6 @@
 import { KissAction } from './KissAction';
 import { Store } from './Store';
+import { describeValue } from './utils';
 
 /**
  * Use it like this:
@@ -196,9 +197,10 @@ export class PersistorPrinterDecorator<St> extends Persistor<St> {
     lastPersistedState: St | null,
     newState: St
   ): Promise<void> {
-    Store.log(`Persistor: persist difference:
-      lastPersistedState = ${lastPersistedState}
-      newState = ${newState}`);
+    // The states are only described when logging is on. Describing them never throws.
+    Store._logLazy(() => `Persistor: persist difference:
+      lastPersistedState = ${describeValue(lastPersistedState)}
+      newState = ${describeValue(newState)}`);
     return this._persistor.persistDifference(lastPersistedState, newState);
   }
 

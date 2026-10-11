@@ -16,18 +16,19 @@ rules that only exist in Kiss.
 
 ## Summary
 
-| Status      | Count                         |
-|-------------|-------------------------------|
-| Implemented | 48 (39 from AsyncRedux, 9 new) |
-| Skipped     | 34 (from AsyncRedux)          |
+| Status      | Count                           |
+|-------------|---------------------------------|
+| Implemented | 52 (42 from AsyncRedux, 10 new) |
+| Skipped     | 31 (from AsyncRedux)            |
 
-Total: the 73 AsyncRedux rules (39 implemented, 34 skipped), and 9 new rules (all
+Total: the 73 AsyncRedux rules (42 implemented, 31 skipped), and 10 new rules (all
 implemented).
 
 All rules planned here are implemented, except two that turned out not to make sense in Kiss
-(`dispatch-in-error-observer` and `throw-in-read-state`, see below). The sections 3 and 4
-below are the plan. The final behavior of each rule, which sometimes differs in the details,
-is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
+(`dispatch-in-error-observer` and `throw-in-read-state`, see below). This includes the rules
+that had to wait for Kiss to have `sequential`, polling and `ServerPush` (see section 5). The
+sections 3 and 4 below are the plan. The final behavior of each rule, which sometimes differs
+in the details, is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 
 ## 1. The AsyncRedux rules, one by one
 
@@ -67,11 +68,11 @@ is documented in [`eslint-plugin/README.md`](eslint-plugin/README.md).
 | 32 | `retry_without_non_reentrant`             | [`retry-without-non-reentrant`](#retry-without-non-reentrant)                 | Implemented. |
 | 33 | `dispatch_and_wait_unlimited_retries`     | [`dispatch-and-wait-unlimited-retries`](#dispatch-and-wait-unlimited-retries) | Implemented. |
 | 34 | `async_mixin_in_sync_action`              | [`async-feature-in-sync-action`](#async-feature-in-sync-action)               | Implemented, adapted: Kiss has features, not mixins. `retry` is already covered by `retry-requires-async-reduce`. |
-| 35 | `sequential_deadlock`                     | -                                                                             | Not implemented yet. Kiss now has `sequential`, so this rule could be added.                                                                                                 |
+| 35 | `sequential_deadlock`                     | [`sequential-deadlock`](#sequential-deadlock) | Implemented. Also checks `waitAllActions`, `waitActionType` and `waitAllActionTypes`, and keys returned as literals or classes. |
 | 36 | `sequential_before_super_not_first`       | -                                                                             | Skipped. Kiss's `sequential` waits for its turn before calling `before`, so there's no `super` to call.                                                                      |
 | 37 | `sequential_after_super_not_in_finally`   | -                                                                             | Skipped. Kiss's `sequential` releases the queue itself after `after`, so there's no `super` to call.                                                                         |
-| 38 | `polling_action_restarts_polling`         | -                                                                             | Not implemented yet. Kiss now has polling, so this rule could be added: `createPollingAction()` returning an action with `Poll.start` or `Poll.runNowAndRestart`.          |
-| 39 | `server_push_associated_action`           | -                                                                             | Skipped. Kiss has no server push.                                                                                                                                            |
+| 38 | `polling_action_restarts_polling`         | [`polling-action-restarts-polling`](#polling-action-restarts-polling) | Implemented. Also reports `this.poll`, and a missing `poll` argument whose default is not `Poll.once`. |
+| 39 | `server_push_associated_action`           | [`server-push-associated-action`](#server-push-associated-action) | Implemented, adapted. Returning a class that is not an `OptimisticSyncWithPush` is already a TypeScript error, so it reports keys that never match instead: an abstract class, or only one of them overriding `optimisticSyncKeyParams` or `computeOptimisticSyncKey`. |
 | 40 | `internet_simulation_in_production`       | [`testing-feature-in-production`](#testing-feature-in-production)             | Implemented, adapted: Kiss's testing features are mocks, `record`, the test-only wait methods, and the internet simulation (`store.forceInternetOnOffSimulation`, and `internetOnOffSimulation` returning `true` or `false`, as in AsyncRedux). |
 | 41 | `prefer_immutable_collections`            | [`prefer-readonly-collections`](#prefer-readonly-collections)                 | Implemented, adapted: TypeScript's `readonly T[]`, `ReadonlyMap` and `ReadonlySet`, instead of `fast_immutable_collections`. |
 | 42 | `non_state_object_in_state`               | [`non-state-object-in-state`](#non-state-object-in-state)                     | Implemented, with the TypeScript/React versions of these objects. |
@@ -761,3 +762,81 @@ itself be blocked, and the polling can't be stopped. Features inherited from sup
 count too. Error, as in AsyncRedux, and also reported in tests. The features that can't be
 combined with polling at all (`retry`, `debounce`, `unlimitedRetryCheckInternet`) are reported
 by `incompatible-action-features` instead.
+
+### sequential-deadlock
+
+From AsyncRedux's `sequential_deadlock`, now that Kiss has `sequential`. Error, also reported in
+tests. A sequential action that waits for another action of the same queue, with
+`dispatchAndWait`, `dispatchAndWaitAll`, `waitAllActions`, `waitActionType` or
+`waitAllActionTypes`, awaited or returned, in its own methods (not in closures). The action holds
+its queue from `before` to `after`, so the other action only starts after it finishes, and both
+wait forever:
+
+```ts
+class Parent extends Action {
+  sequential = true;
+  async reduce() {
+    await this.dispatchAndWait(new Child()); // Error: Child also uses the queue.
+    this.dispatch(new Child());              // OK
+    return null;
+  }
+}
+```
+
+Two actions use the same queue when neither overrides `sequentialKeyParams()` (key `null`), or
+both return the same literal, or the same class (like `this.constructor` in the same concrete
+class). Keys that depend on fields are not checked. Waiting for its own class with
+`waitActionType` is not reported, since Kiss throws instead. Quick fix (suggestion): `dispatch`
+instead of `dispatchAndWait` (or `dispatchAll` instead of `dispatchAndWaitAll`), when the result
+is not used.
+
+### polling-action-restarts-polling
+
+From AsyncRedux's `polling_action_restarts_polling`, now that Kiss has polling. Warning, also
+reported in tests. A `createPollingAction()` that creates the action with `Poll.start`,
+`Poll.stop` or `Poll.runNowAndRestart`, so each tick starts, stops or restarts the polling,
+instead of just running the action:
+
+```ts
+createPollingAction() { return new LoadPrices(Poll.start); } // Warning
+createPollingAction() { return new LoadPrices(Poll.once); }  // OK
+```
+
+Kiss's polling actions often pass their fields to the tick action, so it also reports
+`this.poll` (which is `Poll.start` or `Poll.runNowAndRestart` while the polling runs), and a
+missing `poll` argument when the default value of the `poll` parameter (or the `poll` property)
+is not `Poll.once`. Quick fix (suggestion): use `Poll.once`.
+
+### server-push-associated-action
+
+From AsyncRedux's `server_push_associated_action`, now that Kiss has `ServerPush`. Error, also
+reported in tests. In AsyncRedux, it reports an `associatedAction()` that doesn't return an
+action with `OptimisticSyncWithPush`. In Kiss, `associatedAction()` is typed to return an
+`OptimisticSyncWithPush` class, so TypeScript already reports that. The rule reports, instead,
+a push whose key never matches the key of its associated action, for the same reason (the push
+is never matched with that action's requests):
+
+- `associatedAction()` returns an abstract class. The actions dispatched are of its
+  subclasses, and their keys use their own class. Not reported when the push overrides
+  `computeOptimisticSyncKey()`.
+- The associated action overrides `computeOptimisticSyncKey()`, and the push doesn't.
+- Only one of them overrides `optimisticSyncKeyParams()`, in a concrete push class.
+
+```ts
+class ToggleLike extends OptimisticSyncWithPush<State, boolean> {
+  optimisticSyncKeyParams() { return this.itemId; }
+}
+
+class PushLike extends ServerPush<State> {
+  associatedAction() { return ToggleLike; } // Error: no `optimisticSyncKeyParams()`.
+}
+```
+
+### dispatch-in-effect
+
+New in Kiss (it was already implemented, but missing from this list). Warning. A dispatch in a
+`useEffect` or `useLayoutEffect` of a component or hook. When the store has a persistor, the
+effect may run before the store is ready, and the dispatch throws a `StoreException`. Use the
+`onMount` option of `useDispatch`, which waits for the store to be ready. With type information,
+only reported when the project creates a store with a `persistor`. Quick fix (suggestion):
+replace the effect with `useDispatch({ onMount })`.

@@ -1,6 +1,7 @@
 import { Store } from "./Store";
 import { AbortDispatchException, StoreException } from "./StoreException";
 import { UserException } from "./UserException";
+import { describeValue } from "./utils";
 
 /**
  * A SYNC reducer can return:
@@ -3695,28 +3696,11 @@ export abstract class KissAction<St> {
         // Note: This simple line assumes that `value` can be meaningfully represented as a string.
         // You might need a more complex handling for objects, arrays, etc.
         const value = (this as any)[key];
-        keyValuePairs.push(`${key}:${KissAction._describeValue(value)}`);
+        keyValuePairs.push(`${key}:${describeValue(value)}`);
       }
     }
     // Join all key-value pairs with a comma and space, and format it according to your requirements
     return `${this.constructor.name}(${keyValuePairs.join(', ').replace(/"/g, '')})`;
-  }
-
-  /**
-   * Turns a field value into a string for `toString()`. Never throws, so that an action
-   * with a circular, BigInt or otherwise unserializable field can still be dispatched.
-   */
-  private static _describeValue(value: any): string {
-    if (typeof value === 'bigint') return `${value}n`;
-    try {
-      return JSON.stringify(value, (_key, v) => typeof v === 'bigint' ? `${v}n` : v);
-    } catch {
-      try {
-        return String(value);
-      } catch {
-        return '[object]';
-      }
-    }
   }
 }
 
