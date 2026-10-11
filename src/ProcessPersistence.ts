@@ -2,6 +2,7 @@ import { PersistAction, Persistor } from "./Persistor";
 import { KissAction, UpdateStateAction } from "./KissAction";
 import { Store } from "./Store";
 import { StoreException } from "./StoreException";
+import { capTimeoutMillis } from "./utils";
 
 export class ProcessPersistence<St> {
   persistor: Persistor<St>;
@@ -89,6 +90,9 @@ export class ProcessPersistence<St> {
         // we persist the initial-state passed to the Store constructor.
         await this.persistor.saveInitialState(initialState);
       } catch (error) {
+        // Nothing was saved. Otherwise, the next save would diff against the initial-state,
+        // which was never saved. With null, the next save saves the whole state.
+        this.lastPersistedState = null;
         this.log('Error saving initial state:' + error + '.');
         this.reportError(error);
       }
@@ -165,6 +169,10 @@ export class ProcessPersistence<St> {
     this.lastPersistedState = initialState;
     try {
       await this.persistor.saveInitialState(initialState);
+    } catch (error) {
+      // Not saved, so it's not considered persisted (unless it was replaced in the meantime).
+      if (this.lastPersistedState === initialState) this.lastPersistedState = null;
+      throw error;
     } finally {
       this.processAddedErrors();
     }
@@ -363,7 +371,7 @@ export class ProcessPersistence<St> {
           this.timer = setTimeout(() => {
             this.timer = undefined;
             this.process(null, this.newestState as St); // TypeScript forced cast
-          }, asSoonAsThrottleFinishes);
+          }, capTimeoutMillis(asSoonAsThrottleFinishes));
         }
         return false;
       }

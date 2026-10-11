@@ -325,4 +325,8 @@
   a `TypeError`, and the saved state was deleted. A property with a setter in the class also
   keeps the value the constructor gave it, and its setter is not called.
 
+* `store.mocks.remove(actionType)` and `store.mocks.get(actionType)` now accept an action
+  whose constructor has parameters, like `store.mocks.remove(AddAction)`. Before, it didn't
+  compile. Also, the function returned by `get` now accepts that action type.
+
 * Bug fixes.

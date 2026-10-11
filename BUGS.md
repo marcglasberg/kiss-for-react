@@ -43,16 +43,16 @@
 | 20 | Low | logOut | `logOut()` un-pauses a paused persistor, and un-shuts a shut-down store. | Reproduced | Yes |
 | 21 | Low | logOut | If `deleteState` fails, the old user's state stays in the store and is saved again. | Reproduced | Yes |
 | 22 | Low | Persistence | `persistAndPausePersistor()` resolves even when the save failed. | Reproduced | Not a bug |
-| 23 | Low | Persistence | A failed `saveInitialState` still counts as persisted. | Reproduced | No |
+| 23 | Low | Persistence | A failed `saveInitialState` still counts as persisted. | Reproduced | Yes |
 | 24 | Low | ESSerializer | A read-only property holding a class instance or a `Map` is restored wrongly. | Reproduced | Yes |
 | 25 | Low | ESSerializer | A saved field that is now a getter-only property makes reading throw, and the saved state is deleted. | Reproduced | Yes |
 | 26 | Low | useStore | `useStore()` has no `dispatchAll` and no `dispatchAndWaitAll`. | Reproduced | Yes |
 | 27 | Low | useSelect | A selector that returns `NaN` re-renders on every state change. | Reproduced | Yes |
 | 28 | Low | Wait helpers | `UnmodifiableSetView.forEach` hands out the real set, so the store's actions can be deleted. | Reproduced | Yes |
-| 29 | Low | Wait helpers | A timeout larger than about 24.8 days fires after about 1 ms. | Reproduced | No |
-| 30 | Low | dispatchWhen | "If the condition is already true, the action is dispatched right away" is not true: it's dispatched in a later microtask. | Reproduced | No |
-| 31 | Low | Types | `actionsInProgress()` is typed `Set`, but lacks the ES2025 `Set` methods (`union`, etc.). | Reproduced | No |
-| 32 | Low | Types | `store.mocks.remove(ActionType)` doesn't compile if the action's constructor has parameters. | Reproduced | No |
+| 29 | Low | Wait helpers | A timeout larger than about 24.8 days fires after about 1 ms. | Reproduced | Yes |
+| 30 | Low | dispatchWhen | "If the condition is already true, the action is dispatched right away" is not true: it's dispatched in a later microtask. | Reproduced | Yes |
+| 31 | Low | Types | `actionsInProgress()` is typed `Set`, but lacks the ES2025 `Set` methods (`union`, etc.). | Reproduced | Yes |
+| 32 | Low | Types | `store.mocks.remove(ActionType)` doesn't compile if the action's constructor has parameters. | Reproduced | Yes |
 
 ---
 
@@ -266,6 +266,8 @@
   await store.ready();
   expect(store.getLastPersistedStateFromPersistor()).toBeNull();  // Fails: {a: 0}.
   ```
+- **Fixed:** if `saveInitialState` fails, nothing is considered persisted: `lastPersistedState` becomes `null`. Then the next state change calls `persistDifference(null, newState)`, which saves the whole state, so persistence recovers by itself. At startup this is done in `ProcessPersistence._readInitialState`. In `saveInitialStateInPersistence` it's done in `ProcessPersistence.saveInitialState`, which still rejects, and only clears `lastPersistedState` if nothing replaced it during the save. As with `persistDifference`, the failed save is not retried with a timer.
+- **How to trigger:** see the BDDs in `__tests__/bdd.FailedSaveInitialState.test.ts`. The two about a failed save failed before the fix.
 
 ## 24. ESSerializer: a read-only property holding a class instance or a `Map` is restored wrongly (Low)
 
@@ -304,49 +306,45 @@
 - **Docs say:** "Your condition function should NOT try and modify the set of actions it got in the `actionsInProgress` parameter. If you do, Kiss will throw an error" (`src/Store.tsx:2090`). `UnmodifiableSetView` "prevents that set from being changed through the view" (`src/UnmodifiableSetView.ts:3`).
 - **What happens:** `forEach((x, _, set) => set.delete(x))` gets the store's own `_actionsInProgress`, and deletes from it with no error. The running action disappears from `isWaiting`. When it finishes, the wait conditions are not checked for it, so waits on it hang until they time out.
 - **Cause:** `src/UnmodifiableSetView.ts:23-25` calls `this._set.forEach(callbackfn, thisArg)` directly. It should wrap the callback, and pass the view as the third argument.
-- **Fixed:** `UnmodifiableSetView.forEach` now wraps the callback, and passes the view itself as the third argument (and still passes `thisArg` as `this`). So deleting through that set throws, like deleting through the view does.
-- **How to trigger:** see the BDDs in `__tests__/bdd.ActionsInProgressUnmodifiable.test.ts`. Before the fix, both failed: deleting a running action through the set given by `forEach` didn't throw, and the set given to the callback was the store's own set, not the view. The BDDs also check that the action is still in progress, and that waiting for it still completes when it finishes.
+- **Fixed:** first by making `forEach` pass the view as the third argument. Then, with the fix of item 31, `UnmodifiableSetView` was removed: the developer now always gets a copy of the actions in progress, never the store's own set, so changing it can't affect the store.
+- **How to trigger:** see the BDDs in `__tests__/bdd.ActionsInProgressCopy.test.ts`, which check that changing the set we got (with `delete`, `clear` or `add`) doesn't throw, the action is still in progress, and waiting for it still completes when it finishes.
 
 ## 29. A timeout larger than about 24.8 days fires after about 1 ms (Low)
 
 - **Docs say:** the wait rejects (or `dispatchWhen` doesn't dispatch) only "if the condition is not met in `timeoutMillis` milliseconds".
 - **What happens:** for a timeout above `2^31 - 1` ms, Node prints a `TimeoutOverflowWarning` and fires after 1 ms, so the wait rejects with a `TimeoutException` almost at once. `Infinity` and `Number.MAX_SAFE_INTEGER` behave the same. A `dispatchWhen` with a "30 days" timeout silently drops its action.
 - **Cause:** the raw `setTimeout(..., timeoutMillis)` at `src/Store.tsx:2064` and `2185`. The value is not clamped, and `Infinity` is not treated as "no timeout".
-- **How to trigger:**
-  ```ts
-  const p = store.waitCondition(s => s.n === 1, { timeoutMillis: 30 * 24 * 3600 * 1000 });
-  let err: unknown = null;
-  p.catch(e => { err = e; });
-  await new Promise(r => setTimeout(r, 50));
-  expect(err).toBe(null);  // Fails: TimeoutException.
-  ```
+- **Fixed:** `waitCondition` and `waitActionCondition` (which all the other waits and `dispatchWhen` use) now use a new `_setLongTimeout` helper in `src/Store.tsx`. It chains timers of at most `2^31 - 1` ms, so a large timeout fires at the right time, and `Infinity` never fires. The docs now say `Infinity` also means "no timeout".
+  The other delays given to `setTimeout` had the same problem, and are now capped at `2^31 - 1` ms (about 24.8 days) by `capTimeoutMillis` in `src/utils.ts`: the retry delay, `debounce`, `pollInterval`, the persistor throttle, and the `logOut` throttle. So a larger value waits about 24.8 days, instead of 1 ms. The persistor throttle checks the time again when its timer fires, so it still waits the full throttle.
+- **How to trigger:** see the BDDs in `__tests__/bdd.LongTimeout.test.ts`. Before the fix, all of them failed: `waitCondition`, `dispatchWhen` and `waitAllActions` with a timeout of 30 days, `Infinity` or `Number.MAX_SAFE_INTEGER` timed out after about 1 ms. A BDD with fake timers also checks that a 30-day timeout fires at exactly 30 days, not before.
+  For the capped delays, see the BDDs in `__tests__/bdd.LongDelaysCapped.test.ts`. Without the cap, all of them failed. For example, a retry delay that doubles each time without a small `maxDelay` retried every 1 ms once it passed about 24.8 days.
 
 ## 30. `dispatchWhen` doesn't dispatch "right away" when the condition is already true (Low)
 
 - **Docs say:** "If the condition is already true, the action is dispatched right away" (`src/Store.tsx:2577`).
 - **What happens:** the action is dispatched in a later microtask. Right after `dispatchWhen(...)` returns, the state has not changed. In the meantime (also when the condition becomes true later), another synchronous dispatch can make the condition false again, and the action is still dispatched.
 - **Cause:** `dispatchWhen` is built on the async `waitCondition`, and dispatches in `.then()` (`src/Store.tsx:2622-2624`). It needs a synchronous check of the condition first, and a synchronous callback when it becomes true. If the delay is intended, the docs should say so instead.
-- **How to trigger:**
-  ```ts
-  store.dispatchWhen(new SetN(5), s => s.n === 0, { timeoutMillis: 0 });  // SetN is sync.
-  expect(store.state.n).toBe(5);  // Fails: 0.
-  ```
+- **Fixed:** `dispatchWhen` no longer uses `waitCondition`. It checks the condition synchronously, and if it's already true, dispatches the action before returning. Otherwise, it adds its own entry to the wait-conditions. When a state change meets the condition, `_registerState` first checks all the wait-conditions against that state, and gives it to the persistor, and then dispatches the `dispatchWhen` actions, all before it returns. So no other action can change the state in between. If the condition, `onTimeout` or the dispatch throws, the error is logged, as before. The docs now say the action is dispatched before `dispatchWhen` returns, or right after the state change that meets the condition.
+- **How to trigger:** see the BDDs in `__tests__/bdd.DispatchWhenSync.test.ts`. Before the fix, 5 of them failed: the action was not dispatched before `dispatchWhen` returned, or before the dispatch that met the condition returned; a second sync dispatch ran before the `dispatchWhen` action; and a throwing condition was logged only later. The other BDDs check that a `waitCondition` waiting for the same state still resolves with the action that met it, that an async action also triggers it, and that the timeout no longer fires once the condition is met.
 
 ## 31. `actionsInProgress()` is typed `Set`, but lacks the ES2025 `Set` methods (Low)
 
 - **What happens:** the return type is `Set<KissAction<St>>`. With `lib: ESNext` (or `ES2025`), TypeScript shows `.union`, `.intersection`, `.difference`, etc., and the code compiles. At runtime (Node 22+), it throws `TypeError: set.union is not a function`. The same applies to the `actions` set given to and returned by the wait helpers.
-- **Cause:** `UnmodifiableSetView implements Set<T>` (`src/UnmodifiableSetView.ts:8`) is compiled against an older `lib`, so it doesn't implement them.
+- **Cause:** `UnmodifiableSetView implements Set<T>` (`src/UnmodifiableSetView.ts:8`) is compiled against an older `lib`, so it doesn't implement them. Also, `actionsInProgress()` returned a live view of the store's own set, so it changed when actions were dispatched or finished.
+- **Fixed:** `UnmodifiableSetView` was removed. `actionsInProgress()` now returns a new copy each time, which is a real `Set` (a subclass that keeps the `toString` that lists the actions). It doesn't change when actions are later dispatched or finish, and changing it doesn't affect the store, so it doesn't need to be unmodifiable. The same applies to the set that the condition of `waitActionCondition` gets (a new copy each time it's checked), and to the `actions` the waits resolve with (each wait gets its own copy). Kiss's own wait helpers (`waitAllActions`, `waitActionType`, etc.) use a private `_waitActionCondition`, whose condition reads the store's own set, without copying.
 - **How to trigger:**
   ```ts
   expect(() => (store.actionsInProgress() as any).union(new Set())).not.toThrow();  // Fails on Node 24.
   ```
+  See also the BDDs in `__tests__/bdd.ActionsInProgressCopy.test.ts`. Before the fix, 9 of the 10 failed: the set was not a `Set`, was a live view, threw when changed, and two calls (or two waits) did not get separate copies. The BDD that prints the set for debugging already passed.
 
 ## 32. `store.mocks.remove(ActionType)` doesn't compile if the action's constructor has parameters (Low)
 
 - **Docs say:** `remove(actionType)` is documented next to mocking `AddAction(value)` (`src/Store.tsx:561-563, 583-584`).
 - **What happens:** `store.mocks.remove(AddAction)`, where `AddAction` has `constructor(readonly value: number)`, fails with TS2345: "'new (value: number) => AddAction' is not assignable to 'new () => KissAction<St>'". The same type is used by `get`.
 - **Cause:** `src/Store.tsx:2663` and `:2671` use `new () => KissAction<St>`, while `add` correctly uses `new (...args: any[]) => T`.
-- **How to trigger:** compile `store.mocks.remove(AddAction)` with `tsc --strict`.
+- **Fixed:** `remove` now takes `new (...args: any[]) => KissAction<St>`, like `add`. `get` is now generic, like `add`: it takes `new (...args: any[]) => T`, and returns a mock function that accepts a `T`, so it can read the action's fields. The cast in `_mockActionOrNot` uses the same type.
+- **How to trigger:** see the BDDs in `__tests__/bdd.MockActionsWithParameters.test.ts`. Before the fix, the file didn't compile (TS2345 on each `remove` and `get` call), so all 6 BDDs failed. They check that the mock of an action with one or several constructor parameters can be removed and read, that removing it keeps the mocks of other actions, that removing a mock that was never added does nothing, and that `get` gives `undefined` after the mock is removed.
 
 ---
 

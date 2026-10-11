@@ -100,6 +100,9 @@ export abstract class Persistor<St> {
    * replacing any previous state that was saved.
    *
    * The default implementation calls `persistDifference` with a `null` last persisted state.
+   *
+   * If this method throws, nothing is considered persisted, so the next call to
+   * `persistDifference` will receive a `null` last persisted state.
    */
   saveInitialState(state: St): Promise<void> {
     return this.persistDifference(null, state);

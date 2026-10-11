@@ -456,7 +456,9 @@ export function useDispatchAndWaitAll(): (action: KissAction<any>[]) => Promise<
 
 /**
  * Waits until the store state meets a certain condition, and then dispatches an action.
- * If the condition is already true, the action is dispatched right away.
+ * If the condition is already true, the action is dispatched right away, before `dispatchWhen`
+ * returns. Otherwise, it is dispatched synchronously, right after the state change that meets
+ * the condition, so no other action can change the state in between.
  *
  * ```ts
  * const dispatchWhen = useDispatchWhen();
@@ -466,8 +468,8 @@ export function useDispatchAndWaitAll(): (action: KissAction<any>[]) => Promise<
  * Timeout: You must always give a `timeoutMillis`, since there is no default. If the condition
  * is not met in `timeoutMillis` milliseconds, the action is NOT dispatched, and the condition
  * stops being checked. In this case, `onTimeout` is called if you provided it. Otherwise, the
- * timeout is logged. To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1), but note that
- * while it waits, the condition runs on every state change.
+ * timeout is logged. To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`),
+ * but note that while it waits, the condition runs on every state change.
  *
  * ```ts
  * dispatchWhen(
@@ -755,7 +757,9 @@ class StoreDispatchers<St> {
 
   /**
    * Waits until the store state meets a certain condition, and then dispatches an action.
-   * If the condition is already true, the action is dispatched right away.
+   * If the condition is already true, the action is dispatched right away, before `dispatchWhen`
+   * returns. Otherwise, it is dispatched synchronously, right after the state change that meets
+   * the condition, so no other action can change the state in between.
    *
    * ```ts
    * store.dispatchWhen(new BuyStock('IBM'), (state) => state.stocks.getPrice('IBM') >= 100, { timeoutMillis: 0 });
@@ -765,7 +769,7 @@ class StoreDispatchers<St> {
    * is not met in `timeoutMillis` milliseconds, the action is NOT dispatched, and the condition
    * stops being checked. In this case, `onTimeout` is called if you provided it. Otherwise, the
    * timeout is logged with `Store.log()`. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
-   * (or -1), but note that while it waits, the condition runs on every state change.
+   * (or -1, or `Infinity`), but note that while it waits, the condition runs on every state change.
    *
    * ```ts
    * store.dispatchWhen(
@@ -865,7 +869,7 @@ class StoreDispatchers<St> {
    * Timeout: You must always give a `timeoutMillis`, since there is no default. If the condition
    * is not met in `timeoutMillis` milliseconds, the promise rejects with a `TimeoutException`,
    * and the condition stops being checked. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
-   * (or -1):
+   * (or -1, or `Infinity`):
    *
    * ```ts
    * await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 }); // 1 second.
@@ -968,7 +972,7 @@ class StoreDispatchers<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -1055,7 +1059,7 @@ class StoreDispatchers<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -1130,7 +1134,7 @@ class StoreDispatchers<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -1182,7 +1186,7 @@ class StoreDispatchers<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -1241,7 +1245,7 @@ class StoreDispatchers<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.

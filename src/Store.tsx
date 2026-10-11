@@ -16,7 +16,7 @@ import {
 } from './KissAction';
 import { ProcessPersistence } from './ProcessPersistence';
 import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
-import { UnmodifiableSetView } from "./UnmodifiableSetView";
+import { capTimeoutMillis, MAX_TIMEOUT_MILLIS } from "./utils";
 
 // An active polling cycle of the given polling key. The `timer` is the one that dispatches the
 // next tick, or `null` while a tick (or the immediate run) is running.
@@ -547,7 +547,7 @@ export class Store<St> {
         signal?.removeEventListener('abort', end);
         resolve();
       };
-      const timer = setTimeout(end, delay);
+      const timer = setTimeout(end, capTimeoutMillis(delay));
       this._retryWaitEnders.add(end);
       signal?.addEventListener('abort', end);
     });
@@ -715,6 +715,12 @@ export class Store<St> {
   }> = [];
 
   /**
+   * Helps implement the `dispatchWhen` method. The actions whose condition was met by the
+   * current state change, to be dispatched when `_registerState` finishes.
+   */
+  private _dispatchWhenQueue: KissAction<St>[] = [];
+
+  /**
    * Helps implement the `waitActionCondition` method.
    */
   private _waitActionConditions: Array<{
@@ -798,7 +804,7 @@ export class Store<St> {
    *    actions of type `actionType` will be ignored when dispatched.
    *
    * - `remove(actionType)`:
-   *    Removes remove a mock action from the store. Note you should pass the
+   *    Removes a mock action from the store. Note you should pass the
    *    type of the action that was mocked, and NOT the type of the mock.
    *
    * - `clear()`:
@@ -1490,7 +1496,7 @@ export class Store<St> {
   // If no mock is defined, the original action is returned unchanged.
   private _mockActionOrNot(action: KissAction<St>): KissAction<St> | null {
 
-    const mockActionFunction = this.mocks.get(action.constructor as new () => KissAction<St>);
+    const mockActionFunction = this.mocks.get(action.constructor as new (...args: any[]) => KissAction<St>);
 
     // If no mock is defined, the original action is returned unchanged.
     if (mockActionFunction === undefined) {
@@ -1806,7 +1812,7 @@ export class Store<St> {
     for (const condition of this._waitActionConditions) {
       let checked: boolean;
       try {
-        checked = condition.check(this.actionsInProgress(), triggerAction);
+        checked = condition.check(this._actionsInProgress, triggerAction);
       } catch (error) {
         // A throwing condition only fails its own wait. It doesn't affect the trigger action.
         condition.reject(error);
@@ -1814,7 +1820,7 @@ export class Store<St> {
         continue;
       }
       if (checked) {
-        condition.resolve(this._actionsInProgressSnapshot(), triggerAction);
+        condition.resolve(this.actionsInProgress(), triggerAction);
         toRemove.push(condition);
       }
     }
@@ -2074,7 +2080,7 @@ export class Store<St> {
       const timer = setTimeout(() => {
         this._debounceLocks = this._debounceLocks.filter(other => other !== entry);
         resolve(true);
-      }, debounceMillis);
+      }, capTimeoutMillis(debounceMillis));
 
       const entry = {
         lock,
@@ -2213,7 +2219,7 @@ export class Store<St> {
       tick.finally(() => {
         if (waitsForRun) this._scheduleNextPollingTick(action, cycle);
       });
-    }, action._pollIntervalMillis!);
+    }, capTimeoutMillis(action._pollIntervalMillis!));
   }
 
   // Cancels the timer of the polling cycle, and removes the cycle, so that its ticks stop.
@@ -2558,6 +2564,15 @@ export class Store<St> {
         action,
         newState
       );
+
+    // Dispatch the `dispatchWhen` actions whose condition was met. This is done only now, so that
+    // all wait-conditions are checked against the state that met them, and the persistor gets
+    // that state before the state changed by these actions.
+    if (this._dispatchWhenQueue.length > 0) {
+      const actions = this._dispatchWhenQueue;
+      this._dispatchWhenQueue = [];
+      for (const whenAction of actions) this._dispatchWhenAction(whenAction);
+    }
   }
 
   /**
@@ -2850,7 +2865,7 @@ export class Store<St> {
       await persistence?._waitWhilePersisting();
 
       // Wait for the throttle period to finish.
-      await new Promise<void>(resolve => setTimeout(resolve, throttle));
+      await new Promise<void>(resolve => setTimeout(resolve, capTimeoutMillis(throttle)));
 
       // Wait for all actions currently running to finish,
       // but wait at most `actionsThrottle` milliseconds.
@@ -2941,6 +2956,8 @@ export class Store<St> {
 
   /**
    * Asks the Persistor to save the initialState in the local persistence.
+   * If the save fails, this rejects, and nothing is considered persisted
+   * (`getLastPersistedStateFromPersistor` returns `null`).
    */
   async saveInitialStateInPersistence(initialState: St): Promise<void> {
     return this._processPersistence?.saveInitialState(initialState);
@@ -2976,7 +2993,7 @@ export class Store<St> {
    * Timeout: You must always give a `timeoutMillis`, since there is no default. If the condition
    * is not met in `timeoutMillis` milliseconds, the promise rejects with a `TimeoutException`,
    * and the condition stops being checked. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
-   * (or -1):
+   * (or -1, or `Infinity`):
    *
    * ```ts
    * await store.waitCondition((state) => state.name == "Bill", { timeoutMillis: 1000 }); // 1 second.
@@ -3051,24 +3068,24 @@ export class Store<St> {
     // Otherwise, create a Promise that resolves when the condition is met.
     else {
       return new Promise((resolve, reject) => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelTimer = () => {};
 
         const entry = {
           check: condition,
           resolve: (triggerAction: KissAction<St>) => {
             // The condition was met, so the timeout is no longer needed.
-            clearTimeout(timer);
+            cancelTimer();
             resolve(triggerAction);
           },
           reject: (error: unknown) => {
-            clearTimeout(timer);
+            cancelTimer();
             reject(error);
           },
         };
         this._waitConditions.push(entry);
 
         if (timeoutMillis > 0) {
-          timer = setTimeout(() => {
+          cancelTimer = _setLongTimeout(() => {
             // Stop checking the condition, since nobody is waiting for it anymore.
             this._waitConditions = this._waitConditions.filter(c => c !== entry);
             _settleTimeout(timeoutMillis, onTimeout, () => resolve(null), reject);
@@ -3094,13 +3111,15 @@ export class Store<St> {
    * let action = await store.waitActionCondition((actionsInProgress, triggerAction) => { ... });
    * ```
    *
-   * Note: Your condition function should NOT try and modify the set of actions it got in
-   * the `actionsInProgress` parameter. If you do, Kiss will throw an error.
+   * Note: Each time the condition is checked, it gets a new copy of the actions in progress.
+   * Changing that set doesn't affect the store, and the set doesn't change when other actions
+   * are later dispatched or finish.
    *
    * You get back the set of the actions being dispatched that met the condition, as well as
    * the action that triggered the condition by being added or removed from the set.
    * The returned set is a copy, taken when the condition was met (or when it timed out),
-   * so it doesn't change when other actions are later dispatched or finish.
+   * so it doesn't change when other actions are later dispatched or finish. Changing it
+   * doesn't affect the store.
    *
    * Note: The condition is only checked when some action is dispatched or finishes dispatching.
    * It's not checked every time action statuses change.
@@ -3109,7 +3128,7 @@ export class Store<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -3159,11 +3178,34 @@ export class Store<St> {
     } = {})
     : Promise<{ actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null }> {
 
+    // The condition gets a new copy each time, so changing it doesn't affect the store.
+    return this._waitActionCondition(
+      (actions, triggerAction) => condition(new PrintableSet(actions), triggerAction),
+      {completeImmediately, completedErrorMessage, timeoutMillis, onTimeout});
+  }
+
+  // Same as `waitActionCondition`, but the condition gets the store's own set of actions in
+  // progress, instead of a copy. Only for conditions written in Kiss, which don't change the set.
+  private async _waitActionCondition(
+    condition: (actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null) => boolean,
+    {
+      completeImmediately = false,
+      completedErrorMessage = "Awaited action condition was already true",
+      timeoutMillis = null,
+      onTimeout,
+    }: {
+      completeImmediately?: boolean,
+      completedErrorMessage?: string,
+      timeoutMillis?: number | null,
+      onTimeout?: () => void
+    } = {})
+    : Promise<{ actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null }> {
+
     // If the condition is already true when `waitActionCondition` is called,
-    if (condition(this.actionsInProgress(), null)) {
+    if (condition(this._actionsInProgress, null)) {
       // Complete and return the actions in progress and the trigger action.
       if (completeImmediately)
-        return Promise.resolve({actions: this._actionsInProgressSnapshot(), triggerAction: null});
+        return Promise.resolve({actions: this.actionsInProgress(), triggerAction: null});
       // else throw an error.
       else
         throw new StoreException(completedErrorMessage + ", and the promise completed immediately.");
@@ -3171,17 +3213,17 @@ export class Store<St> {
     //
     else {
       return new Promise((resolve, reject) => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelTimer = () => {};
 
         const entry = {
           check: (actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null) => condition(actions, triggerAction),
           resolve: (actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null) => {
             // The condition was met, so the timeout is no longer needed.
-            clearTimeout(timer);
+            cancelTimer();
             resolve({actions, triggerAction: triggerAction});
           },
           reject: (error: unknown) => {
-            clearTimeout(timer);
+            cancelTimer();
             reject(error);
           },
         };
@@ -3189,11 +3231,11 @@ export class Store<St> {
 
         timeoutMillis ??= TimeoutException.defaultTimeoutMillis;
         if (timeoutMillis > 0) {
-          timer = setTimeout(() => {
+          cancelTimer = _setLongTimeout(() => {
             // Stop checking the condition, since nobody is waiting for it anymore.
             this._waitActionConditions = this._waitActionConditions.filter(c => c !== entry);
             _settleTimeout(timeoutMillis!, onTimeout,
-              () => resolve({actions: this._actionsInProgressSnapshot(), triggerAction: null}), reject);
+              () => resolve({actions: this.actionsInProgress(), triggerAction: null}), reject);
           }, timeoutMillis);
         }
       });
@@ -3220,7 +3262,7 @@ export class Store<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -3284,7 +3326,7 @@ export class Store<St> {
     : Promise<{ actions: Set<KissAction<St>>, triggerAction: KissAction<St> | null }> {
 
     if (!actions || (actions.length === 0)) {
-      return this.waitActionCondition(
+      return this._waitActionCondition(
         (actions) => actions.size === 0,
         {
           completeImmediately: completeImmediately,
@@ -3294,7 +3336,7 @@ export class Store<St> {
         },
       )
     } else {
-      return this.waitActionCondition((actionsInProgress) => {
+      return this._waitActionCondition((actionsInProgress) => {
           for (const action of actions) {
             if (actionsInProgress.has(action)) {
               return false;
@@ -3334,7 +3376,7 @@ export class Store<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -3373,7 +3415,7 @@ export class Store<St> {
       timeoutMillis?: number | null,
       onTimeout?: () => void
     } = {}): Promise<KissAction<St> | null> {
-    const {triggerAction} = await this.waitActionCondition(
+    const {triggerAction} = await this._waitActionCondition(
       (actionsInProgress) => {
         return !(Array.from(actionsInProgress).some((action) => action.constructor === actionType));
       },
@@ -3405,7 +3447,7 @@ export class Store<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -3444,7 +3486,7 @@ export class Store<St> {
     } = {}): Promise<void> {
 
     if (actionTypes.length === 0) {
-      await this.waitActionCondition(
+      await this._waitActionCondition(
         (actions) => actions.size === 0,
         {
           completeImmediately: completeImmediately,
@@ -3454,7 +3496,7 @@ export class Store<St> {
         }
       );
     } else {
-      await this.waitActionCondition(
+      await this._waitActionCondition(
         (actionsInProgress) => {
           for (const actionType of actionTypes) {
             if (Array.from(actionsInProgress).some(action => action.constructor === actionType)) return false;
@@ -3495,7 +3537,7 @@ export class Store<St> {
    * with a `TimeoutException`, and the condition stops being checked. The default is 3 seconds,
    * which is shorter than the default test timeout of Jest and Vitest (5 seconds). You can change
    * it globally with `TimeoutException.defaultTimeoutMillis`.
-   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1).
+   * To wait with NO timeout, pass `{ timeoutMillis: 0 }` (or -1, or `Infinity`).
    * To handle the timeout without an error, pass an `onTimeout` callback. If the timeout
    * expires, `onTimeout` is called, and the promise resolves with no trigger action (`null`),
    * instead of rejecting. If `onTimeout` throws, the promise rejects with that error.
@@ -3538,7 +3580,7 @@ export class Store<St> {
     } = {}
   ): Promise<KissAction<St> | null> {
 
-    const {triggerAction} = await this.waitActionCondition(
+    const {triggerAction} = await this._waitActionCondition(
       //
       (actionsInProgress, triggerAction) => {
 
@@ -3564,24 +3606,23 @@ export class Store<St> {
   }
 
   /**
-   * Returns an unmodifiable set of the actions on progress.
+   * Returns a copy of the set of the actions in progress.
+   *
+   * Each call returns a new copy. It doesn't change when actions are later dispatched or
+   * finish, and changing it doesn't affect the store.
+   *
    * For debug purposes, the `toString` method of the returned set will
    * call `KissAction.toString()` for all actions.
    */
   actionsInProgress(): Set<KissAction<St>> {
-    return new UnmodifiableSetView(this._actionsInProgress)
-  }
-
-  // Unlike `actionsInProgress()`, which is a live view, this is a copy of the actions in
-  // progress right now, so it doesn't change when actions are later dispatched or finish.
-  // The wait helpers resolve with it.
-  private _actionsInProgressSnapshot(): Set<KissAction<St>> {
-    return new UnmodifiableSetView(new Set(this._actionsInProgress));
+    return new PrintableSet(this._actionsInProgress);
   }
 
   /**
    * Waits until the store state meets a certain condition, and then dispatches an action.
-   * If the condition is already true, the action is dispatched right away.
+   * If the condition is already true, the action is dispatched right away, before `dispatchWhen`
+   * returns. Otherwise, it is dispatched synchronously, right after the state change that meets
+   * the condition, so no other action can change the state in between.
    *
    * ```ts
    * store.dispatchWhen(new BuyStock('IBM'), (state) => state.stocks.getPrice('IBM') >= 100, { timeoutMillis: 0 });
@@ -3591,7 +3632,7 @@ export class Store<St> {
    * is not met in `timeoutMillis` milliseconds, the action is NOT dispatched, and the condition
    * stops being checked. In this case, `onTimeout` is called if you provided it. Otherwise, the
    * timeout is logged with `Store.log()`. To wait with NO timeout, pass `{ timeoutMillis: 0 }`
-   * (or -1), but note that while it waits, the condition runs on every state change.
+   * (or -1, or `Infinity`), but note that while it waits, the condition runs on every state change.
    *
    * ```ts
    * store.dispatchWhen(
@@ -3616,21 +3657,64 @@ export class Store<St> {
       onTimeout?: () => void
     }
   ): void {
-    let timedOut = false;
+    // Only happens if the condition or `onTimeout` throws. Log it, since nobody awaits `dispatchWhen`.
+    const logFailure = (error: unknown) =>
+      Store.log(`dispatchWhen failed, and did not dispatch ${action}: ${error}`);
 
-    this.waitCondition(condition, {
-      timeoutMillis,
-      onTimeout: () => {
-        timedOut = true;
-        if (onTimeout) onTimeout();
-        else Store.log(`dispatchWhen timed out, and did not dispatch ${action}.`);
+    // Unlike `waitCondition`, this doesn't use a Promise, so that the action is dispatched
+    // synchronously: right away if the condition is already met, or right after the state
+    // change that meets it. Otherwise, other dispatches could change the state in between.
+    let isMet: boolean;
+    try {
+      isMet = condition(this._state);
+    } catch (error) {
+      logFailure(error);
+      return;
+    }
+
+    if (isMet) {
+      this._dispatchWhenAction(action);
+      return;
+    }
+
+    let cancelTimer = () => {};
+
+    const entry = {
+      check: condition,
+      // Called by `_registerState`, which dispatches the action after checking all conditions.
+      resolve: () => {
+        cancelTimer();
+        this._dispatchWhenQueue.push(action);
       },
-    })
-      .then(() => {
-        if (!timedOut) this.dispatch(action);
-      })
-      // Only happens if the condition or `onTimeout` throws. Log it, since nobody awaits `dispatchWhen`.
-      .catch(error => Store.log(`dispatchWhen failed, and did not dispatch ${action}: ${error}`));
+      reject: (error: unknown) => {
+        cancelTimer();
+        logFailure(error);
+      },
+    };
+    this._waitConditions.push(entry);
+
+    if (timeoutMillis > 0) {
+      cancelTimer = _setLongTimeout(() => {
+        // Stop checking the condition, since the action will not be dispatched anymore.
+        this._waitConditions = this._waitConditions.filter(c => c !== entry);
+        try {
+          if (onTimeout) onTimeout();
+          else Store.log(`dispatchWhen timed out, and did not dispatch ${action}.`);
+        } catch (error) {
+          logFailure(error);
+        }
+      }, timeoutMillis);
+    }
+  }
+
+  // Dispatches an action of `dispatchWhen`. A synchronous error is logged, and doesn't affect
+  // the action that changed the state.
+  private _dispatchWhenAction(action: KissAction<St>) {
+    try {
+      this.dispatch(action);
+    } catch (error) {
+      Store.log(`dispatchWhen failed to dispatch ${action}: ${error}`);
+    }
   }
 }
 
@@ -3667,7 +3751,7 @@ class Mocks<St> {
     this.mocks.set(actionType, mockFunction ?? (() => null));
   }
 
-  remove(actionType: new () => KissAction<St>): void {
+  remove(actionType: new (...args: any[]) => KissAction<St>): void {
     this.mocks.delete(actionType);
   }
 
@@ -3675,12 +3759,45 @@ class Mocks<St> {
     this.mocks.clear();
   }
 
-  get(actionType: new () => KissAction<St>): ((action: KissAction<St>) => KissAction<St> | null) | undefined {
+  get<T extends KissAction<St>>(
+    actionType: new (...args: any[]) => T): ((action: T) => KissAction<St> | null) | undefined {
     return this.mocks.get(actionType);
   }
 }
 
 export type ShowUserException = (exception: UserException, count: number, next: () => void) => void;
+
+/**
+ * A plain `Set` whose `toString` lists its elements (for actions, calling `KissAction.toString()`),
+ * instead of printing `[object Set]`. Used for the copies of the actions in progress.
+ */
+class PrintableSet<T> extends Set<T> {
+  toString() {
+    return Array.from(this).toString();
+  }
+}
+
+/**
+ * Like `setTimeout`, but also works for delays larger than `setTimeout` accepts (about 24.8
+ * days), by chaining timers. A delay of `Infinity` never fires. Returns a function that cancels
+ * the timeout.
+ */
+function _setLongTimeout(callback: () => void, millis: number): () => void {
+  if (millis === Infinity) return () => {};
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const schedule = (remaining: number) => {
+    const delay = Math.min(remaining, MAX_TIMEOUT_MILLIS);
+    timer = setTimeout(() => {
+      if (remaining > delay) schedule(remaining - delay);
+      else callback();
+    }, delay);
+  };
+
+  schedule(millis);
+  return () => clearTimeout(timer);
+}
 
 /**
  * Called when a wait times out. If `onTimeout` was given, calls it and resolves the wait.
