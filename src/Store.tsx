@@ -760,10 +760,11 @@ export class Store<St> {
   }> = [];
 
   /**
-   * Helps implement the `dispatchWhen` method. The actions whose condition was met by the
-   * current state change, to be dispatched when `_registerState` finishes.
+   * Helps implement the `dispatchWhen` method. One function for each `dispatchWhen` whose
+   * condition was met by the current state change, called when `_registerState` finishes.
+   * It checks the condition again, and dispatches the action if it's still met.
    */
-  private _dispatchWhenQueue: KissAction<St>[] = [];
+  private _dispatchWhenQueue: Array<() => void> = [];
 
   /**
    * Helps implement the `dispatchWhen` method. The functions that cancel the `dispatchWhen`s
@@ -1289,7 +1290,9 @@ export class Store<St> {
   // Returns true if the dispatch must be aborted: either `abortDispatch()` returns true, or the
   // action is non-reentrant and another action with the same non-reentrant key is already running,
   // or the action is inside the throttle period of another action with the same throttle lock,
-  // or the data of another action with the same fresh-key is still fresh.
+  // or the data of another action with the same fresh-key is still fresh. A debounced action only
+  // checks these keys when its debounce period ends (see `_mustAbortAfterDebounce`), since
+  // otherwise the first dispatch would take the key, and abort the later ones that should replace it.
   // Note: It's up to the developer to make sure `abortDispatch`, `computeNonReentrantKey`,
   // `throttleLockBuilder`, `ignoreThrottle`, `computeFreshKey` and `ignoreFresh` don't throw
   // any errors. If they do, the error is logged and swallowed, and the dispatch is aborted.
@@ -1304,17 +1307,40 @@ export class Store<St> {
     action._logOutCountAtDispatch = this._logOutCount;
     try {
       if (action['abortDispatch']()) return true;
-      // Non-reentrant, throttle and fresh can't be combined (it throws when dispatched), so
-      // an action only takes one of these keys.
-      if (Store._isNonReentrant(action)) return this._isNonReentrantKeyRunning(action);
-      const throttleMillis = action._throttleMillis;
-      if (throttleMillis !== null) return this._isThrottled(action, throttleMillis);
-      const freshMillis = action._freshMillis;
-      return (freshMillis !== null) && this._isFresh(action, freshMillis);
+      if (action._debounceMillis !== null) return false;
+      return this._isBlockedByKey(action);
     } catch (error) {
       Store._logLazy(() => `Checking if '${action}' must abort its dispatch has thrown an error: ${error}.`);
       return true;
     }
+  }
+
+  // Called when the debounce period of the action ends, right before its reducer runs. Returns
+  // true if the action must be aborted, because its non-reentrant key, throttle lock or fresh-key
+  // is taken (see `_mustAbortDispatch`). Otherwise, the action takes its key. If computing the key
+  // throws, the error is logged and swallowed, and the action is aborted.
+  private _mustAbortAfterDebounce(action: KissAction<St>): boolean {
+    try {
+      if (this._isBlockedByKey(action)) return true;
+    } catch (error) {
+      Store._logLazy(() => `Checking if '${action}' must abort after its debounce period has thrown an error: ${error}.`);
+      return true;
+    }
+    if (Store._isNonReentrant(action)) this._nonReentrantActionsRunning.add(action);
+    return false;
+  }
+
+  // Returns true if the action is non-reentrant and its key is running, or if it's throttled, or
+  // if its fresh-key is fresh. Otherwise, the throttled or fresh action takes its lock or key.
+  // Note the non-reentrant key is only taken when the action starts running.
+  private _isBlockedByKey(action: KissAction<St>): boolean {
+    // Non-reentrant, throttle and fresh can't be combined (it throws when dispatched), so
+    // an action only takes one of these keys.
+    if (Store._isNonReentrant(action)) return this._isNonReentrantKeyRunning(action);
+    const throttleMillis = action._throttleMillis;
+    if (throttleMillis !== null) return this._isThrottled(action, throttleMillis);
+    const freshMillis = action._freshMillis;
+    return (freshMillis !== null) && this._isFresh(action, freshMillis);
   }
 
   // `nonReentrant` actions, `OptimisticCommand`s and `unlimitedRetryCheckInternet` actions are
@@ -1634,7 +1660,8 @@ export class Store<St> {
     // Note: We do this BEFORE notifying the UI, so that a single rebuild sees both changes.
     // Otherwise, the `isWaiting` selectors would still see the action as not in progress.
     this._actionsInProgress.add(action);
-    if (Store._isNonReentrant(action)) this._nonReentrantActionsRunning.add(action);
+    // A debounced action only takes its non-reentrant key when its debounce period ends.
+    if (Store._isNonReentrant(action) && (action._debounceMillis === null)) this._nonReentrantActionsRunning.add(action);
 
     // The action just entered the set of actions in progress, so we check the wait conditions.
     this._checkAllActionConditions(action);
@@ -2149,7 +2176,8 @@ export class Store<St> {
   /**
    * Waits for the debounce period, and then calls the action's own `wrapReduce`. If another
    * action with the same lock is dispatched meanwhile, returns `null` right away instead, so
-   * that the action finishes without running its reducer.
+   * that the action finishes without running its reducer. When the debounce period ends, the
+   * action is aborted if its non-reentrant key, throttle lock or fresh-key is taken.
    *
    * The result is always ASYNC. A SYNC reducer's new state is returned as `() => newState`.
    */
@@ -2166,6 +2194,8 @@ export class Store<St> {
       async function _wrapReduceDebounceAsync(): AsyncReducer<St> {
         const isLast = await store._waitDebounce(action['debounceLockBuilder'](), debounceMillis);
         if (!isLast) return null;
+        if (store._mustAbortAfterDebounce(action))
+          throw kissAbort('The non-reentrant key, throttle lock or fresh-key was taken when the debounce period ended.');
 
         const newState = userWrapReduce(reduce)();
         if (newState instanceof Promise) return newState;
@@ -2690,11 +2720,12 @@ export class Store<St> {
 
     // Dispatch the `dispatchWhen` actions whose condition was met. This is done only now, so that
     // all wait-conditions are checked against the state that met them, and the persistor gets
-    // that state before the state changed by these actions.
+    // that state before the state changed by these actions. Each condition is checked again
+    // right before its action is dispatched, since an earlier action may have made it false.
     if (this._dispatchWhenQueue.length > 0) {
-      const actions = this._dispatchWhenQueue;
+      const dispatchIfStillMetFunctions = this._dispatchWhenQueue;
       this._dispatchWhenQueue = [];
-      for (const whenAction of actions) this._dispatchWhenAction(whenAction);
+      for (const dispatchIfStillMet of dispatchIfStillMetFunctions) dispatchIfStillMet();
     }
   }
 
@@ -2798,9 +2829,12 @@ export class Store<St> {
 
   /**
    * You can use `isWaiting` and pass it an action `type`:
-   * - It returns true if an ASYNC action of the specific type is currently being processed.
-   * - It returns false if an ASYNC action of the specific type is NOT currently being processed.
-   * - This is only useful for ASYNC actions, since it always returns `false` when the action is SYNC.
+   * - It returns true if an action of the given type (or of a subclass) is currently being processed.
+   * - It returns false if no action of the given type is currently being processed.
+   * - This is only useful for ASYNC actions. A SYNC action finishes before `dispatch` returns, so
+   *   outside of it, `isWaiting` is always `false` for it, and components never see it as `true`.
+   * - Inside an action, `isWaiting` of the action's own type is always `true` (even when the action
+   *   is SYNC), since the action itself is being processed.
    *
    * Note an action is ASYNC if it returns a promise from its `before` OR its `reduce` methods.
    *
@@ -2867,13 +2901,44 @@ export class Store<St> {
    * By default, when `logStateChanges` is set to `true` in the Store constructor, function
    * `describeStateChange` is used together with `Store.log()` to print all state changes to
    * the console. Note you should turn this off in production.
+   *
+   * The values can be of any type, including primitives (for a state that is a number or a
+   * string), and objects with `Date`, `Map` and `Set` fields:
+   *
+   * ```ts
+   * Store.describeStateChange(0, 1); // 'State: 0 → 1; '
+   * Store.describeStateChange({ user: { name: 'Ann' } }, { user: { name: 'Bob' } }); // 'State user.name: Ann → Bob; '
+   * Store.describeStateChange({ prices: new Map([['IBM', 1]]) }, { prices: new Map([['IBM', 2]]) }); // 'State prices[IBM]: 1 → 2; '
+   * ```
    */
   static describeStateChange(obj1: any, obj2: any, path: string = ''): string {
-    // Ensure both parameters are objects
-    if (typeof obj1 !== 'object' || typeof obj2 !== 'object' || obj1 == null || obj2 == null) {
-      return '';
-      // Note: This method should not fail.
-      // Throw new StoreException(`Type mismatch or one of the objects is null at path: ${path}`);
+    if (obj1 === obj2) return '';
+
+    const describeChange = () =>
+      `State${path === '' ? '' : ' ' + path}: ${Store._describeValue(obj1)} → ${Store._describeValue(obj2)}; `;
+
+    // Primitives, null, or an object that replaced a primitive (or the other way around).
+    if (!Store._isObject(obj1) || !Store._isObject(obj2))
+      return Object.is(obj1, obj2) ? '' : describeChange();
+
+    // Dates and sets have no keys, so they are compared by their contents.
+    if (obj1 instanceof Date || obj2 instanceof Date) {
+      const isSameDate = (obj1 instanceof Date) && (obj2 instanceof Date) && Object.is(obj1.getTime(), obj2.getTime());
+      return isSameDate ? '' : describeChange();
+    }
+    if (obj1 instanceof Set || obj2 instanceof Set) {
+      const isSameSet = (obj1 instanceof Set) && (obj2 instanceof Set) && (obj1.size === obj2.size)
+        && [...obj1].every(value => obj2.has(value));
+      return isSameSet ? '' : describeChange();
+    }
+
+    // Maps are compared by their entries, like objects are compared by their keys.
+    if (obj1 instanceof Map || obj2 instanceof Map) {
+      if (!(obj1 instanceof Map) || !(obj2 instanceof Map)) return describeChange();
+      let differences = '';
+      for (const key of new Set([...obj1.keys(), ...obj2.keys()]))
+        differences += Store.describeStateChange(obj1.get(key), obj2.get(key), `${path}[${Store._describeValue(key)}]`);
+      return differences;
     }
 
     let differences = '';
@@ -2881,21 +2946,28 @@ export class Store<St> {
     const allKeys = new Set([...Object.keys(obj1), ...Object.keys(obj2)]);
 
     for (const key of allKeys) {
-      const val1 = obj1[key];
-      const val2 = obj2[key];
       const newPath = path === '' ? key : `${path}.${key}`;
-
-      // If both values are objects, recurse
-      if (typeof val1 === 'object' && val1 !== null && typeof val2 === 'object' && val2 !== null) {
-        differences += Store.describeStateChange(val1, val2, newPath);
-      } else {
-        // If values are different, log the difference
-        if (val1 !== val2) {
-          differences += `State ${newPath}: ${val1} → ${val2}; `;
-        }
-      }
+      differences += Store.describeStateChange(obj1[key], obj2[key], newPath);
     }
     return differences;
+  }
+
+  private static _isObject(value: any): boolean {
+    return typeof value === 'object' && value !== null;
+  }
+
+  // Describes a value for `describeStateChange`. Note this method should not fail.
+  private static _describeValue(value: any): string {
+    try {
+      if (value instanceof Date) return isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString();
+      if (value instanceof Set) return `Set{${[...value].map(v => Store._describeValue(v)).join(', ')}}`;
+      if (value instanceof Map)
+        return `Map{${[...value].map(([k, v]) => `${Store._describeValue(k)}: ${Store._describeValue(v)}`).join(', ')}}`;
+      return String(value);
+    } catch {
+      // For example, an object with no prototype has no `toString`.
+      return Object.prototype.toString.call(value);
+    }
   }
 
   /**
@@ -3726,12 +3798,12 @@ export class Store<St> {
    */
   waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
-    options: { timeoutMillis?: number | null, onTimeout: () => void }
-  ): Promise<KissAction<St> | null>;
+    options?: { timeoutMillis?: number | null, onTimeout?: undefined }
+  ): Promise<KissAction<St>>;
   waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
-    options?: { timeoutMillis?: number | null }
-  ): Promise<KissAction<St>>;
+    options: { timeoutMillis?: number | null, onTimeout?: () => void }
+  ): Promise<KissAction<St> | null>;
   async waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
     {
@@ -3786,6 +3858,9 @@ export class Store<St> {
    * If the condition is already true, the action is dispatched right away, before `dispatchWhen`
    * returns. Otherwise, it is dispatched synchronously, right after the state change that meets
    * the condition, so no other action can change the state in between.
+   * If the same state change meets the condition of several `dispatchWhen`, their actions are
+   * dispatched one after the other, and each condition is checked again right before its
+   * action is dispatched. If an earlier action made it false, it keeps waiting.
    *
    * ```ts
    * store.dispatchWhen(new BuyStock('IBM'), (state) => state.stocks.getPrice('IBM') >= 100, { timeoutMillis: 0 });
@@ -3851,19 +3926,40 @@ export class Store<St> {
       Store._logLazy(() => `logOut cancelled the dispatchWhen of ${action}.`);
     };
 
+    const fail = (error: unknown) => {
+      cancelTimer();
+      this._dispatchWhenCancels.delete(cancel);
+      logFailure(error);
+    };
+
+    // Called by `_registerState` after checking all conditions. Other `dispatchWhen` met by the
+    // same state change may have been dispatched before, and changed the state. So the condition
+    // is checked again: if it's no longer met, it keeps waiting, with the same timeout.
+    const dispatchIfStillMet = () => {
+      // Cancelled by `logOut` (possibly dispatched by an earlier action).
+      if (!this._dispatchWhenCancels.has(cancel)) return;
+
+      let isStillMet: boolean;
+      try {
+        isStillMet = condition(this._state);
+      } catch (error) {
+        fail(error);
+        return;
+      }
+
+      if (isStillMet) {
+        cancelTimer();
+        this._dispatchWhenCancels.delete(cancel);
+        this._dispatchWhenAction(action);
+      } else this._waitConditions.push(entry);
+    };
+
     const entry = {
       check: condition,
-      // Called by `_registerState`, which dispatches the action after checking all conditions.
-      resolve: () => {
-        cancelTimer();
-        this._dispatchWhenCancels.delete(cancel);
-        this._dispatchWhenQueue.push(action);
-      },
-      reject: (error: unknown) => {
-        cancelTimer();
-        this._dispatchWhenCancels.delete(cancel);
-        logFailure(error);
-      },
+      // The condition was removed from `_waitConditions`, but it's still waiting until
+      // `dispatchIfStillMet` is called.
+      resolve: () => this._dispatchWhenQueue.push(dispatchIfStillMet),
+      reject: fail,
     };
     this._waitConditions.push(entry);
     this._dispatchWhenCancels.add(cancel);

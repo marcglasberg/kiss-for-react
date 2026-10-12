@@ -6,8 +6,8 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 
 /**
  * Reports a `UserException` thrown where Kiss can't catch it: in a React component or hook,
- * in a function declared inside them (like an event handler, or an effect), or in the `after`
- * method of an action:
+ * in an arrow function, function expression or object method inside them (like an event
+ * handler, or an effect), or in the `after` method of an action:
  *
  * ```tsx
  * <button onClick={() => { throw new UserException('Invalid'); }} />       // Dispatch it instead.
@@ -16,7 +16,8 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  *
  * A `UserException` is only shown to the user when it's thrown from the `before` or `reduce`
  * of an action. Throws caught by a `try` in the same function are not reported, and neither
- * are throws in other functions (which may be called from an action).
+ * are throws in other functions, including `function` declarations inside a component or hook
+ * (which may be called from an action).
  *
  * Suggestion: dispatch a `UserExceptionAction` instead.
  */

@@ -410,6 +410,9 @@ export abstract class KissAction<St> {
    * If the condition is already true, the action is dispatched right away, before `dispatchWhen`
    * returns. Otherwise, it is dispatched synchronously, right after the state change that meets
    * the condition, so no other action can change the state in between.
+   * If the same state change meets the condition of several `dispatchWhen`, their actions are
+   * dispatched one after the other, and each condition is checked again right before its
+   * action is dispatched. If an earlier action made it false, it keeps waiting.
    *
    * ```ts
    * this.dispatchWhen(new BuyStock('IBM'), (state) => state.stocks.getPrice('IBM') >= 100, { timeoutMillis: 0 });
@@ -659,9 +662,12 @@ export abstract class KissAction<St> {
 
   /**
    * You can use `isWaiting` and pass it an action `type`:
-   * - It returns true if an ASYNC action of the specific type is currently being processed.
-   * - It returns false if an ASYNC action of the specific type is NOT currently being processed.
-   * - This is only useful for ASYNC actions, since it always returns `false` when the action is SYNC.
+   * - It returns true if an action of the given type (or of a subclass) is currently being processed.
+   * - It returns false if no action of the given type is currently being processed.
+   * - This is only useful for ASYNC actions. A SYNC action finishes before `dispatch` returns, so
+   *   outside of it, `isWaiting` is always `false` for it, and components never see it as `true`.
+   * - Inside an action, `isWaiting` of the action's own type is always `true` (even when the action
+   *   is SYNC), since the action itself is being processed.
    *
    * Note an action is ASYNC if it returns a promise from its `before` OR its `reduce` methods.
    *
@@ -757,6 +763,8 @@ export abstract class KissAction<St> {
    * Notes:
    * - It can be combined with `retry` and `checkInternet`. With `retry`, the key is only
    *   released after the last attempt.
+   * - It can be combined with `debounce`. The key is then checked and taken when the debounce
+   *   period ends, right before the reducer runs, and not when the action is dispatched.
    * - If `abortDispatch()` returns `true`, the action is aborted before the non-reentrant
    *   check, and doesn't take the key.
    * - It should not be used in an `OptimisticCommand`, which is already non-reentrant.
@@ -833,7 +841,8 @@ export abstract class KissAction<St> {
 
   /**
    * For Kiss internal use only.
-   * The non-reentrant key of this action, saved by the store when the action is dispatched.
+   * The non-reentrant key of this action, saved by the store when the action is dispatched
+   * (or, with `debounce`, when its debounce period ends).
    */
   _nonReentrantKey: any = undefined;
 
@@ -965,6 +974,12 @@ export abstract class KissAction<St> {
    *   types again, two requests run at the same time, and the older one may finish last and
    *   overwrite the newer result. To prevent that, combine it with `ignoreOld`, which also
    *   lets you cancel the older request.
+   * - It can be combined with `nonReentrant`, `throttle` and `fresh`. Their checks then
+   *   happen when the debounce period ends, right before the reducer runs, and not when the
+   *   action is dispatched. So the actions that are replaced by a newer one during the wait
+   *   time don't take the non-reentrant key, the throttle lock or the fresh-key, and the last
+   *   action is aborted (without running its reducer) if, when its wait time ends, the key is
+   *   taken. Note `abortDispatch()` is still checked when the action is dispatched.
    */
   declare debounce?: number | boolean;
 
@@ -1283,7 +1298,7 @@ export abstract class KissAction<St> {
    *
    * ```tsx
    * function MyScreen() {
-   *   useDispatch({ onMount: (store) => store.dispatch(new LoadInformation()) }); // Here!
+   *   useStoreEffect({ onMount: (store) => store.dispatch(new LoadInformation()) }); // Here!
    *   const information = useSelect((state: State) => state.information);
    *
    *   return <div>Information: {information}</div>;
@@ -1399,7 +1414,8 @@ export abstract class KissAction<St> {
    * other action features, which is useful during logout.
    *
    * Notes:
-   * - The throttle period starts when the action is dispatched, not when it finishes.
+   * - The throttle period starts when the action is dispatched, not when it finishes. With
+   *   `debounce`, it starts when the debounce period ends, right before the reducer runs.
    * - It works with both SYNC and ASYNC actions, and can be combined with `retry`,
    *   `checkInternet`, `debounce` and `ignoreOld`.
    * - It should not be combined with `nonReentrant` or `fresh`, nor used in an
@@ -1510,7 +1526,7 @@ export abstract class KissAction<St> {
    *
    * ```tsx
    * function MyScreen() {
-   *   useDispatch({ onMount: (store) => store.dispatch(new LoadInformation()) }); // Here!
+   *   useStoreEffect({ onMount: (store) => store.dispatch(new LoadInformation()) }); // Here!
    *   const information = useSelect((state: State) => state.information);
    *
    *   return <div>Information: {information}</div>;
@@ -1683,7 +1699,8 @@ export abstract class KissAction<St> {
    * - Any value can be a key, for example an enum value or a constant string.
    *
    * Notes:
-   * - The fresh period starts when the action is dispatched, not when it finishes.
+   * - The fresh period starts when the action is dispatched, not when it finishes. With
+   *   `debounce`, it starts when the debounce period ends, right before the reducer runs.
    * - If `abortDispatch()` returns `true`, the action is aborted before the fresh check, and
    *   doesn't make its key fresh.
    * - It works with both SYNC and ASYNC actions, and can be combined with `retry`,
@@ -3478,12 +3495,12 @@ export abstract class KissAction<St> {
    */
   waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
-    options: { timeoutMillis?: number | null, onTimeout: () => void }
-  ): Promise<KissAction<St> | null>;
+    options?: { timeoutMillis?: number | null, onTimeout?: undefined }
+  ): Promise<KissAction<St>>;
   waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
-    options?: { timeoutMillis?: number | null }
-  ): Promise<KissAction<St>>;
+    options: { timeoutMillis?: number | null, onTimeout?: () => void }
+  ): Promise<KissAction<St> | null>;
   async waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
     {
@@ -3498,7 +3515,7 @@ export abstract class KissAction<St> {
       actionTypes, {
         timeoutMillis: timeoutMillis,
         onTimeout: onTimeout,
-      } as { timeoutMillis?: number | null, onTimeout: () => void });
+      });
   }
 
   /**
@@ -4096,7 +4113,8 @@ export class ActionStatus {
  *
  * - If `sendCommandToServer` fails, the rollback happens only if the current state still
  *   matches the optimistic value created by this dispatch. The rollback restores the value
- *   from `initialState`. Then the action fails with the error of `sendCommandToServer`.
+ *   it had right before the optimistic value was applied. Then the action fails with the error
+ *   of `sendCommandToServer`.
  *
  * - The reload is optional. If implemented, it runs after `sendCommandToServer` finishes,
  *   only in case of error (this can be changed by overriding `shouldReload`).
@@ -4199,7 +4217,8 @@ export class ActionStatus {
  * - It can be combined with `retry` and `checkInternet`.
  * - It can be combined with `sequential`. Note the optimistic value is then only applied to
  *   the state when the action gets its turn in the queue, and not as soon as the action is
- *   dispatched.
+ *   dispatched. So, if it fails, it rolls back to the value it had when it got its turn, which
+ *   keeps the commands that ran before it in the queue.
  * - It should not be combined with `nonReentrant` (it's already non-reentrant), nor with
  *   unlimited retries (a command that never finishes would never release its non-reentrant
  *   key), nor with `debounce`, `throttle`, `fresh` or `ignoreOld`. Dispatching it with those
@@ -4306,8 +4325,10 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    *
    * Parameters:
    *
-   * - `initialValue` is the value extracted from `initialState` using `getValueFromState`.
-   *   It's what the value was when this action was dispatched.
+   * - `initialValue` is the value extracted with `getValueFromState` right before the
+   *   optimistic value was applied. It's usually what the value was when this action was
+   *   dispatched. But if the action waited before applying it (for its turn in the `sequential`
+   *   queue, or for the internet check of `checkInternet`), it's the value after that wait.
    *
    * - `optimisticValue` is the value returned by `optimisticValue()` and applied
    *   optimistically by this dispatch.
@@ -4449,6 +4470,11 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * `applyValueToState` and `sendCommandToServer` instead.
    */
   protected async reduce(): Promise<null> {
+    // The value to roll back to. It's read now, and not from `initialState`, because the action
+    // may have waited since it was dispatched (for its turn in the `sequential` queue, or for
+    // the internet check), and the value may have changed meanwhile.
+    const initialValue = this.getValueFromState(this.state);
+
     // Updates the value optimistically.
     const optimistic = this.optimisticValue();
     this._applyState(this.applyValueToState(this.state, optimistic));
@@ -4474,8 +4500,6 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
 
       // Decides if it's safe to roll back (default: only if we are still seeing our own
       // optimistic value, to avoid undoing newer changes made while the request was in flight).
-      const initialValue = this.getValueFromState(this.initialState);
-
       if (this.shouldRollback({
         currentValue: this.getValueFromState(this.state),
         initialValue,
@@ -5301,6 +5325,11 @@ let _deviceId: number | undefined = undefined;
  *    a PUSH. If so, no follow-up request is needed, because the push already came from the
  *    server. This requires server pushes to be applied by an action that extends `ServerPush`,
  *    with the same key as the corresponding `OptimisticSyncWithPush` action.
+ *    However, when the request completes, the server revision of its response may show that
+ *    the push is older than the request (the server applied the push first). In this case, the
+ *    pushed value is stale, so the latest local value is put back in the state (unless a newer
+ *    push arrived since then), and the most recent change counts as local. So, a follow-up
+ *    request is sent if the value was changed locally while the request was in flight.
  *
  * 5. **Fewer intermediate requests**: If the state changes many times while the request is in
  *    flight, all those changes are coalesced into a single follow-up request. However, since
@@ -5506,6 +5535,10 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
   // `null` if it was not informed. It's reset before each request.
   private _informedServerRevision: number | null = null;
 
+  // True if `informServerRevision()`, during the current request, found that the push applied
+  // while the request was in flight is older than the request. It's reset before each request.
+  private _wasPushStale = false;
+
   /**
    * Optionally, override `optimisticSyncKeyParams()` to differentiate the coalescing by the
    * action parameters. For example, if you have a like button per item, return the item ID, so
@@ -5702,7 +5735,9 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    * than the newest known server revision, considering both the revision kept by Kiss, and
    * `getServerRevisionFromState()`. This prevents regressions from stale or out-of-order
    * updates. The server response is only applied if this revision is not older than the newest
-   * known revision.
+   * known revision. If a push was applied while the request was in flight, and `revision` is
+   * greater than the server revision of that push, the push is stale: when the request
+   * finishes, the latest local value is put back in the state.
    */
   informServerRevision(revision: number | Date): void {
     const value = (revision instanceof Date) ? revision.getTime() : revision;
@@ -5721,13 +5756,12 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
     const known = this._revisionOf(this._key);
 
     // Only moves forward. Since this revision is newer than any push, the latest change is no
-    // longer from a push.
-    if (value > known.serverRevision)
-      this.store._setOptimisticSyncRevision(this._key, {
-        localRevision: known.localRevision,
-        serverRevision: value,
-        isPush: false,
-      });
+    // longer from a push. If a push was applied while the request was in flight, the server
+    // applied it before this request, so the pushed value is stale.
+    if (value > known.serverRevision) {
+      if (known.isPush) this._wasPushStale = true;
+      this.store._setOptimisticSyncRevision(this._key, { ...known, serverRevision: value, isPush: false });
+    }
   }
 
   /**
@@ -5792,6 +5826,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
       localRevision,
       serverRevision: known.serverRevision,
       isPush: false,
+      localValue: this.getValueFromState(newState),
     });
 
     // Always applies the optimistic update immediately.
@@ -5823,6 +5858,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
 
         // Reset before each request, to detect if `informServerRevision()` was called.
         this._informedServerRevision = null;
+        this._wasPushStale = false;
 
         // Sends the value, and gets the server response (may be null or undefined).
         const serverResponse = await this.sendValueToServer(
@@ -5840,6 +5876,14 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
             'If you don\'t need server-push handling, use `OptimisticSync` instead.');
 
         const known = this._revisionOf(this._key);
+
+        // A push applied while the request was in flight is older than the request, so it
+        // overwrote the latest local value with a stale value. Unless a newer push arrived since
+        // then, puts the latest local value back in the state. It's then sent by the follow-up
+        // request, if any, and otherwise it's the value the server has.
+        if (this._wasPushStale && !known.isPush &&
+          !Object.is(this.getValueFromState(this.state), known.localValue))
+          this._applyState(this.applyOptimisticValueToState(this.state, known.localValue));
 
         // If the latest change was made locally (not by a push), and the local-revision advanced
         // since this request was sent, the user changed the value while the request was in
@@ -5931,6 +5975,10 @@ export type _OptimisticSyncRevision = {
   serverRevision: number,
   // True if the latest change of the key came from a push.
   isPush: boolean,
+  // The value of the latest local change (read with `getValueFromState`), or `undefined` if
+  // there was none. It's put back in the state when a push applied while a request was in
+  // flight turns out to be older than that request.
+  localValue: any,
 };
 
 /**
@@ -5955,6 +6003,7 @@ function _revisionOf(store: Store<any>, key: any, serverRevisionFromState: numbe
     localRevision: kept?.localRevision ?? 0,
     serverRevision: Math.max(kept?.serverRevision ?? -1, serverRevisionFromState),
     isPush: kept?.isPush ?? false,
+    localValue: kept?.localValue,
   };
 }
 
@@ -6076,7 +6125,8 @@ export abstract class ServerPush<St> extends KissAction<St> {
   /**
    * Return the `PushMetadata` that came with the push:
    *
-   * - The server revision.
+   * - The server revision. It must be a finite number, otherwise the push fails with a
+   *   `StoreException`, and the state doesn't change.
    * - The local-revision.
    * - The device ID.
    *
@@ -6105,7 +6155,9 @@ export abstract class ServerPush<St> extends KissAction<St> {
    * - The given `serverRevision` is saved for the given `key`.
    *
    * Return `null` to ignore the push. Note its server revision is still recorded as the newest
-   * known one, so older pushes and responses are ignored.
+   * known one, so older pushes and responses are ignored. But since the state doesn't change,
+   * the ignored push doesn't count as the latest change: if the value was changed locally while
+   * a request was in flight, a follow-up request still sends it.
    */
   protected abstract applyServerPushToState(state: St, key: any, serverRevision: number): St | null;
 
@@ -6123,6 +6175,13 @@ export abstract class ServerPush<St> extends KissAction<St> {
     const key = this.computeOptimisticSyncKey();
     const { serverRevision, localRevision, deviceId } = this.pushMetadata();
 
+    // A non-finite revision would be recorded as the newest known one, and then no other push or
+    // response could be compared with it.
+    if (typeof serverRevision !== 'number' || !Number.isFinite(serverRevision))
+      throw new StoreException(
+        `Action ${this.constructor.name} pushed an invalid server revision: ` +
+        `it must be a finite number, but got ${String(serverRevision)}.`);
+
     const known = _revisionOf(this.store, key, this.getServerRevisionFromState(this.state, key));
 
     // Ignores stale and out-of-order pushes.
@@ -6134,11 +6193,7 @@ export abstract class ServerPush<St> extends KissAction<St> {
     // So, it only records the server revision. It does NOT apply the push, and does NOT count
     // as a push, since then the newer local value would not be sent in a follow-up request.
     if (isSelf && (localRevision < known.localRevision)) {
-      this.store._setOptimisticSyncRevision(key, {
-        localRevision: known.localRevision,
-        serverRevision,
-        isPush: false,
-      });
+      this.store._setOptimisticSyncRevision(key, { ...known, serverRevision, isPush: false });
       return null;
     }
 
@@ -6146,11 +6201,14 @@ export abstract class ServerPush<St> extends KissAction<St> {
     const newState = this.applyServerPushToState(this.state, key, serverRevision);
 
     // Always records the newest known server revision, even if the push is ignored by
-    // `applyServerPushToState` (which returned null).
+    // `applyServerPushToState` (which returned null). But an ignored push doesn't change the
+    // state, so it doesn't count as a push: otherwise, a newer local change would not be sent
+    // in a follow-up request.
     this.store._setOptimisticSyncRevision(key, {
+      ...known,
       localRevision: isSelf ? Math.max(known.localRevision, localRevision) : known.localRevision,
       serverRevision,
-      isPush: true,
+      isPush: (newState === null) ? known.isPush : true,
     });
 
     return newState;

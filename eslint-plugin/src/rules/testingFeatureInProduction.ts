@@ -3,7 +3,7 @@ import { ClassNode, isActionClass } from '../actionMethods.js';
 import { kissObjectKind, memberPropertyName } from '../storeUsage.js';
 import { createRule, getTypeInfo, isTestFile, memberName, returnedExpressions, unwrap } from '../utils.js';
 
-/** The wait methods that the Kiss docs say are only for tests. */
+/** The wait methods that are only for tests (`waitAllActions` is checked separately). */
 const TEST_WAIT_METHODS = new Set(['waitActionType', 'waitAllActionTypes', 'waitAnyActionTypeFinishes', 'waitActionCondition']);
 
 /**
@@ -22,10 +22,11 @@ const TEST_WAIT_METHODS = new Set(['waitActionType', 'waitAllActionTypes', 'wait
  * }
  * ```
  *
- * The features are `store.mocks`, `store.record`, the wait methods that the docs say are only
- * for tests (`waitActionType`, `waitAllActionTypes`, `waitAnyActionTypeFinishes` and
- * `waitActionCondition`), and `waitAllActions` with no actions (it waits until no actions are
- * running, which may deadlock). The wait methods are also checked in the store returned by
+ * The features are `store.mocks`, `store.record`, the wait methods `waitActionType`,
+ * `waitAllActionTypes`, `waitAnyActionTypeFinishes` and `waitActionCondition`, and
+ * `waitAllActions` with no actions (it waits until no actions are running, which may deadlock).
+ * The Kiss docs say `waitAllActions` is only for tests too, but also that waiting for the actions
+ * you just dispatched is safe in production, so `waitAllActions` with actions is not reported. The wait methods are also checked in the store returned by
  * `useStore()`, and in actions (`this.waitActionType(...)`).
  *
  * The internet simulation is also reported: setting `store.forceInternetOnOffSimulation`, and an

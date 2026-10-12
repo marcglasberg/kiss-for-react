@@ -1,11 +1,11 @@
 Feature: Lint: dispatch-in-effect
 
-  Scenario: Dispatching in an effect when the component mounts is a warning, with a suggestion to use onMount.
+  Scenario: Dispatching in an effect when the component mounts is a warning, with a suggestion to use useStoreEffect.
     Given A store with a persistor, created in another file.
     And A component that gets dispatch from useDispatch(), and dispatches in useEffect with empty deps.
     When The code is linted.
     Then There is a warning in the dispatch, saying the store may not be ready.
-    And The suggestion replaces the effect with useDispatch({ onMount }), and removes the unused dispatch.
+    And The suggestion replaces the effect with useStoreEffect({ onMount }), and removes the unused dispatch.
     And The code with the suggestion compiles, and has no warnings.
 
   Scenario Outline: The dispatch functions of the component are recognized.
@@ -25,7 +25,7 @@ Feature: Lint: dispatch-in-effect
     Given A component that dispatches in an effect with deps {Deps}.
     When The code is linted.
     Then There is a warning.
-    And The suggestion is useDispatch({ {Options} }), with deps {NewDeps}.
+    And The suggestion is useStoreEffect({ {Options} }), with deps {NewDeps}.
     And The code with the suggestion compiles.
     Examples: 
       | Deps               | Options                     | NewDeps          |
@@ -38,7 +38,21 @@ Feature: Lint: dispatch-in-effect
     Given A component that dispatches in an effect with empty deps, and a cleanup that dispatches too.
     When The code is linted.
     Then There is a warning.
-    And The suggestion is useDispatch({ onMount, onUnmount }), and compiles.
+    And The suggestion is useStoreEffect({ onMount, onUnmount }), and compiles.
+
+  Scenario Outline: The suggestion imports useStoreEffect, and removes the import of useDispatch when it is not used anymore.
+    Given A component that dispatches in an effect, with a dispatch from useDispatch().
+    And The import from kiss-for-react is: {Import}.
+    And The component {Uses} useDispatch in another place.
+    When The suggestion is applied.
+    Then The import from kiss-for-react is: {NewImport}.
+    And The code with the suggestion compiles, and has no warnings.
+    Examples: 
+      | Import                          | Uses         | NewImport                       |
+      | { useDispatch }                 | does not use | { useStoreEffect }              |
+      | { useDispatch, useSelect }      | does not use | { useStoreEffect, useSelect }   |
+      | { useDispatch }                 | uses         | { useDispatch, useStoreEffect } |
+      | { useDispatch, useStoreEffect } | does not use | { useStoreEffect }              |
 
   Scenario Outline: Effects that can't be converted are reported without a suggestion.
     Given A component that dispatches in an effect {Effect}.
@@ -92,17 +106,17 @@ Feature: Lint: dispatch-in-effect
   useEffect(() => {
     dispatchWhen(new FetchCards(), (state: State) => state.count > 0, { timeoutMillis: 0 });
   }, []); |
-      | The onMount option of useDispatch             | 
-  useDispatch({ onMount: (store) => store.dispatch(new FetchCards()) });                                                                                             |
+      | The onMount of useStoreEffect                 | 
+  useStoreEffect({ onMount: (store) => store.dispatch(new FetchCards()) });                                                                                          |
 
   Scenario Outline: Effects outside components and hooks, or not from React, are not reported.
     Given {Given}.
     When The code is linted.
     Then There are no warnings.
     Examples: 
-      | Given                                                   | Code                                                                                                                                                                                                                                                                                                                                                                  |
+      | Given                                                   | Code                                                                                                                                                                                                                                                                                                                                                                                  |
       | An effect in a function that is not a component or hook | import React, { useEffect, useLayoutEffect } from 'react';
-import { useDispatch, useDispatchAndWait, useDispatchWhen, useIsStoreReady, useStore } from 'kiss-for-react';
+import { useDispatch, useDispatchAndWait, useDispatchWhen, useIsStoreReady, useStore, useStoreEffect } from 'kiss-for-react';
 import { FetchCards, LoadUser, State, StopListening } from './state';
 
 export function setUp(dispatch: (action: FetchCards) => void) {
@@ -119,7 +133,7 @@ export function Cards() {
   useEffect(() => dispatch(new FetchCards()), []);
   return <p>Cards</p>;
 }
-                                                                 |
+                                                                                 |
 
   Scenario Outline: With type information, it's only reported if the project creates a store with a persistor.
     Given A component that dispatches in an effect with empty deps.

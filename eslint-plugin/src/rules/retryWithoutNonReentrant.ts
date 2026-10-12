@@ -34,10 +34,11 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  *
  * Not reported when the action (or a superclass) declares `nonReentrant` (even as `false`, which
  * is a deliberate choice) or overrides `abortDispatch`, for `OptimisticCommand` (which is always
- * non-reentrant), for `OptimisticSync` (which can't use `retry` nor `nonReentrant`), when it turns on `unlimitedRetryCheckInternet` (which is already non-reentrant,
- * and can't be combined with `retry`), when it turns on `throttle` or `fresh` (which can't be
- * combined with `nonReentrant`), for a sync `reduce` (reported by `retry-requires-async-reduce`),
- * or in tests.
+ * non-reentrant), for `OptimisticSync`, `OptimisticSyncWithPush` and `ServerPush` (which can't
+ * use `retry` nor `nonReentrant`), when it turns on `unlimitedRetryCheckInternet` (which is
+ * already non-reentrant, and can't be combined with `retry`), when it turns on `throttle` or
+ * `fresh` (which can't be combined with `nonReentrant`), for a sync `reduce` (reported by
+ * `retry-requires-async-reduce`), or in tests. The action itself must declare `retry`.
  *
  * Suggestion: add `nonReentrant = true;`.
  */

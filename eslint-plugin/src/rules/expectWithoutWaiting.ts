@@ -15,6 +15,8 @@ const ARRAY_METHODS = new Set(['forEach', 'map', 'filter', 'reduce', 'reduceRigh
  *
  * ```ts
  * store.dispatch(new LoadUser());               // Warning
+ * expect(store.state.user.name).toBe('Mary');
+ *
  * await store.dispatchAndWait(new LoadUser());  // OK
  * expect(store.state.user.name).toBe('Mary');
  * ```

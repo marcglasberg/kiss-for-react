@@ -25,7 +25,6 @@ import {
   useAllState,
   useClearExceptionFor,
   useDispatch,
-  UseDispatchOptions,
   useDispatchAll,
   useDispatchAndWait,
   useDispatchAndWaitAll,
@@ -40,6 +39,8 @@ import {
   useSelect,
   useSelector,
   useStore,
+  useStoreEffect,
+  UseStoreEffectOptions,
 } from './Hooks';
 import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
 import { UserException } from './UserException';
@@ -51,9 +52,9 @@ export {
   KissAction,
   UserExceptionAction,
   ActionStatus, ReduxReducer, SyncReducer, AsyncReducer, AsyncReducerResult,
-  Store, createStore, useStore, useAllState, useSelect, useSelector, useObject, StoreProvider, ShowUserException,
+  Store, createStore, useStore, useStoreEffect, UseStoreEffectOptions, useAllState, useSelect, useSelector, useObject, StoreProvider, ShowUserException,
   useIsStoreReady, useIsWaiting, useIsFailed, useExceptionFor, useClearExceptionFor,
-  useDispatch, UseDispatchOptions, useDispatchAll, useDispatchAndWait, useDispatchAndWaitAll, useDispatchSync, useDispatchWhen, useDispatcher,
+  useDispatch, useDispatchAll, useDispatchAndWait, useDispatchAndWaitAll, useDispatchSync, useDispatchWhen, useDispatcher,
   StoreException,
   AbortDispatchException,
   TimeoutException,

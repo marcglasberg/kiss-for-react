@@ -9,7 +9,8 @@ const CONSOLE_METHODS = ['log', 'info', 'debug'];
 /**
  * Reports debug tools given to the store without a check for the environment:
  *
- * - `PersistorPrinterDecorator`, which prints all persistence calls.
+ * - `PersistorPrinterDecorator`, which prints all persistence calls. It's reported wherever it's
+ *   created, even if not given to the store.
  * - An `actionObserver` or `stateObserver` that only prints to the console.
  *
  * ```ts

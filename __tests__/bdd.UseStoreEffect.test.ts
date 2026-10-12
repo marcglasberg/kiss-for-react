@@ -2,18 +2,18 @@ import { expect } from '@jest/globals';
 import { Bdd, Feature, FeatureFileReporter, reporter, val } from 'easy-bdd-tool-jest';
 import React from 'react';
 import TestRenderer, { act, ReactTestRenderer } from 'react-test-renderer';
-import { KissAction, Persistor, Store, StoreProvider, useDispatch } from '../src';
+import { KissAction, Persistor, Store, StoreProvider, useDispatch, useStoreEffect } from '../src';
 
 reporter(new FeatureFileReporter());
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const feature = new Feature('useDispatch with onMount, onDepsChange and onUnmount');
+const feature = new Feature('useStoreEffect with onMount, onDepsChange and onUnmount');
 
 Bdd(feature)
   .scenario('onMount is called once when the component mounts, and onUnmount once when it unmounts.')
   .given('A store that is ready.')
-  .and('A component that uses useDispatch with onMount and onUnmount.')
+  .and('A component that uses useStoreEffect with onMount and onUnmount.')
   .when('The component mounts, re-renders, and then unmounts.')
   .then('onMount is called once, when it mounts, with the store.')
   .and('onUnmount is called once, when it unmounts, with the store.')
@@ -26,7 +26,7 @@ Bdd(feature)
     const log: string[] = [];
 
     const Comp: React.FC<{ userId: string }> = () => {
-      useDispatch({
+      useStoreEffect({
         onMount: (s: Store<State>) => {
           log.push('mount:' + (s === store));
           s.dispatch(new SetText('mounted'));
@@ -52,28 +52,52 @@ Bdd(feature)
   });
 
 Bdd(feature)
-  .scenario('useDispatch with options still returns the dispatch function.')
-  .given('A component that uses useDispatch with onMount.')
-  .when('The component dispatches an action with the returned function.')
-  .then('The action changes the state.')
+  .scenario('A component can use useStoreEffect and useDispatch together.')
+  .given('A component that uses useStoreEffect with onMount, and useDispatch.')
+  .when('The component mounts, and onMount dispatches an action.')
+  .and('Then the component dispatches another action with the function useDispatch returned.')
+  .then('Both actions change the state.')
   .run(async (_) => {
     const store = createStore();
     let dispatch!: (action: KissAction<State>) => void;
 
     const Comp: React.FC<{ userId: string }> = () => {
-      dispatch = useDispatch({onMount: () => {}});
+      useStoreEffect({onMount: (s: Store<State>) => s.dispatch(new SetText('mounted'))});
+      dispatch = useDispatch();
       return null;
     };
 
     await render(store, Comp, {userId: 'A'});
+    expect(store.state.text).toBe('mounted');
+
     act(() => dispatch(new SetText('dispatched')));
     expect(store.state.text).toBe('dispatched');
   });
 
 Bdd(feature)
+  .scenario('useDispatch doesn\'t accept the options of useStoreEffect.')
+  .given('A component that passes onMount to useDispatch.')
+  .when('The component mounts.')
+  .then('It doesn\'t compile.')
+  .and('If it runs anyway, onMount is not called.')
+  .run(async (_) => {
+    const store = createStore();
+    const log: string[] = [];
+
+    const Comp: React.FC<{ userId: string }> = () => {
+      // @ts-expect-error useDispatch has no options.
+      useDispatch({onMount: () => log.push('mount')});
+      return null;
+    };
+
+    await render(store, Comp, {userId: 'A'});
+    expect(log).toEqual([]);
+  });
+
+Bdd(feature)
   .scenario('onMount waits for the store to be ready.')
   .given('A store whose persisted state is still being read.')
-  .when('A component that uses useDispatch with onMount mounts.')
+  .when('A component that uses useStoreEffect with onMount mounts.')
   .and('Later, the persisted state finishes being read.')
   .then('onMount is not called before the store is ready.')
   .and('onMount is called when the store is ready, and sees the persisted state.')
@@ -83,7 +107,7 @@ Bdd(feature)
     const log: string[] = [];
 
     const Comp: React.FC<{ userId: string }> = () => {
-      useDispatch({onMount: (s: Store<State>) => log.push('mount:' + s.state.text)});
+      useStoreEffect({onMount: (s: Store<State>) => log.push('mount:' + s.state.text)});
       return null;
     };
 
@@ -100,7 +124,7 @@ Bdd(feature)
 Bdd(feature)
   .scenario('If the component unmounts before the store is ready, nothing is called.')
   .given('A store whose persisted state is still being read.')
-  .and('A component that uses useDispatch with onMount and onUnmount.')
+  .and('A component that uses useStoreEffect with onMount and onUnmount.')
   .when('The component mounts, and unmounts before the store is ready.')
   .and('Later, the store becomes ready.')
   .then('Neither onMount nor onUnmount is called.')
@@ -110,7 +134,7 @@ Bdd(feature)
     const log: string[] = [];
 
     const Comp: React.FC<{ userId: string }> = () => {
-      useDispatch({
+      useStoreEffect({
         onMount: () => log.push('mount'),
         onUnmount: () => log.push('unmount'),
       });
@@ -130,7 +154,7 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('onDepsChange is called with the old value when a single-value dep changes.')
-  .given('A component that uses useDispatch with deps: userId, onMount and onDepsChange.')
+  .given('A component that uses useStoreEffect with deps: userId, onMount and onDepsChange.')
   .when('The component re-renders with the same userId, and then with other userIds.')
   .then('onMount is called only once.')
   .and('onDepsChange is called only when the userId changes, with the old userId.')
@@ -143,7 +167,7 @@ Bdd(feature)
     const log: string[] = [];
 
     const Comp: React.FC<{ userId: string }> = ({userId}) => {
-      useDispatch({
+      useStoreEffect({
         deps: userId,
         onMount: () => log.push('mount:' + userId),
         onDepsChange: (_s, oldUserId) => {
@@ -165,7 +189,7 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('onDepsChange gets the old array when the deps are an array.')
-  .given('A component that uses useDispatch with deps: [userId, filter].')
+  .given('A component that uses useStoreEffect with deps: [userId, filter].')
   .when('The userId changes, and then the filter changes.')
   .then('onDepsChange is called for each change, with the old array.')
   .run(async (_) => {
@@ -173,7 +197,7 @@ Bdd(feature)
     const log: string[] = [];
 
     const Comp: React.FC<{ userId: string, filter: number }> = ({userId, filter}) => {
-      useDispatch({
+      useStoreEffect({
         deps: [userId, filter],
         onMount: () => log.push(`mount:${userId},${filter}`),
         onDepsChange: (_s, [oldUserId, oldFilter]) => {
@@ -197,7 +221,7 @@ Bdd(feature)
 Bdd(feature)
   .scenario('Deps that change before the store is ready don\'t call onDepsChange.')
   .given('A store whose persisted state is still being read.')
-  .and('A component that uses useDispatch with deps: userId, onMount and onDepsChange.')
+  .and('A component that uses useStoreEffect with deps: userId, onMount and onDepsChange.')
   .when('The userId changes before the store is ready.')
   .and('The store becomes ready.')
   .and('Then the userId changes again.')
@@ -209,7 +233,7 @@ Bdd(feature)
     const log: string[] = [];
 
     const Comp: React.FC<{ userId: string }> = ({userId}) => {
-      useDispatch({
+      useStoreEffect({
         deps: userId,
         onMount: () => log.push('mount:' + userId),
         onDepsChange: (_s, oldUserId) => log.push(`change:${oldUserId}→${userId}`),
@@ -233,7 +257,7 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('onUnmount sees the values of the latest render.')
-  .given('A component that uses useDispatch with onUnmount.')
+  .given('A component that uses useStoreEffect with onUnmount.')
   .when('The component re-renders with another userId, and then unmounts.')
   .then('onUnmount sees the latest userId.')
   .run(async (_) => {
@@ -241,7 +265,7 @@ Bdd(feature)
     const log: string[] = [];
 
     const Comp: React.FC<{ userId: string }> = ({userId}) => {
-      useDispatch({onUnmount: () => log.push('unmount:' + userId)});
+      useStoreEffect({onUnmount: () => log.push('unmount:' + userId)});
       return null;
     };
 
@@ -261,7 +285,7 @@ Bdd(feature)
     const store = createStore();
 
     const Comp: React.FC<{ userId: string }> = () => {
-      useDispatch({
+      useStoreEffect({
         onMount: async (s: Store<State>) => {
           await s.dispatchAndWait(new SetTextAsync('loaded'));
           s.dispatch(new SetText(s.state.text + ' and done'));

@@ -32,6 +32,9 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  * Abstract classes are not reported, since `isWaiting` also matches their subclasses. Neither
  * are classes that may become async: classes with subclasses (which `isWaiting` also matches),
  * and classes that override `wrapReduce`, or turn on `retry` or `unlimitedRetryCheckInternet`.
+ *
+ * Inside the action class itself, `isWaiting` of its own class is not reported either, since it's
+ * `true` there: the action is being processed while it runs.
  */
 export default createRule({
   name: 'wait-fail-never-matches',
@@ -59,6 +62,7 @@ export default createRule({
         const classRef = node.arguments[0];
         if (!classRef || classRef.type === AST_NODE_TYPES.SpreadElement) return;
 
+        if (isInsideOwnClass(node, classRef, context)) return;
         const result = actionKindOfClassReference(classRef, context, typeInfo);
         if (result.kind !== 'sync') return;
         if (mayBecomeAsync(classRef, context, typeInfo)) return;
@@ -80,6 +84,21 @@ function isWaitingMethod(callee: TSESTree.Expression, context: Context): string 
   if (callee.type === AST_NODE_TYPES.MemberExpression && !callee.computed &&
     callee.property.type === AST_NODE_TYPES.Identifier && callee.property.name === 'isWaiting') return 'isWaiting';
   return null;
+}
+
+/**
+ * True if the call is inside the class it checks, like `this.isWaiting(Increment)` inside
+ * `Increment`. There, the action is being processed, so it's `true` even for a sync action.
+ */
+function isInsideOwnClass(node: TSESTree.Node, classRef: TSESTree.Expression, context: Context): boolean {
+  const expression = unwrap(classRef);
+  if (expression.type !== AST_NODE_TYPES.Identifier) return false;
+  const classNode = classDeclarationOf(expression, context);
+  if (!classNode) return false;
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (parent === classNode) return true;
+  }
+  return false;
 }
 
 /**

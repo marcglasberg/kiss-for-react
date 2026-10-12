@@ -185,7 +185,9 @@ export function isTrue(property: TSESTree.PropertyDefinition): boolean {
  */
 export function retryOf(text: string): { on: boolean, unlimited: string | null } {
   const value = text.trim();
-  if (value === 'null' || value === 'undefined' || /\bon\s*:\s*false\b/.test(value)) return {on: false, unlimited: null};
+  // The store turns the retry on when it's truthy, unless it has `on: false`.
+  const isFalsy = ['false', 'null', 'undefined', '0', '\'\'', '""', '``'].includes(value);
+  if (isFalsy || /\bon\s*:\s*false\b/.test(value)) return {on: false, unlimited: null};
   if (/\bmaxRetries\s*:\s*-\s*1(?![\d.])/.test(value)) return {on: true, unlimited: 'maxRetries: -1'};
   if (/\bunlimitedRetries\s*:\s*true\b/.test(value)) return {on: true, unlimited: 'unlimitedRetries: true'};
   return {on: true, unlimited: null};

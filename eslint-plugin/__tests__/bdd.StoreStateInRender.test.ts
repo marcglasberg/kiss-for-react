@@ -81,17 +81,17 @@ export function Items() {
 
 Bdd(feature)
   .scenario('Reading store.state in event handlers and effects is fine.')
-  .given('A component that reads store.state in an event handler, an effect, and the onMount option of useDispatch.')
+  .given('A component that reads store.state in an event handler, an effect, and the onMount of useStoreEffect.')
   .when('The code is linted.')
   .then('There are no warnings.')
   .run(async (_) => {
-    const code = `import { Store, useDispatch } from 'kiss-for-react';
+    const code = `import { Store, useStoreEffect } from 'kiss-for-react';
 import { useEffect } from 'react';
 import { State } from './state';
 import { store } from './store';
 
 export function UserName() {
-  useDispatch({ onMount: (s: Store<State>) => console.log(s.state.user.name) });
+  useStoreEffect({ onMount: (s: Store<State>) => console.log(s.state.user.name) });
   useEffect(() => { console.log(store.state.user.name); }, []);
   return <button onClick={() => console.log(store.state.items)} />;
 }

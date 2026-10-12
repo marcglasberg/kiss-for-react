@@ -57,3 +57,23 @@ class Sync extends KissAction<State> {
     And Another file has an async subclass of it, which isWaiting also matches.
     When The sync action is checked with useIsWaiting.
     Then There are no warnings.
+
+  Scenario Outline: isWaiting of the action itself, inside the action, is not reported, since it is true there.
+    Given A sync action that checks {Call} with its own class, inside its reduce.
+    When The code is linted.
+    Then There are no warnings, since an action is always being processed while it runs.
+    Examples: 
+      | Call            | Type information |
+      | this.isWaiting  | true             |
+      | this.isWaiting  | false            |
+      | store.isWaiting | true             |
+      | store.isWaiting | false            |
+
+  Scenario Outline: isWaiting of another sync action, inside an action, is still reported.
+    Given A sync action that checks isWaiting with another sync action, inside its reduce.
+    When The code is linted.
+    Then There is a warning in the other action's class.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

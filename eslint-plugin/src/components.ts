@@ -153,7 +153,7 @@ function isImmediatelyCalled(fn: FunctionNode): boolean {
 /**
  * If the node runs while a component (or custom hook) renders, returns the component.
  * That's code in the component's body, but not in nested functions, like event handlers,
- * effects, `useDispatch` options, and other closures (except functions called right away).
+ * effects, `useStoreEffect` callbacks, and other closures (except functions called right away).
  */
 export function renderingComponentOf(node: TSESTree.Node): FunctionNode | null {
   for (let current: TSESTree.Node | undefined = node.parent; current; current = current.parent) {

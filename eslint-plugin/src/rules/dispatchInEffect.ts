@@ -19,13 +19,13 @@ import { contains, createRule, getTypeInfo, isFunction, kissImportName, TypeInfo
  * ```tsx
  * function Cards() {
  *   const dispatch = useDispatch();
- *   useEffect(() => { dispatch(new FetchCards()); }, []);              // Warning
- *   useDispatch({ onMount: (store) => store.dispatch(new FetchCards()) }); // OK
+ *   useEffect(() => { dispatch(new FetchCards()); }, []);                    // Warning
+ *   useStoreEffect({ onMount: (store) => store.dispatch(new FetchCards()) }); // OK
  * }
  * ```
  *
- * The `onMount`, `onDepsChange` and `onUnmount` options of `useDispatch` only run after the
- * store is ready.
+ * The `onMount`, `onDepsChange` and `onUnmount` of `useStoreEffect` only run after the store is
+ * ready.
  *
  * Only effects with a dependency array, in components and custom hooks, are checked. The
  * dispatch must run when the effect runs (not in a callback inside it), and must use a dispatch
@@ -35,7 +35,7 @@ import { contains, createRule, getTypeInfo, isFunction, kissImportName, TypeInfo
  * With type information, it's only reported when some file of the project creates a store with
  * a `persistor`, since otherwise the store is always ready.
  *
- * Suggestion: replace the effect with `useDispatch({ onMount })`. The dependencies become
+ * Suggestion: replace the effect with `useStoreEffect({ onMount })`. The dependencies become
  * `deps` and `onDepsChange`, and the cleanup function becomes `onUnmount` (no suggestion when
  * the effect has both).
  */
@@ -51,9 +51,9 @@ export default createRule({
     messages: {
       dispatchInEffect:
         '`{{callee}}` dispatches in an effect, when the component mounts. If the store has a persistor, it ' +
-        'may not be ready yet, and dispatching throws a `StoreException`. Use the `onMount` option of ' +
-        '`useDispatch`, which waits for the store to be ready.',
-      useOnMount: 'Replace the effect with `useDispatch({ {{options}} })`.',
+        'may not be ready yet, and dispatching throws a `StoreException`. Use the `onMount` of ' +
+        '`useStoreEffect`, which waits for the store to be ready.',
+      useOnMount: 'Replace the effect with `useStoreEffect({ {{options}} })`.',
     },
   },
   defaultOptions: [],
@@ -236,9 +236,10 @@ function functionBodyRange(fn: FunctionNode, context: Context): TSESTree.Range {
 }
 
 /**
- * Replaces the effect with `useDispatch({ deps, onMount, onDepsChange, onUnmount })`, calling
+ * Replaces the effect with `useStoreEffect({ deps, onMount, onDepsChange, onUnmount })`, calling
  * the dispatch methods of the store it gets, like `store.dispatch(...)`. If a dispatch function
- * like `const dispatch = useDispatch();` is not used anymore, removes it. Returns null when the
+ * like `const dispatch = useDispatch();` is not used anymore, removes it, and if that was the only
+ * use of the import of its hook, `useStoreEffect` replaces that import. Returns null when the
  * effect can't be converted:
  * - It has a cleanup function, and dependencies that change. React calls the cleanup before
  *   running the effect again, with the old values.
@@ -343,16 +344,17 @@ function buildSuggestion(
 
   // The dispatch functions not used anymore, like `const dispatch = useDispatch();`.
   const removable = unusedDispatchDeclarations(calls.map(({call}) => call.callee), droppedDeps, context);
+  const replacing = unusedHookImport(removable, context);
 
   return {
     messageId: 'useOnMount' as const,
     data: {options: optionNames.join(', ')},
     fix: (fixer: TSESLint.RuleFixer) => {
-      const useDispatch = importKissExport(context, fixer, 'useDispatch', node);
-      if (!useDispatch) return null;
-      const text = `${useDispatch.name}({\n${options.map((option) => `${base}${unit}${option},\n`).join('')}${base}})`;
+      const useStoreEffect = importKissExport(context, fixer, 'useStoreEffect', node, replacing);
+      if (!useStoreEffect) return null;
+      const text = `${useStoreEffect.name}({\n${options.map((option) => `${base}${unit}${option},\n`).join('')}${base}})`;
       return [
-        ...useDispatch.fixes,
+        ...useStoreEffect.fixes,
         fixer.replaceText(node, text),
         ...removable.map((statement) => fixer.removeRange(lineRangeOf(statement, context))),
       ];
@@ -406,6 +408,23 @@ function unusedDispatchDeclarations(callees: TSESTree.Node[], droppedDeps: TSEST
     if (variable.references.every((reference) => reference.init || isGone(reference.identifier))) result.push(declaration);
   }
   return result;
+}
+
+/**
+ * The import of a dispatch hook (like `useDispatch`) whose only uses are in the declarations
+ * being removed, so that the fix makes it unused. Null if there's none.
+ */
+function unusedHookImport(removed: TSESTree.VariableDeclaration[], context: Context): TSESTree.ImportSpecifier | null {
+  for (const declaration of removed) {
+    const init = unwrap(declaration.declarations[0].init!) as TSESTree.CallExpression;
+    if (init.callee.type !== AST_NODE_TYPES.Identifier) continue;
+    const variable = ASTUtils.findVariable(context.sourceCode.getScope(init.callee), init.callee.name);
+    const specifier = variable?.defs[0]?.node;
+    if (!variable || specifier?.type !== AST_NODE_TYPES.ImportSpecifier) continue;
+    const isRemoved = (identifier: TSESTree.Node) => removed.some((statement) => contains(statement, identifier));
+    if (variable.references.every((reference) => isRemoved(reference.identifier))) return specifier;
+  }
+  return null;
 }
 
 /** The range of a statement, with its whole line when it's alone in it. */

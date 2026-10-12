@@ -182,3 +182,46 @@ export function Counter() {
     expect(result.typeErrors).toEqual([]);
     expect(result.messages).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('isWaiting of the action itself, inside the action, is not reported, since it is true there.')
+  .given('A sync action that checks {Call} with its own class, inside its reduce.')
+  .when('The code is linted.')
+  .then('There are no warnings, since an action is always being processed while it runs.')
+  .example(val('Call', 'this.isWaiting'), val('Type information', true))
+  .example(val('Call', 'this.isWaiting'), val('Type information', false))
+  .example(val('Call', 'store.isWaiting'), val('Type information', true))
+  .example(val('Call', 'store.isWaiting'), val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+export class Decrement extends KissAction<State> {
+  reduce() {
+    if (!${ctx.example.val('Call')}(Decrement)) throw new Error('Never happens.');
+    return this.state.add(-1);
+  }
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages).toEqual([]);
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('isWaiting of another sync action, inside an action, is still reported.')
+  .given('A sync action that checks isWaiting with another sync action, inside its reduce.')
+  .when('The code is linted.')
+  .then('There is a warning in the other action\'s class.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+export class Decrement extends KissAction<State> {
+  reduce() {
+    return this.isWaiting(Increment) ? null : this.state.add(-1);
+  }
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages.map((m) => m.text)).toEqual(['Increment']);
+    expect(result.typeErrors).toEqual([]);
+  });

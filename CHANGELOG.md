@@ -4,14 +4,14 @@
 
 ### New features
 
-* `useDispatch` now accepts the optional `onMount`, `onUnmount`, and `onDepsChange` with its
-  `deps`, to dispatch actions when the component mounts, when some values change, and when it
-  unmounts. They get the store, run only after the store is ready, and run once even in
-  React's `StrictMode`. Like a `useEffect` cleanup, `onUnmount` runs before the `onMount` of a
-  component mounted in the same render (in a route switch, for example):
+* New hook `useStoreEffect()`, to use instead of a `useEffect` to dispatch actions when the
+  component mounts (`onMount`), when some values change (`deps` and `onDepsChange`), and when
+  it unmounts (`onUnmount`). They get the store, run only after the store is ready, and run
+  once even in React's `StrictMode`. Like a `useEffect` cleanup, `onUnmount` runs before the
+  `onMount` of a component mounted in the same render (in a route switch, for example):
 
   ```tsx
-  const dispatch = useDispatch({
+  useStoreEffect({
     deps: userId,
     onMount: (store) => store.dispatch(new LoadUser(userId)),
     onDepsChange: (store, oldUserId) => {
@@ -34,7 +34,10 @@
 
 * New `dispatchWhen`, which dispatches an action when a state condition becomes true.
   Available as the `useDispatchWhen()` hook, as `store.dispatchWhen()`, and as
-  `this.dispatchWhen()` inside actions.
+  `this.dispatchWhen()` inside actions. The action is dispatched right after the state change
+  that meets the condition. If the same state change meets several conditions, their actions
+  are dispatched one after the other, and each condition is checked again right before its
+  action is dispatched: if an earlier action made it false, it keeps waiting.
 
 * New `onTimeout` option for all wait methods (`waitCondition`, `waitActionCondition`,
   `waitAllActions`, `waitActionType`, `waitAllActionTypes`, `waitAnyActionTypeFinishes`) and
@@ -70,14 +73,19 @@
   change is local and newer than the one sent, but not if it came from a push. The server
   response is only applied if no newer server revision is known. Pushes are applied by actions
   that extend `ServerPush`, which ignore stale and out-of-order pushes, and the echoes of older
-  requests of this device. The device ID is `OptimisticSyncWithPush.deviceId()`, which you can
-  change. `ServerPush` can't be combined with any other feature.
+  requests of this device. A push whose server revision is not a finite number fails with a
+  `StoreException`, and doesn't change the state. The device ID is
+  `OptimisticSyncWithPush.deviceId()`, which you can change. `ServerPush` can't be combined with
+  any other feature.
 
 * New `debounce` action property. With `debounce = 300` (milliseconds), or `debounce = true`
   for the default 333 milliseconds, the action waits until it stops being dispatched for that
   long, and only the last action runs its reducer. Actions of the same class debounce each
   other, or override `debounceLockBuilder()` to choose the lock. `removeAllDebounceLocks()`
   removes all locks. It can't be combined with `retry`, nor used in an `OptimisticCommand`.
+  When combined with `nonReentrant`, `throttle` or `fresh`, their checks happen when the
+  debounce period ends, right before the reducer runs, so the replaced actions don't take the
+  key, and the last action is aborted if the key is taken when its wait time ends.
 
 * New `ignoreOld` action property. With `ignoreOld = true`, when the action is dispatched
   again, the actions of the previous dispatches (with the same key) that are still running
@@ -425,6 +433,16 @@
   throws for a class with no `typeName` whose name looks minified, like `e` or `ab`. Built-in
   classes listed in `classesToSerialize`, like `Date`, are no longer checked, so they can be
   listed when class names are minified.
+
+* `logStateChanges` now logs the changes of a state that is a number, a string, or another
+  primitive, and the changes inside `Date`, `Map` and `Set` fields. Before, they were not
+  logged. `Store.describeStateChange()` describes them like `State: 0 → 1; ` and
+  `State prices[IBM]: 100 → 110; `.
+
+* `waitAnyActionTypeFinishes` now compiles with an `onTimeout` that may be `undefined`, like
+  `{ timeoutMillis, onTimeout }` when `onTimeout` is an optional parameter. Its result type is
+  then `KissAction | null`. Before, it didn't compile, and when the options were in a variable,
+  the result type was wrongly not nullable.
 
 * `store.mocks.remove(actionType)` and `store.mocks.get(actionType)` now accept an action
   whose constructor has parameters, like `store.mocks.remove(AddAction)`. Before, it didn't

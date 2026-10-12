@@ -25,10 +25,12 @@ interface Found {
 /**
  * Reports fields of state classes that hold objects that are not state:
  *
- * - A `Promise`, a Node timer (`NodeJS.Timeout`), an `AbortController`, an `AbortSignal`, a
- *   `WebSocket`, an `EventSource` or a `Worker`.
- * - A DOM node (`Node`, `Element`, `HTMLElement`), a React ref (`RefObject`), or a React
- *   element (`ReactElement`, `ReactNode`, `JSX.Element`).
+ * - A `Promise` (or `PromiseLike`), a Node timer (`NodeJS.Timeout`, `NodeJS.Timer` or
+ *   `NodeJS.Immediate`), an `AbortController`, an `AbortSignal`, a `WebSocket`, an
+ *   `EventSource`, a `Worker` or a `SharedWorker`.
+ * - A DOM node (`Node`, `Element`, `HTMLElement`), a React ref (`RefObject`,
+ *   `MutableRefObject`), or a React element (`ReactElement`, `ReactNode`, `ReactPortal`,
+ *   `JSX.Element`).
  *
  * Subclasses, union members, type arguments and array elements are checked too, like
  * `Promise<User>[]`. Functions are fine. Needs type information.

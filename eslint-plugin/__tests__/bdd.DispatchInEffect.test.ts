@@ -38,7 +38,7 @@ export const store = createStore<State>({ initialState: State.initialState, pers
 const files = {'state.ts': stateFile, 'store.ts': persistedStore};
 
 const imports = `import React, { useEffect, useLayoutEffect } from 'react';
-import { useDispatch, useDispatchAndWait, useDispatchWhen, useIsStoreReady, useStore } from 'kiss-for-react';
+import { useDispatch, useDispatchAndWait, useDispatchWhen, useIsStoreReady, useStore, useStoreEffect } from 'kiss-for-react';
 import { FetchCards, LoadUser, State, StopListening } from './state';
 `;
 
@@ -52,12 +52,12 @@ function lintBoth(code: string, options: { files?: Record<string, string> } = {}
 }
 
 Bdd(feature)
-  .scenario('Dispatching in an effect when the component mounts is a warning, with a suggestion to use onMount.')
+  .scenario('Dispatching in an effect when the component mounts is a warning, with a suggestion to use useStoreEffect.')
   .given('A store with a persistor, created in another file.')
   .and('A component that gets dispatch from useDispatch(), and dispatches in useEffect with empty deps.')
   .when('The code is linted.')
   .then('There is a warning in the dispatch, saying the store may not be ready.')
-  .and('The suggestion replaces the effect with useDispatch({ onMount }), and removes the unused dispatch.')
+  .and('The suggestion replaces the effect with useStoreEffect({ onMount }), and removes the unused dispatch.')
   .and('The code with the suggestion compiles, and has no warnings.')
   .run(async (_) => {
     const code = `${imports}
@@ -75,14 +75,14 @@ export default function HomeScreen() {
     expect(result.messages.map((m) => m.text)).toEqual(['dispatch']);
     expect(result.messages[0].message).toBe(
       '`dispatch` dispatches in an effect, when the component mounts. If the store has a persistor, it may not be ' +
-      'ready yet, and dispatching throws a `StoreException`. Use the `onMount` option of `useDispatch`, which ' +
+      'ready yet, and dispatching throws a `StoreException`. Use the `onMount` of `useStoreEffect`, which ' +
       'waits for the store to be ready.');
-    expect(result.messages[0].suggestions).toEqual(['Replace the effect with `useDispatch({ onMount })`.']);
+    expect(result.messages[0].suggestions).toEqual(['Replace the effect with `useStoreEffect({ onMount })`.']);
 
     const fixed = result.withSuggestion(0, 0);
     expect(fixed).toContain(`export default function HomeScreen() {
 
-  useDispatch({
+  useStoreEffect({
     onMount: (store) => {
       store.dispatch(new FetchCards());
     },
@@ -134,7 +134,7 @@ Bdd(feature)
   .given('A component that dispatches in an effect with deps {Deps}.')
   .when('The code is linted.')
   .then('There is a warning.')
-  .and('The suggestion is useDispatch({ {Options} }), with deps {NewDeps}.')
+  .and('The suggestion is useStoreEffect({ {Options} }), with deps {NewDeps}.')
   .and('The code with the suggestion compiles.')
   .example(val('Deps', '[userId]'), val('Options', 'deps, onMount, onDepsChange'), val('NewDeps', 'userId'))
   .example(val('Deps', '[userId, filter]'), val('Options', 'deps, onMount, onDepsChange'), val('NewDeps', '[userId, filter]'))
@@ -151,15 +151,15 @@ export function User({ userId, filter }: { userId: string, filter: string }) {
     const result = lintBoth(code);
     expect(result.messages.map((m) => m.text)).toEqual(['dispatch']);
     const options = ctx.example.val('Options') as string;
-    expect(result.messages[0].suggestions).toEqual([`Replace the effect with \`useDispatch({ ${options} })\`.`]);
+    expect(result.messages[0].suggestions).toEqual([`Replace the effect with \`useStoreEffect({ ${options} })\`.`]);
 
     const fixed = result.withSuggestion(0, 0);
     const newDeps = ctx.example.val('NewDeps') as string;
     const expected = newDeps === '(none)'
-      ? `  useDispatch({
+      ? `  useStoreEffect({
     onMount: (store) => store.dispatch(new LoadUser(userId, filter)),
   });`
-      : `  useDispatch({
+      : `  useStoreEffect({
     deps: ${newDeps},
     onMount: (store) => store.dispatch(new LoadUser(userId, filter)),
     onDepsChange: (store) => store.dispatch(new LoadUser(userId, filter)),
@@ -175,7 +175,7 @@ Bdd(feature)
   .given('A component that dispatches in an effect with empty deps, and a cleanup that dispatches too.')
   .when('The code is linted.')
   .then('There is a warning.')
-  .and('The suggestion is useDispatch({ onMount, onUnmount }), and compiles.')
+  .and('The suggestion is useStoreEffect({ onMount, onUnmount }), and compiles.')
   .run(async (_) => {
     const code = `${imports}
 export function Cards() {
@@ -191,10 +191,10 @@ export function Cards() {
 }
 `;
     const result = lintBoth(code);
-    expect(result.messages[0].suggestions).toEqual(['Replace the effect with `useDispatch({ onMount, onUnmount })`.']);
+    expect(result.messages[0].suggestions).toEqual(['Replace the effect with `useStoreEffect({ onMount, onUnmount })`.']);
     const fixed = result.withSuggestion(0, 0);
     expect(fixed).toContain(`export function Cards() {
-  useDispatch({
+  useStoreEffect({
     onMount: (store) => {
       console.log('Mounted');
       store.dispatch(new FetchCards());
@@ -206,6 +206,46 @@ export function Cards() {
   return <p>Cards</p>;
 }`);
     expect(lint(rule, fixed, {files}).typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('The suggestion imports useStoreEffect, and removes the import of useDispatch when it is not used anymore.')
+  .given('A component that dispatches in an effect, with a dispatch from useDispatch().')
+  .and('The import from kiss-for-react is: {Import}.')
+  .and('The component {Uses} useDispatch in another place.')
+  .when('The suggestion is applied.')
+  .then('The import from kiss-for-react is: {NewImport}.')
+  .and('The code with the suggestion compiles, and has no warnings.')
+  .example(val('Import', '{ useDispatch }'), val('Uses', 'does not use'), val('NewImport', '{ useStoreEffect }'))
+  .example(val('Import', '{ useDispatch, useSelect }'), val('Uses', 'does not use'), val('NewImport', '{ useStoreEffect, useSelect }'))
+  .example(val('Import', '{ useDispatch }'), val('Uses', 'uses'), val('NewImport', '{ useDispatch, useStoreEffect }'))
+  .example(val('Import', '{ useDispatch, useStoreEffect }'), val('Uses', 'does not use'), val('NewImport', '{ useStoreEffect }'))
+  .run(async (ctx) => {
+    const usesElsewhere = ctx.example.val('Uses') === 'uses';
+    const usesSelect = (ctx.example.val('Import') as string).includes('useSelect');
+    const code = `import React, { useEffect } from 'react';
+import ${ctx.example.val('Import')} from 'kiss-for-react';
+import { FetchCards, State } from './state';
+
+export function Cards() {
+  const dispatch = useDispatch();
+  useEffect(() => {
+    dispatch(new FetchCards());
+  }, []);${usesElsewhere ? `
+  const dispatchOther = useDispatch();` : ''}${usesSelect ? `
+  const count = useSelect((state: State) => state.count);` : ''}
+  return <p${usesElsewhere ? ' onClick={() => dispatchOther(new FetchCards())}' : ''}>${usesSelect ? '{count}' : 'Cards'}</p>;
+}
+`;
+    const result = lintBoth(code);
+    expect(result.messages.map((m) => m.text)).toEqual(['dispatch']);
+
+    const fixed = result.withSuggestion(0, 0);
+    expect(fixed).toContain(`import ${ctx.example.val('NewImport')} from 'kiss-for-react';`);
+    expect(fixed).not.toContain('const dispatch = useDispatch();');
+    const fixedResult = lint(rule, fixed, {files});
+    expect(fixedResult.typeErrors).toEqual([]);
+    expect(fixedResult.messages).toEqual([]);
   });
 
 Bdd(feature)
@@ -269,8 +309,8 @@ Bdd(feature)
   useEffect(() => {
     dispatchWhen(new FetchCards(), (state: State) => state.count > 0, { timeoutMillis: 0 });
   }, []);`))
-  .example(val('Given', 'The onMount option of useDispatch'), val('Code', `
-  useDispatch({ onMount: (store) => store.dispatch(new FetchCards()) });`))
+  .example(val('Given', 'The onMount of useStoreEffect'), val('Code', `
+  useStoreEffect({ onMount: (store) => store.dispatch(new FetchCards()) });`))
   .run(async (ctx) => {
     const code = `${imports}
 export function Cards() {

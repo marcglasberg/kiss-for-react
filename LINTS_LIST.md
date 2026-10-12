@@ -18,10 +18,10 @@ rules that only exist in Kiss.
 
 | Status      | Count                           |
 |-------------|---------------------------------|
-| Implemented | 52 (42 from AsyncRedux, 10 new) |
+| Implemented | 53 (42 from AsyncRedux, 11 new) |
 | Skipped     | 31 (from AsyncRedux)            |
 
-Total: the 73 AsyncRedux rules (42 implemented, 31 skipped), and 10 new rules (all
+Total: the 73 AsyncRedux rules (42 implemented, 31 skipped), and 11 new rules (all
 implemented).
 
 All rules planned here are implemented, except two that turned out not to make sense in Kiss
@@ -467,14 +467,14 @@ render, and loops forever when the action changes the state:
 ```tsx
 function User() {
   const dispatch = useDispatch();
-  dispatch(new LoadUser());                                       // Warning
-  useDispatch({ onMount: (store) => store.dispatch(new LoadUser()) }); // OK
-  return <button onClick={() => dispatch(new LoadUser())} />;     // OK
+  dispatch(new LoadUser());                                               // Warning
+  useStoreEffect({ onMount: (store) => store.dispatch(new LoadUser()) }); // OK
+  return <button onClick={() => dispatch(new LoadUser())} />;             // OK
 }
 ```
 
 Checks the body of function components (functions whose name starts with an uppercase
-letter, or that return JSX). Dispatches in event handlers, effects, `useDispatch`
+letter, or that return JSX). Dispatches in event handlers, effects, `useStoreEffect`
 callbacks, and other closures, are not reported.
 
 ### store-state-in-render
@@ -837,6 +837,20 @@ class PushLike extends ServerPush<State> {
 New in Kiss (it was already implemented, but missing from this list). Warning. A dispatch in a
 `useEffect` or `useLayoutEffect` of a component or hook. When the store has a persistor, the
 effect may run before the store is ready, and the dispatch throws a `StoreException`. Use the
-`onMount` option of `useDispatch`, which waits for the store to be ready. With type information,
+`onMount` of `useStoreEffect`, which waits for the store to be ready. With type information,
 only reported when the project creates a store with a `persistor`. Quick fix (suggestion):
-replace the effect with `useDispatch({ onMount })`.
+replace the effect with `useStoreEffect({ onMount })`.
+
+### lifecycle-method-call
+
+New in Kiss (it was already implemented, but missing from this list). Error, also reported in
+tests. Calling a lifecycle method of an action (`reduce`, `before`, `after`, `wrapError`,
+`wrapReduce`, `abortDispatch`, `abortReduce`, the `...KeyParams` and `compute...Key` methods,
+and the methods that `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` and
+`ServerPush` ask you to implement) from outside the action, like `new LoadUser().reduce()`.
+Kiss calls them when the action is dispatched, so calling them yourself skips the store, the
+state and the action features. These methods are `protected` in `KissAction`, so TypeScript
+already reports the call when the override is `protected` too, but an override without
+`protected` is public. Calls with `this` or `super`, inside the action, are not reported.
+Without type information, only `new X(...)` (or a `const` initialized with it) of an action
+class declared in the same file is reported.

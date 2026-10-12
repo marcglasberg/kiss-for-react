@@ -17,7 +17,8 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  * first `await` runs after the action finished, and its errors are only logged. TypeScript
  * allows it, since `void` methods can be overridden with async ones.
  *
- * Suggestion: remove `async`, when `after` has no `await`.
+ * Suggestion: remove `async`, when `after` has no `await`, no declared return type, and doesn't
+ * return a value.
  */
 export default createRule({
   name: 'async-after',

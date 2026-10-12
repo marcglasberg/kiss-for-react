@@ -168,9 +168,9 @@ export function useAllState<St>(): St {
 }
 
 /**
- * You can get the store to use all dispatch and wait methods:
+ * Returns an object with all the dispatch and wait methods of the store:
  *
- * - `dispatch` - Dispatches the action to the Redux store, to potentially change the state.
+ * - `dispatch` - Dispatches an action, to potentially change the state.
  * - `dispatchAndWait` - Dispatches an action and returns a promise that resolves when the action finishes.
  * - `dispatchSync` - Same as the regular dispatch, except it throws an error if the action is ASYNC.
  * - `dispatchWhen` - Waits until the state is in a given condition, and then dispatches an action.
@@ -196,11 +196,22 @@ export function useAllState<St>(): St {
  * await store.waitAllActionTypes([BuyAction, SellAction]);
  * ```
  *
- * IMPORTANT:
- * The store `state` and other store methods are NOT available when you get the store with `useStore`.
- * - To get the state: `useSelect`
- * - To wait for actions: `useIsWaiting`
- * - To deal with exceptions: `useIsFailed`, `useExceptionFor` and `clearExceptionFor`
+ * The methods also work when destructured: `const { dispatch, dispatchAndWait } = useStore();`.
+ *
+ * The object also has `store`, which is the store itself, with its `state` and all its other
+ * methods:
+ *
+ * ```js
+ * const { store } = useStore();
+ * console.log(store.actionsInProgress());
+ * ```
+ *
+ * IMPORTANT: `useStore` doesn't make the component re-render when the state changes. So, read
+ * `store.state` only in event handlers, effects and callbacks, never to render the component.
+ * To render it, use the hooks that re-render the component when needed:
+ * - To get the state: `useSelect`, `useObject` or `useAllState`
+ * - To know if actions are running: `useIsWaiting`
+ * - To deal with exceptions: `useIsFailed`, `useExceptionFor` and `useClearExceptionFor`
  *
  * See also:
  * - `useDispatch()` - Hook equivalent to `useStore().dispatch`
@@ -209,6 +220,8 @@ export function useAllState<St>(): St {
  * - `useDispatchWhen` - Hook equivalent to `useStore().dispatchWhen`
  * - `useDispatchAll` - Hook equivalent to `useStore().dispatchAll`
  * - `useDispatchAndWaitAll` - Hook equivalent to `useStore().dispatchAndWaitAll`
+ * - `useStoreEffect` - To dispatch actions when the component mounts, when some values change,
+ *   and when it unmounts.
  */
 export function useStore(): StoreDispatchers<any> {
   const store = useStoreFromContext<any>();
@@ -223,10 +236,39 @@ export function useDispatcher(): (action: KissAction<any>) => void {
 }
 
 /**
- * Options for `useDispatch`, to run code when the component mounts, when its `deps` change,
- * and when it unmounts. See `useDispatch`.
+ * Returns a function that dispatches an action, to potentially change the state:
+ *
+ * ```ts
+ * const dispatch = useDispatch();
+ * dispatch(new MyAction());
+ * ```
+ *
+ * This also works:
+ *
+ * ```ts
+ * const store = useStore();
+ * store.dispatch(new MyAction());
+ * ```
+ *
+ * To dispatch actions when the component mounts, when some values change, and when it
+ * unmounts, see `useStoreEffect`.
+ *
+ * See also:
+ * - `dispatchAll` which dispatches all given actions in parallel.
+ * - `dispatchSync` which dispatches sync actions, and throws if the action is async.
+ * - `dispatchAndWait` which dispatches both sync and async actions, and returns a Promise.
+ * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
  */
-export interface UseDispatchOptions<St, D> {
+export function useDispatch<St = any>(): (action: KissAction<St>) => void {
+  const store = useStoreFromContext<St>();
+  return useMemo(() => store.dispatch.bind(store), [store]);
+}
+
+/**
+ * Options for `useStoreEffect`, to run code when the component mounts, when its `deps` change,
+ * and when it unmounts. See `useStoreEffect`.
+ */
+export interface UseStoreEffectOptions<St, D> {
   /**
    * A single value, or an array of values. When they change, `onDepsChange` is called.
    * They are compared with `Object.is`, like React's dependencies. So, don't create new objects
@@ -248,27 +290,12 @@ export interface UseDispatchOptions<St, D> {
 }
 
 /**
- * Returns a function that dispatches an action, to potentially change the state:
- *
- * ```ts
- * const dispatch = useDispatch();
- * dispatch(new MyAction());
- * ```
- *
- * This also works:
- *
- * ```ts
- * const store = useStore();
- * store.dispatch(new MyAction());
- * ```
- *
- * ## Dispatching when the component mounts and unmounts
- *
- * You can pass `onMount`, `onUnmount`, and `onDepsChange` with its `deps`, to dispatch actions
- * when the component mounts, when some values change, and when it unmounts:
+ * Use `useStoreEffect` instead of a `useEffect` to dispatch actions when the component mounts
+ * (`onMount`), when some values change (`deps` and `onDepsChange`), and when it unmounts
+ * (`onUnmount`):
  *
  * ```tsx
- * const dispatch = useDispatch({
+ * useStoreEffect({
  *   deps: userId,
  *   onMount: (store) => store.dispatch(new LoadUser(userId)),
  *   onDepsChange: (store, oldUserId) => {
@@ -282,7 +309,7 @@ export interface UseDispatchOptions<St, D> {
  * If `deps` is an array, `onDepsChange` gets the old array:
  *
  * ```tsx
- * const dispatch = useDispatch({
+ * useStoreEffect({
  *   deps: [userId, filter],
  *   onMount: (store) => store.dispatch(new LoadUser(userId, filter)),
  *   onDepsChange: (store, [oldUserId, oldFilter]) => {
@@ -297,16 +324,18 @@ export interface UseDispatchOptions<St, D> {
  *
  * All of them are optional, and get the store, so you can use any of its dispatch methods,
  * and read its current `state`. They may be async. To type the state, type the store:
- * `onMount: (store: Store<State>) => ...`.
+ * `onMount: (store: Store<State>) => ...`. The hook returns nothing. To also dispatch actions
+ * from event handlers, use `useDispatch`, `useStore`, etc.
  *
  * Note you can still dispatch actions from a `useEffect`, as usual, if you prefer.
- * These options are just more convenient, because:
+ * `useStoreEffect` is just more convenient, because:
  *
  * - They only run after the store is ready (see `useIsStoreReady`). If the store is not ready
  *   when the component mounts, `onMount` is called as soon as it is. If the component unmounts
  *   before that, none of them is called.
  *
- * - They run in order: `onMount`, then `onDepsChange` (any number of times), then `onUnmount`.
+ * - They are called in order: `onMount`, then `onDepsChange` (any number of times), then
+ *   `onUnmount`. But if one of them is async, it's not awaited (see below).
  *   `onMount` and `onUnmount` run once, even in React's `StrictMode`, which mounts components
  *   twice during development. And `onDepsChange` runs once per change.
  *
@@ -331,6 +360,14 @@ export interface UseDispatchOptions<St, D> {
  *   action changes the state before `onMount`, `onDepsChange` or `onUnmount` returns.
  *
  * - They are not awaited. If one of them is async, the next one may run before it finishes.
+ *   For example, `onUnmount` may run while an async `onMount` is still waiting for an action.
+ *
+ * - Their errors are not caught, as in a `useEffect`. A sync error goes to React, which shows
+ *   the nearest error boundary. A rejected promise is an unhandled promise rejection. And when
+ *   `onMount` waits for the store to be ready, or `onUnmount` waits a microtask (see above),
+ *   even a sync error is an unhandled promise rejection. If `onMount` throws a sync error when
+ *   the component mounts (the store is ready), `onUnmount` is not called, as the cleanup of a
+ *   `useEffect` whose setup throws.
  *
  * - They are the ones from the latest render, so they see its values.
  *
@@ -339,26 +376,14 @@ export interface UseDispatchOptions<St, D> {
  *   development, Fast Refresh does it to a component when you edit its code. And `<Activity>`
  *   does it when it hides the component and shows it again.
  *
+ * - A component can call `useStoreEffect` more than once. They run in the order they are called.
+ *
  * Note: Changing `deps` doesn't call `onMount` again. If you want to dispatch the same actions
  * on mount and when `deps` change, call the same function from both `onMount` and
  * `onDepsChange`. Each of them sees the values from the latest render.
- *
- * See also:
- * - `dispatchAll` which dispatches all given actions in parallel.
- * - `dispatchSync` which dispatches sync actions, and throws if the action is async.
- * - `dispatchAndWait` which dispatches both sync and async actions, and returns a Promise.
- * - `dispatchAndWaitAll` which dispatches all given actions, and returns a Promise.
  */
-export function useDispatch<St = any, const D = undefined>(
-  options?: UseDispatchOptions<St, D>
-): (action: KissAction<St>) => void {
+export function useStoreEffect<St = any, const D = undefined>(options: UseStoreEffectOptions<St, D>): void {
   const store = useStoreFromContext<St>();
-  useLifecycle(store, options);
-  return useMemo(() => store.dispatch.bind(store), [store]);
-}
-
-// Runs `onMount`, `onDepsChange` and `onUnmount` of `useDispatch`. See `useDispatch`.
-function useLifecycle<St, D>(store: Store<St>, options: UseDispatchOptions<St, D> | undefined): void {
 
   // The options from the latest committed render, so that the callbacks see the latest values.
   const optionsRef = useRef(options);
@@ -505,6 +530,9 @@ export function useDispatchAndWaitAll(): (action: KissAction<any>[]) => Promise<
  * If the condition is already true, the action is dispatched right away, before `dispatchWhen`
  * returns. Otherwise, it is dispatched synchronously, right after the state change that meets
  * the condition, so no other action can change the state in between.
+ * If the same state change meets the condition of several `dispatchWhen`, their actions are
+ * dispatched one after the other, and each condition is checked again right before its
+ * action is dispatched. If an earlier action made it false, it keeps waiting.
  *
  * ```ts
  * const dispatchWhen = useDispatchWhen();
@@ -583,9 +611,10 @@ export function useDispatchSync(): (action: KissAction<any>) => void {
 
 /**
  * You can use `isWaiting` and pass it an action `type`:
- * - It returns true if an ASYNC action of the specific type is currently being processed.
- * - It returns false if an ASYNC action of the specific type is NOT currently being processed.
- * - This is only useful for ASYNC actions, since it always returns `false` when the action is SYNC.
+ * - It returns true if an action of the given type (or of a subclass) is currently being processed.
+ * - It returns false if no action of the given type is currently being processed.
+ * - This is only useful for ASYNC actions. A SYNC action finishes before `dispatch` returns, so
+ *   outside of it, `isWaiting` is always `false` for it, and components never see it as `true`.
  *
  * Note an action is ASYNC if it returns a promise from its `before` OR its `reduce` methods.
  *
@@ -806,6 +835,9 @@ class StoreDispatchers<St> {
    * If the condition is already true, the action is dispatched right away, before `dispatchWhen`
    * returns. Otherwise, it is dispatched synchronously, right after the state change that meets
    * the condition, so no other action can change the state in between.
+   * If the same state change meets the condition of several `dispatchWhen`, their actions are
+   * dispatched one after the other, and each condition is checked again right before its
+   * action is dispatched. If an earlier action made it false, it keeps waiting.
    *
    * ```ts
    * store.dispatchWhen(new BuyStock('IBM'), (state) => state.stocks.getPrice('IBM') >= 100, { timeoutMillis: 0 });
@@ -1311,12 +1343,12 @@ class StoreDispatchers<St> {
    */
   waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
-    options: { timeoutMillis?: number | null, onTimeout: () => void }
-  ): Promise<KissAction<St> | null>;
+    options?: { timeoutMillis?: number | null, onTimeout?: undefined }
+  ): Promise<KissAction<St>>;
   waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
-    options?: { timeoutMillis?: number | null }
-  ): Promise<KissAction<St>>;
+    options: { timeoutMillis?: number | null, onTimeout?: () => void }
+  ): Promise<KissAction<St> | null>;
   async waitAnyActionTypeFinishes(
     actionTypes: { new(...args: any[]): KissAction<St> }[],
     {
@@ -1331,7 +1363,7 @@ class StoreDispatchers<St> {
       actionTypes, {
         timeoutMillis: timeoutMillis,
         onTimeout: onTimeout,
-      } as { timeoutMillis?: number | null, onTimeout: () => void });
+      });
   }
 }
 

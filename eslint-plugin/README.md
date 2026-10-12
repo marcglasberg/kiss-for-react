@@ -47,7 +47,7 @@ Note Codex reads `AGENTS.md`. Claude Code reads it too, but only when the projec
 
 ## Install
 
-Requires ESLint 9 or later (with the flat config, `eslint.config.js`), Node 20.19 or later,
+Requires ESLint 9.22 or later (with the flat config, `eslint.config.js`), Node 20.19 or later,
 and `kiss-for-react` 2.0.0 or later. For TypeScript files, you also need the
 [`typescript-eslint`](https://typescript-eslint.io) parser, which your project probably
 already has.
@@ -302,11 +302,12 @@ const name = useSelect((state: State) => state.name);                           
 state change, even when `name` and `age` didn't change. Instead, `useObject` compares the
 values inside the object (or array), and re-renders only when one of them changes.
 
-Only Kiss's `useSelect` is reported: imported from `kiss-for-react`, by name or with
-`import * as kiss`.
+Only Kiss's `useSelect` and `useSelector` are reported: imported from `kiss-for-react`, by name
+or with `import * as kiss`.
 
 Quick fix (automatic): replace `useSelect` with `useObject`, and import it. If that was the
-only use of `useSelect`, it's replaced with `useObject` in the import.
+only use of `useSelect`, it's replaced with `useObject` in the import. Not offered when the name
+`useObject` is already used for something else.
 
 ---
 
@@ -370,8 +371,9 @@ const label = userName + userAge;
 
 `const { user, items } = useAllState<State>()` becomes one `useSelect` for each property. The
 fix is not offered when the component uses the state itself (like `console.log(state)`), when
-the state type is not written in the code (as in `useAllState<State>()` or
-`const state: State = useAllState()`), or when a new name is already used.
+the state type is not written in the code (like in `useAllState<State>()` or
+`const state: State = useAllState()`) and can't be found with [type information](#type-information),
+or when a new name is already used.
 
 ---
 
@@ -393,7 +395,8 @@ Kiss runs selectors and conditions with the current state, many times, on every 
 A variable with the whole state, from `useAllState`, has the state of the last render, which
 may be outdated.
 
-Reports dispatches, `store.state`, `this.state` (in actions), and variables with the whole
+Reports dispatches (any call named like a dispatch, like `dispatch` or `x.dispatchAndWait`),
+`store.state`, `this.state` (in actions), and variables with the whole
 state: from `useAllState`, or from a selector that returns the whole state, like
 `useSelect((state) => state)`. Values selected by other selectors are fine, like props:
 
@@ -405,7 +408,8 @@ const count = useSelect((s: State) => ready ? s.items.length : 0); // OK
 With [type information](#type-information), it finds stores imported from other files.
 
 Quick fix (automatic): replace `store.state`, `this.state`, or a variable with the whole state,
-with the parameter.
+with the parameter. Not offered when the selector has no parameter, or it's destructured, or
+another variable hides its name there.
 
 ---
 
@@ -417,19 +421,22 @@ render, and loops forever when the action changes the state:
 ```tsx
 function User() {
   const dispatch = useDispatch();
-  dispatch(new LoadUser());                                            // Warning
-  useDispatch({ onMount: (store) => store.dispatch(new LoadUser()) }); // OK
-  return <button onClick={() => dispatch(new LoadUser())} />;          // OK
+  dispatch(new LoadUser());                                               // Warning
+  useStoreEffect({ onMount: (store) => store.dispatch(new LoadUser()) }); // OK
+  return <button onClick={() => dispatch(new LoadUser())} />;             // OK
 }
 ```
 
 Checks the body of function components (functions whose name starts with an uppercase letter,
 and that return JSX or call hooks, functions wrapped in `memo` or `forwardRef`, and top-level
-functions that return JSX), and of custom hooks (functions whose name starts with `use`). Dispatches in event handlers, effects,
-`useDispatch` options, and other nested functions, are not reported.
+functions that return JSX), and of custom hooks (functions whose name is `use` followed by an
+uppercase letter or a digit, like `useUser`). Dispatches in event handlers, effects,
+`useStoreEffect` callbacks, and other nested functions, are not reported. Dispatches in a function
+called right away, like `(() => dispatch(new LoadUser()))()`, are reported.
 
 It recognizes the functions returned by `useDispatch`, `useDispatchAndWait` and the other
-dispatch hooks, the methods of `useStore()`, and stores created in the same file. With
+dispatch hooks, the methods of `useStore()`, stores created in the same file, and variables and
+parameters typed `Store<...>`. With
 [type information](#type-information), it also finds stores imported from other files.
 
 ---
@@ -460,8 +467,10 @@ const name = store.state.user.name;                         // Before
 const name = useSelect((state: State) => state.user.name);  // After
 ```
 
-Not offered when the read doesn't run on every render (inside an `if`, after `&&`, or after an
-early `return`), since a hook can't be called there.
+Not offered when the read doesn't run on every render (inside an `if`, a loop or a nested
+function, after `&&`, or after an early `return`), since a hook can't be called there. Also not
+offered when it reads the whole `store.state`, or when the function has a lowercase name (not a
+component or a hook).
 
 ---
 
@@ -479,8 +488,10 @@ dispatchAndWait(new SaveUser()).then((status) => {                // OK
 ```
 
 Checks the `dispatchAndWait` of the store, of actions, of `useStore()`, and the function returned
-by `useDispatchAndWait()`. Not reported when the callback reads its parameter, or names it with
-a leading `_`, like `_status`. If the callback must always run, use `.finally(...)` instead.
+by `useDispatchAndWait()`. Without [type information](#type-information), any call named
+`dispatchAndWait` is checked, like `api.dispatchAndWait(...)`. With it, only the ones that return
+a promise of an `ActionStatus`. Not reported when the callback reads or destructures its
+parameter, or names it with a leading `_`, like `_status`. If the callback must always run, use `.finally(...)` instead.
 
 Quick fix (suggestion): wrap the callback's body in `if (status.isCompletedOk) { ... }`, adding
 the `status` parameter if needed.
@@ -520,6 +531,9 @@ Uses in a condition, like `if (s.user === null)`, and inside an `await`, like
 `await api.load(s.id)`, are not reported. The order is the source order, so an `await`
 inside an `if` counts for the code after the `if`, but not for the `else` branch.
 
+Only copies of the whole state are checked, like `const s = this.state`. Copies of a part, like
+`const items = this.state.items`, and destructuring, like `const { items } = this.state`, are not.
+
 Quick fix (suggestion): use the state parameter of the returned function (or `this.state`)
 instead of the variable.
 
@@ -552,6 +566,10 @@ return () => this.state.copy({ user });             // Before
 return (state: State) => state.copy({ user });      // After
 ```
 
+Not offered when the parameter is destructured, or when another variable hides its name where
+`this.state` is read. When adding the parameter, also not when the name `state` is already used
+there, or when the state type has no name, like `{ count: number }`.
+
 ---
 
 ### no-state-mutation
@@ -578,10 +596,10 @@ It checks:
 
 * `this.state` and `this.initialState` in actions.
 * The state parameter of the function returned by an async `reduce`, of the selectors of
-  `useSelect` and `useObject`, of the conditions of `waitCondition`, `dispatchWhen` and
+  `useSelect`, `useSelector` and `useObject`, of the conditions of `waitCondition`, `dispatchWhen` and
   `useDispatchWhen`, and of the function of `UpdateStateAction`.
-* The state from `useAllState()`, and the value from a `useSelect` that returns a part of the
-  state, like `useSelect((state: State) => state.items)`.
+* The state from `useAllState()`, and the value from a `useSelect` (or `useSelector`) that
+  returns a part of the state, like `useSelect((state: State) => state.items)`.
 
 Changing new objects is fine, like `const items = [...this.state.items]; items.push(x)`.
 Methods that return a new array, like `toSorted`, are fine too.
@@ -591,7 +609,9 @@ checked, like `this.state.items.push(x)`, and the methods of maps and sets are n
 since state classes often have methods called `add` or `set` that return a new state. With
 it, the rule also follows variables (`const items = this.state.items; items.push(x)`), loops
 and callbacks over state arrays (`for (const item of this.state.items) item.done = true`),
-and `store.state`, and it only reports the methods of real arrays, maps and sets.
+the items returned by `at`, `find` and `findLast` of state arrays, and by `get` of state maps
+(`this.state.items.find(...).done = true`), and `store.state`. It only reports the methods of
+real arrays, maps and sets.
 
 Quick fix (suggestion): for `sort`, `reverse` and `splice`, when the result is used, use
 `toSorted`, `toReversed` or `toSpliced`. Only with type information, and when your
@@ -620,10 +640,12 @@ for a moment, and the component renders one more time.
 Not reported when the action is async anyway (its `before` is async, or it sets
 `checkInternet`), when it uses `retry` or `unlimitedRetryCheckInternet` (which need an async
 `reduce`), when it overrides
-`wrapReduce`, or when `reduce` may return a promise, like `return loadReducer()`. An `await`
-inside a nested function doesn't count. With [type information](#type-information), it also
-finds `before`, `checkInternet` and `retry` inherited from superclasses in other files, and
-knows more about what `reduce` returns.
+`wrapReduce`, or when `reduce` may return a promise. Without
+[type information](#type-information), any returned value other than a function, `null` or
+`undefined` may be a promise, like `return loadReducer()` or `return this.state.add(1)`. With it,
+only values whose type may be a promise, or is `any` or `unknown`. An `await` inside a nested
+function doesn't count. With type information, it also finds `before`, `checkInternet` and
+`retry` inherited from superclasses in other files.
 
 Quick fix (suggestion): make `reduce` sync. It removes `async`, and turns `return () => x` and
 `return (state) => x` into `return x`, with `this.state` instead of `state`:
@@ -633,8 +655,9 @@ async reduce() { return (state: State) => state.add(1); } // Before
 reduce() { return this.state.add(1); }                    // After
 ```
 
-The suggestion is not offered when `reduce` has a declared return type, or when a returned
-function has a block body.
+The suggestion is not offered when `reduce` has a declared return type, or when it returns
+something other than `null`, `undefined`, or an arrow function. Also not when a returned arrow
+function is async, has a block body, has more than one parameter, or destructures its parameter.
 
 ---
 
@@ -682,7 +705,8 @@ information, an `after()` is reported if it's `async`, or if its declared return
 `Promise`. With [type information](#type-information), also if it returns a promise without
 declaring it, like `after() { return this.cleanup(); }`.
 
-Quick fix (suggestion): remove `async`. Only when `after` has no `await`.
+Quick fix (suggestion): remove `async`. Only when `after` has no `await`, no declared return
+type, and doesn't return a value.
 
 ---
 
@@ -788,11 +812,24 @@ The lifecycle methods are `protected` in `KissAction`, so TypeScript already rep
 them without writing `protected` makes it public, so `new LoadUser().reduce()` compiles. This
 rule reports it anyway.
 
-The methods are the ones Kiss calls: `reduce`, `before`, `after`, `wrapError`, `wrapReduce`,
-`abortDispatch`, `abortReduce`, the `...KeyParams` and `compute...Key` methods, and the methods
-that `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` and `ServerPush` ask you to
-implement, like `sendCommandToServer` or `applyServerResponseToState`. Calls with `this` or
-`super`, inside the action itself, are not reported.
+The methods are the ones Kiss calls:
+
+- `KissAction`: `reduce`, `before`, `after`, `wrapError`, `wrapReduce`, `abortDispatch`,
+  `abortReduce`, `hasInternet`, `nonReentrantKeyParams`, `computeNonReentrantKey`,
+  `debounceLockBuilder`, `ignoreOldKeyParams`, `computeIgnoreOldKey`, `throttleLockBuilder`,
+  `freshKeyParams`, `computeFreshKey`, `sequentialKeyParams`, `discardQueueOnError`,
+  `createPollingAction`, `pollingKeyParams` and `computePollingKey`.
+- `OptimisticCommand`: `optimisticValue`, `applyValueToState`, `getValueFromState`,
+  `sendCommandToServer`, `applyServerResponseToState`, `reloadFromServer`, `rollbackState`,
+  `shouldRollback`, `shouldReload`, `shouldApplyReload` and `applyReloadResultToState`.
+- `OptimisticSync` and `OptimisticSyncWithPush`: `optimisticSyncKeyParams`,
+  `computeOptimisticSyncKey`, `valueToApply`, `applyOptimisticValueToState`,
+  `getValueFromState`, `sendValueToServer`, `applyServerResponseToState`, `onFinish`,
+  `ifShouldSendAnotherRequest` and `getServerRevisionFromState`.
+- `ServerPush`: `associatedAction`, `pushMetadata`, `applyServerPushToState` and
+  `getServerRevisionFromState`.
+
+Calls with `this` or `super`, inside the action itself, are not reported.
 
 Without type information, the action must be `new X(...)` (or a `const` initialized with it),
 where `X` is an action class declared in the same file. With
@@ -826,7 +863,8 @@ it fails once, it fails again. Dispatching this action fails with a `StoreExcept
 the reducer succeeds.
 
 Any `retry` options turn retry on, like `retry = { maxRetries: 5 }`. Not reported for
-`retry = { on: false }`, or for `unlimitedRetryCheckInternet = false`.
+`retry = { on: false }`, or for `unlimitedRetryCheckInternet = false`. The property and the
+sync `reduce` must be declared in the same class.
 
 Quick fixes (suggestions): remove the property, or make `reduce` async. The second one adds
 `async`, and turns each `return x` into `return () => x`, since an async reducer returns a
@@ -836,6 +874,8 @@ function:
 reduce() { return this.state.add(1); }              // Before
 async reduce() { return () => this.state.add(1); }  // After
 ```
+
+The second one is not offered when `reduce` has a declared return type.
 
 ---
 
@@ -860,9 +900,13 @@ class LoadText extends Action {
 
 Not reported when the action (or its superclass) declares `nonReentrant`, even as `false`,
 or overrides `abortDispatch`. Also not reported for `OptimisticCommand`, which is always
-non-reentrant, for `OptimisticSync`, which can't use `retry` nor `nonReentrant` (see
-[`incompatible-action-features`](#incompatible-action-features)), for `retry = { on: false }`, for a sync `reduce` (see
-[`retry-requires-async-reduce`](#retry-requires-async-reduce)), or in tests. With
+non-reentrant, for `OptimisticSync`, `OptimisticSyncWithPush` and `ServerPush`, which can't
+use `retry` nor `nonReentrant` (see
+[`incompatible-action-features`](#incompatible-action-features)), with
+`unlimitedRetryCheckInternet`, which is already non-reentrant, with `throttle` or `fresh`,
+which can't be combined with `nonReentrant`, for `retry = { on: false }`, for a sync `reduce`
+(see [`retry-requires-async-reduce`](#retry-requires-async-reduce)), or in tests. The action
+itself must declare `retry`. With
 [type information](#type-information), it also checks the superclasses of other files.
 
 Quick fix (suggestion): add `nonReentrant = true;`.
@@ -892,7 +936,7 @@ makes the action async, so `dispatchSync` of it throws.
 
 Not reported when the action (or its superclass) overrides `before` or `wrapReduce`, which
 may make it async, or in tests. `nonReentrant` is also not reported when the action sets
-`checkInternet` or `retry`. For `retry`, see
+`checkInternet`, `retry` or `unlimitedRetryCheckInternet`. For the last two, see
 [`retry-requires-async-reduce`](#retry-requires-async-reduce). With
 [type information](#type-information), it also checks the superclasses of other files.
 
@@ -950,9 +994,13 @@ dispatched):
   `poll`, `unlimitedRetryCheckInternet` or `ignoreOld`.
 - A `ServerPush` with any feature, including `checkInternet`. It should be used alone.
 
-A feature is on when it's set to something other than `false`, `null` or `undefined` (for
-`retry`, also not `{ on: false }`). `poll` also counts as a constructor parameter property,
-like `constructor(readonly poll = Poll.once)`. Features inherited from superclasses count
+A feature is on unless it's set to `false`, `null`, `undefined`, `0` or `''`. But `retry` is
+also off when it has `on: false`, `unlimitedRetryCheckInternet` is on unless it's `false`,
+`null` or `undefined`, and `poll` unless it's `undefined`. Any other value, like
+a constant, counts as on. With [type information](#type-information), a value whose type is
+`true`, `false`, `null` or `undefined` (like `const OFF = false`) counts as that value. `poll`
+also counts as a constructor parameter property, like `constructor(readonly poll = Poll.once)`,
+and is on even without a default value. Features inherited from superclasses count
 too, so a subclass that turns one off (like `retry = { on: false }`) is fine. The problem is
 reported in the class that declares at least one of the two features. Without
 [type information](#type-information), only the superclasses declared in the same file are
@@ -1043,8 +1091,9 @@ It checks the `new` expressions that `createPollingAction()` returns:
 
 Also reported in tests.
 
-Quick fix (suggestion): use `Poll.once`, or add it as the last argument (when `Poll` is
-imported, and `poll` is the next parameter).
+Quick fix (suggestion): use `Poll.once`, or add it as the last argument. Not offered for
+`this.poll` or a missing argument when `Poll` is not imported, nor for a missing argument when
+`poll` is not the next parameter.
 
 ---
 
@@ -1105,9 +1154,9 @@ class LoadUser extends Action { ... }            // OK
 If there is no base action, the warning says to create one. Not reported for abstract
 classes, actions with a generic state (like `KissAction<St>`), or in tests.
 
-Without [type information](#type-information), it only finds the base actions declared in
-the same file. With it, it finds the abstract classes of your project that extend
-`KissAction` with the same state directly.
+A base action is an abstract class that extends `KissAction` directly, with the same state.
+Without [type information](#type-information), it only finds the ones declared in the same
+file, before the action. With it, also the ones exported from the other files of your project.
 
 Quick fixes (suggestions): extend the base action, one for each base action found (up to
 3). It adds the import of the base action, and removes the import of `KissAction` if it's
@@ -1137,7 +1186,9 @@ rules: {
 ```
 
 Overrides as a property with a function, like `abortDispatch = () => ...`, are also reported.
-Not reported in tests.
+Not reported in tests. Without [type information](#type-information), the class (or a
+superclass declared in the same file) must declare `reduce`, or extend a class imported from
+`kiss-for-react`, directly or through superclasses declared in the same file.
 
 ---
 
@@ -1163,7 +1214,9 @@ rules: {
 ```
 
 Overrides as a property with a function, like `wrapReduce = () => ...`, are also reported.
-Not reported in tests.
+Not reported in tests. Without [type information](#type-information), the class (or a
+superclass declared in the same file) must declare `reduce`, or extend a class imported from
+`kiss-for-react`, directly or through superclasses declared in the same file.
 
 ---
 
@@ -1206,6 +1259,11 @@ class ToggleLike extends OptimisticSync<State, boolean> { // OK
 }
 ```
 
+The fields are the class's own constructor parameter properties (like `readonly todoId:
+string`), and its own properties, except the static ones, the ones with a function, Kiss's
+configuration properties (like `retry` or `pollInterval`), and the ones starting with `_`. Not
+reported for abstract classes.
+
 It's opt-in, since sharing the key is often intended. Without
 [type information](#type-information), the class must extend `KissAction`,
 `OptimisticCommand`, `OptimisticSync` or `OptimisticSyncWithPush` in the same file (directly,
@@ -1242,7 +1300,8 @@ store.dispatch(new LoadUser());      // OK
 
 It checks any call to a method or function called `dispatchSync`, like `store.dispatchSync(...)`,
 `this.dispatchSync(...)`, or `dispatchSync(...)` with the function returned by
-`useDispatchSync()`. It also checks the methods the action inherits from its superclasses.
+`useDispatchSync()`, when it's named `dispatchSync`. It also checks the methods the action
+inherits from its superclasses.
 
 The rule only reports when the action's class is known. With
 [type information](#type-information), that's whenever the action's type is a specific
@@ -1250,7 +1309,8 @@ action class. For example, it doesn't report `dispatchSync(action)` when `action
 `KissAction<State>`. Without type information, the action must be created with `new` (in the
 call, or in a `const`), and its class must be declared in the same file.
 
-Quick fixes (suggestions): replace `dispatchSync` with `dispatch` or `dispatchAndWait`.
+Quick fixes (suggestions): replace `dispatchSync` with `dispatch` or `dispatchAndWait`. Only
+offered for method calls, like `store.dispatchSync(...)`.
 
 ---
 
@@ -1277,7 +1337,8 @@ or `continue`) after the first dispatch. With [type information](#type-informati
 must be a Kiss action.
 
 Quick fix (suggestion): dispatch a new action, by repeating the `new` expression, like
-`new LoadUser()`.
+`new LoadUser()`. Not offered when a variable used in the `new` expression is a different one
+(or is not visible) at the second dispatch.
 
 ---
 
@@ -1297,7 +1358,7 @@ The store must be a `const`, created with `createStore` or `new Store` from Kiss
 `persistor` option. Only the code of the same function (or module) that creates the store is
 checked, in source order. A dispatch is fine after any `await` that waits for `store.ready()`,
 like `await Promise.all([store.ready(), ...])`. Dispatches inside other functions, like
-`store.ready().then(() => store.dispatch(...))`, are not checked.
+`store.ready().then(() => store.dispatch(...))`, are not checked, and neither is `dispatchWhen`.
 
 Quick fix (suggestion): add `await store.ready();` before the dispatch, when the function is
 `async`, or at the top level of a module.
@@ -1313,24 +1374,27 @@ and dispatching before the store is ready throws a `StoreException`:
 ```tsx
 function Cards() {
   const dispatch = useDispatch();
-  useEffect(() => { dispatch(new FetchCards()); }, []);                // Warning
-  useDispatch({ onMount: (store) => store.dispatch(new FetchCards()) }); // OK
+  useEffect(() => { dispatch(new FetchCards()); }, []);                   // Warning
+  useStoreEffect({ onMount: (store) => store.dispatch(new FetchCards()) }); // OK
 }
 ```
 
-The `onMount`, `onDepsChange` and `onUnmount` options of `useDispatch` only run after the store
-is ready.
+The `onMount`, `onDepsChange` and `onUnmount` of `useStoreEffect` only run after the store is
+ready.
 
-Only effects with a dependency array, in components and custom hooks, are checked. The dispatch
-must run when the effect runs (not in a callback inside it), and must use a dispatch function of
-the component: from `useDispatch()` and the other dispatch hooks, or from `useStore()`. Effects
-that check `useIsStoreReady()`, or call `ready()`, are not reported. With
+Only effects written inline (and not `async`), with a dependency array, in components and custom
+hooks, are checked. The dispatch must run when the effect runs (not in a callback inside it), and
+must use a dispatch function of the component: from `useDispatch()` and the other dispatch hooks,
+or from `useStore()`. `dispatchWhen` is not reported. Effects that check `useIsStoreReady()`, or
+call `ready()`, are not reported. With
 [type information](#type-information), it's only reported when some file of the project creates
 a store with a `persistor`, since otherwise the store is always ready.
 
-Quick fix (suggestion): replace the effect with `useDispatch({ onMount })`. The dependencies
+Quick fix (suggestion): replace the effect with `useStoreEffect({ onMount })`. The dependencies
 become `deps` and `onDepsChange`, and the cleanup function becomes `onUnmount` (no suggestion
-when the effect has both).
+when the effect has both). It also imports `useStoreEffect`, and removes a `useDispatch()` that
+is not used anymore. No suggestion either when the effect returns something other than a cleanup
+function at its end, or when the cleanup uses variables declared in the effect.
 
 ---
 
@@ -1353,8 +1417,9 @@ store.dispatch(new LoadText());              // OK
 
 It checks any call to a method or function called `dispatchAndWait` or `dispatchAndWaitAll`,
 like `store.dispatchAndWait(...)`, `this.dispatchAndWait(...)`, or the functions returned by
-`useDispatchAndWait()` and `useDispatchAndWaitAll()`. It also checks the `retry` and
-`unlimitedRetryCheckInternet` the action inherits from its superclasses. Not reported in tests.
+`useDispatchAndWait()` and `useDispatchAndWaitAll()`, when they're named `dispatchAndWait` and
+`dispatchAndWaitAll`. It also checks the `retry` and `unlimitedRetryCheckInternet` the action
+inherits from its superclasses. Not reported in tests.
 
 The rule only reports when the action's class is known. With
 [type information](#type-information), that's whenever the action's type is a specific
@@ -1407,8 +1472,8 @@ of `dispatchAndWaitAll`), when the result is not used.
 
 ### wait-fail-never-matches
 
-A warning for `isWaiting` or `useIsWaiting` with a sync action. It's always `false`, since a
-sync action finishes during its dispatch, before anything can wait for it:
+A warning for `isWaiting` or `useIsWaiting` with a sync action. Outside the action itself, it's
+always `false`, since a sync action finishes during its dispatch, before anything can wait for it:
 
 ```ts
 class Increment extends Action {
@@ -1421,9 +1486,10 @@ const isFailed = useIsFailed(Increment);      // OK, sync actions can fail
 ```
 
 An action is sync when its `reduce` and `before` are sync, and it doesn't set
-`checkInternet`. Not reported for abstract classes (`isWaiting` also matches their
-subclasses), for classes that have subclasses, for actions that override `wrapReduce` or
-turn on `retry` (which may make them async), or in tests.
+`checkInternet`. Not reported inside the action's own class (where `isWaiting` is `true` while
+the action runs), for abstract classes (`isWaiting` also matches their subclasses), for classes
+that have subclasses, for actions that override `wrapReduce` or turn on `retry` or
+`unlimitedRetryCheckInternet` (which may make them async), or in tests.
 
 The action's class must be known. Without [type information](#type-information), it must
 be declared in the same file, with its superclasses.
@@ -1433,15 +1499,16 @@ be declared in the same file, with its superclasses.
 ### wait-condition-without-timeout
 
 A warning for `waitCondition`, `dispatchWhen` or `useDispatchWhen` with no timeout
-(`{ timeoutMillis: 0 }`, or a negative number), in code that is not a test:
+(`{ timeoutMillis: 0 }`, a negative number, or `Infinity`), in code that is not a test:
 
 ```ts
 store.dispatchWhen(new BuyStock('IBM'), (state) => state.price >= 100, { timeoutMillis: 0 });      // Warning
 store.dispatchWhen(new BuyStock('IBM'), (state) => state.price >= 100, { timeoutMillis: 60_000 }); // OK
 ```
 
-While a wait is pending, its condition runs on every state change, and it can't be cancelled.
-A wait without a timeout may never end. Use a timeout, or put the logic in an action.
+While a wait is pending, its condition runs on every state change. A `waitCondition` can't be
+cancelled, and only a `logOut()` cancels a `dispatchWhen`. A wait without a timeout may never
+end. Use a timeout, or put the logic in an action.
 
 It checks the methods of the store, of `useStore()`, and of actions (like `this.waitCondition`),
 and the function returned by `useDispatchWhen()`. Not reported in tests. With
@@ -1525,12 +1592,13 @@ class State {
 
 Reported for:
 
-* A `Promise`, a Node timer (`NodeJS.Timeout`), an `AbortController`, an `AbortSignal`, a
-  `WebSocket`, an `EventSource` or a `Worker`. Keep these outside the state, for example in a
-  module, or in the action that uses them.
+* A `Promise` (or `PromiseLike`), a Node timer (`NodeJS.Timeout`, `NodeJS.Timer` or
+  `NodeJS.Immediate`), an `AbortController`, an `AbortSignal`, a `WebSocket`, an `EventSource`,
+  a `Worker` or a `SharedWorker`. Keep these outside the state, for example in a module, or in
+  the action that uses them.
 * A DOM node (`Node`, `Element`, `HTMLElement` and its subtypes), a React ref (`RefObject`,
-  `MutableRefObject`), or a React element (`ReactElement`, `ReactNode`, `JSX.Element`). Keep
-  these in the component.
+  `MutableRefObject`), or a React element (`ReactElement`, `ReactNode`, `ReactPortal`,
+  `JSX.Element`). Keep these in the component.
 
 Subclasses, union members and type arguments are checked too, like `Promise<User>[]` or
 `ReadonlyMap<string, AbortController>`. Functions are fine. In the browser, a timer from
@@ -1567,9 +1635,11 @@ Without [type information](#type-information), only the state classes declared i
 file as the action or store are found, and only fields declared in the same file are known.
 
 Quick fix (suggestion): add the missing fields to the parameters, and use them in the new
-instance, so `this.age` becomes `age ?? this.age`. Only offered when the method creates one
+instance, so `this.age` becomes `age ?? this.age`. Only offered when the fields are listed as a
+destructured object (with an object type) or as separate parameters, the method creates one
 instance, which uses each missing field once (as `this.field`), and the fields are declared in
-the class with a type that can't be `null` or `undefined`.
+the class, not optional, with a type that can't be `null` or `undefined` (and is not `any` or
+`unknown`).
 
 ---
 
@@ -1598,7 +1668,8 @@ the state class is declared in the same file. Otherwise, only a direct call of t
 is reported.
 
 Quick fix (suggestion): replace the constructor call with `State.initialState` (or
-`State.initialState()`, if it's a method). Only offered when the state class has it.
+`State.initialState()`, if it's a method). Only offered when the state class has it. Without
+type information, the state class (and its superclasses) must be declared in the same file.
 
 ---
 
@@ -1634,9 +1705,10 @@ rules: {
 ### user-exception-outside-action
 
 A warning for a `UserException` thrown where Kiss can't catch it: in a component, in a hook,
-in a function declared inside them (like an event handler or an effect), or in the `after`
-method of an action. Kiss only shows a `UserException` to the user when it's thrown from the
-`before` or `reduce` of an action. Elsewhere, it's a plain error, and the user sees nothing:
+in an arrow function, function expression or object method inside them (like an event handler
+or an effect), or in the `after` method of an action. Kiss only shows a `UserException` to the
+user when it's thrown from the `before` or `reduce` of an action. Elsewhere, it's a plain error,
+and the user sees nothing:
 
 ```tsx
 const dispatch = useDispatch();
@@ -1648,8 +1720,8 @@ const dispatch = useDispatch();
 A component is a function named with an uppercase first letter that has JSX or calls a hook,
 and a hook is a function named `useX`. Only `UserException` imported from `kiss-for-react`
 is checked. Not reported: throws in the `before`, `reduce` or `wrapError` of an action, throws
-in other functions (they may be called from an action), and throws caught by a `try` in the
-same function.
+in other functions, including `function` declarations inside a component or hook (they may be
+called from an action), and throws caught by a `try` in the same function.
 
 Quick fix (suggestion): dispatch a `UserExceptionAction` instead, followed by `return;` (since
 a `throw` stops the function). It's offered in the `after` method (with `this.dispatch`), and
@@ -1701,10 +1773,11 @@ createStore<State>({
 
 It checks the `errorObserver` given to `createStore` or `new Store`, also when it's a
 function declared in the same file. Not reported: throws caught by a `try` in
-`errorObserver`, and throws in functions declared inside it.
+`errorObserver`, throws in functions declared inside it, and throws in an `async` or generator
+`errorObserver`.
 
 Quick fix (automatic): change `throw` to `return`. Not offered when `errorObserver` declares
-a return type, since the returned error may not match it.
+a return type (other than `any` or `unknown`), since the returned error may not match it.
 
 ---
 
@@ -1716,6 +1789,8 @@ the action finishes:
 
 ```ts
 store.dispatch(new LoadUser());                // Warning
+expect(store.state.user.name).toBe('Mary');
+
 await store.dispatchAndWait(new LoadUser());   // OK
 expect(store.state.user.name).toBe('Mary');
 ```
@@ -1755,9 +1830,11 @@ await store.waitAllActions([action]);    // OK
 await store.dispatchAndWait(action);     // OK
 ```
 
-The features are `store.mocks`, `store.record`, the wait methods that the Kiss docs say are
-only for tests (`waitActionType`, `waitAllActionTypes`, `waitAnyActionTypeFinishes` and
-`waitActionCondition`), and `waitAllActions` with no actions. `mocks` replaces the actions
+The features are `store.mocks`, `store.record`, the wait methods `waitActionType`,
+`waitAllActionTypes`, `waitAnyActionTypeFinishes` and `waitActionCondition`, and
+`waitAllActions` with no actions. The Kiss docs say `waitAllActions` is only for tests too, but
+also that waiting for the actions you just dispatched is safe in production, so
+`waitAllActions` with actions is not reported. `mocks` replaces the actions
 you dispatch, and `record` records every state change. Waiting for actions that other code
 dispatches, or for all actions, can easily deadlock. The wait methods are also checked in the
 store returned by `useStore()`, and in actions, like `this.waitActionType(...)`.
@@ -1796,12 +1873,13 @@ if (action.status.hasFinishedMethodReduce) ...   // Warning
 if (action.status.isCompletedOk) ...             // OK
 ```
 
+Destructuring, like `const { hasFinishedMethodReduce } = action.status`, is also reported.
 Not reported in tests. With [type information](#type-information), any `ActionStatus` is
 checked. Without it, only `something.status`, and the status returned by
 `await dispatchAndWait(...)`.
 
 Quick fix (automatic): replace `hasFinishedMethodAfter` with `isCompleted`, which has the same
-value.
+value. Not offered when destructuring.
 
 ---
 
@@ -1810,7 +1888,8 @@ value.
 A warning for debug tools given to the store without a check for the environment. They are
 only useful while debugging, and slow down your app in production:
 
-- `PersistorPrinterDecorator`, which prints all persistence calls.
+- `PersistorPrinterDecorator`, which prints all persistence calls. It's reported wherever it's
+  created, even if not given to the store.
 - An `actionObserver` or `stateObserver` that only prints to the console (`console.log`,
   `console.info` or `console.debug`).
 
@@ -1851,8 +1930,10 @@ There are 3 ways to name actions, and one rule for each. Turn on only one of the
 
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
-`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand` or `OptimisticSync`. With
-it, any class that extends `KissAction` is an action.
+`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
+`OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
+`KissAction` is an action. Class expressions, like
+`const LoadUser = class extends Action { ... }`, and `declare class` are not checked.
 
 Quick fix (suggestion): rename the action, like `LoadUser` to `LoadUserAction`, in the
 whole file. ESLint can only change the current file, so it's not offered when the action is
@@ -1881,8 +1962,10 @@ There are 3 ways to name actions, and one rule for each. Turn on only one of the
 
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
-`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand` or `OptimisticSync`. With
-it, any class that extends `KissAction` is an action.
+`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
+`OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
+`KissAction` is an action. Class expressions, like
+`const LoadUser = class extends Action { ... }`, and `declare class` are not checked.
 
 Quick fix (suggestion): rename the action, like `LoadUser` to `LoadUser_Action`, in the
 whole file. ESLint can only change the current file, so it's not offered when the action is
@@ -1913,8 +1996,10 @@ Names that only contain `Action` elsewhere, like `ActionLog`, are fine.
 
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
-`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand` or `OptimisticSync`. With
-it, any class that extends `KissAction` is an action.
+`reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
+`OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
+`KissAction` is an action. Class expressions, like
+`const LoadUser = class extends Action { ... }`, and `declare class` are not checked.
 
 Quick fix (suggestion): rename the action, like `LoadUserAction` to `LoadUser`, in the
 whole file. ESLint can only change the current file, so it's not offered when the action is
@@ -1946,7 +2031,7 @@ or `load_user_action.ts`. A file with more than one action can have any name tha
 the style, like `user-actions.ts` (the plural `Actions` is also fine).
 
 The warning is shown on the first action of the file. Files without actions, `index` files,
-and tests are not checked. Abstract classes, like the base action, don't count as actions.
+declaration files (`.d.ts`) and tests are not checked. Abstract classes, like the base action, don't count as actions.
 With [type information](#type-information), it also finds actions that inherit `reduce` from
 a class of another file.
 
@@ -1980,7 +2065,7 @@ Any case style is fine, like `ACTION_LoadUser.ts`, `ACTION_load_user.ts`,
 name that follows the style, like `ACTION_user.ts` (the plural `ACTIONS` is also fine).
 
 The warning is shown on the first action of the file. Files without actions, `index` files,
-and tests are not checked. Abstract classes, like the base action, don't count as actions.
+declaration files (`.d.ts`) and tests are not checked. Abstract classes, like the base action, don't count as actions.
 With [type information](#type-information), it also finds actions that inherit `reduce` from
 a class of another file.
 

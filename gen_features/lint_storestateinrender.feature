@@ -23,7 +23,7 @@ Feature: Lint: store-state-in-render
       | imported from another file | false    |
 
   Scenario: Reading store.state in event handlers and effects is fine.
-    Given A component that reads store.state in an event handler, an effect, and the onMount option of useDispatch.
+    Given A component that reads store.state in an event handler, an effect, and the onMount of useStoreEffect.
     When The code is linted.
     Then There are no warnings.
 

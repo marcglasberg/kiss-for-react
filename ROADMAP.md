@@ -125,10 +125,10 @@ Decisions to make before implementing:
 
 ### Lint rules
 
-In `LINTS_LIST.md`, rows 23 (`dependencies_cast_in_action`) and 70
-(`global_error_observer_without_env`) are skipped because Kiss has no environment. Revisit them
-after implementing this. Also consider a rule against importing services directly in actions,
-once dependencies are the recommended way (probably opt-in).
+In `LINTS_LIST.md`, `dependencies_cast_in_action` and `global_error_observer_without_env`) 
+are skipped because Kiss has no environment. Revisit them after implementing this. 
+Also consider a rule against importing services directly in actions, once dependencies 
+are the recommended way (probably opt-in).
 
 ---
 

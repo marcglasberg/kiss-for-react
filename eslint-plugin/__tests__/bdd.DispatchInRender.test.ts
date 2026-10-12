@@ -7,7 +7,7 @@ reporter(new FeatureFileReporter());
 
 const feature = new Feature('Lint: dispatch-in-render');
 
-const prelude = `import { createStore, KissAction, useDispatch, useDispatchAndWait, useStore } from 'kiss-for-react';
+const prelude = `import { createStore, KissAction, useDispatch, useDispatchAndWait, useStore, useStoreEffect } from 'kiss-for-react';
 import { memo, useEffect, useReducer } from 'react';
 
 class State {
@@ -76,8 +76,8 @@ export function useUser() {
   });
 
 Bdd(feature)
-  .scenario('Dispatches in event handlers, effects, useDispatch options and other closures are fine.')
-  .given('A component that dispatches in an event handler, an effect, the onMount option of useDispatch, and a callback.')
+  .scenario('Dispatches in event handlers, effects, useStoreEffect callbacks and other closures are fine.')
+  .given('A component that dispatches in an event handler, an effect, the onMount of useStoreEffect, and a callback.')
   .and('It also uses the dispatch of React\'s useReducer in its body.')
   .when('The code is linted.')
   .then('There are no warnings.')
@@ -85,7 +85,8 @@ Bdd(feature)
   .run(async (_) => {
     const code = `${prelude}
 export function User() {
-  const dispatch = useDispatch({ onMount: (store) => store.dispatch(new LoadUser()) });
+  const dispatch = useDispatch();
+  useStoreEffect({ onMount: (store) => store.dispatch(new LoadUser()) });
   const [count, increment] = useReducer((n: number) => n + 1, 0);
   if (count === 0) increment();
   useEffect(() => { dispatch(new LoadUser()); }, [dispatch]);

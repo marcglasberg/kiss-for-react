@@ -112,3 +112,49 @@ export async function run() {
     expect(lint(rule, code, {filename: 'src/app.ts'}).messages).toEqual([]);
     expect(lint(rule, code, {types: false, filename: 'src/app.ts'}).messages.length).toBe(1);
   });
+
+Bdd(feature)
+  .scenario('A wait with an infinite timeout is reported too, since it means no timeout.')
+  .given('{Where}.')
+  .when('It waits for a condition with timeoutMillis {Timeout}.')
+  .then('There is a warning on the timeout.')
+  .example(val('Where', 'The store\'s waitCondition'), val('Timeout', 'Infinity'))
+  .example(val('Where', 'The store\'s waitCondition'), val('Timeout', 'Number.POSITIVE_INFINITY'))
+  .example(val('Where', 'The store\'s dispatchWhen'), val('Timeout', 'Infinity'))
+  .run(async (ctx) => {
+    const timeout = ctx.example.val('Timeout') as string;
+    const call = (ctx.example.val('Where') as string).includes('waitCondition')
+      ? `await store.waitCondition((state) => state.price >= 100, { timeoutMillis: ${timeout} });`
+      : `store.dispatchWhen(new BuyStock(), (state) => state.price >= 100, { timeoutMillis: ${timeout} });`;
+    const code = `${prelude}
+export async function run() {
+  ${call}
+}
+`;
+    for (const types of [true, false]) {
+      const result = lint(rule, code, {types, filename: 'src/app.ts'});
+      expect(result.messages.map((m) => m.text)).toEqual([`timeoutMillis: ${timeout}`]);
+      if (types) expect(result.typeErrors).toEqual([]);
+    }
+  });
+
+Bdd(feature)
+  .scenario('The warning says if the wait can be cancelled.')
+  .given('{Where}, without a timeout.')
+  .when('The code is linted.')
+  .then('The warning says: {Message}')
+  .example(val('Where', 'The store\'s waitCondition'), val('Message', 'it can\'t be cancelled'))
+  .example(val('Where', 'The store\'s dispatchWhen'), val('Message', 'only a `logOut()` cancels it'))
+  .run(async (ctx) => {
+    const call = (ctx.example.val('Where') as string).includes('waitCondition')
+      ? 'await store.waitCondition((state) => state.price >= 100, { timeoutMillis: 0 });'
+      : 'store.dispatchWhen(new BuyStock(), (state) => state.price >= 100, { timeoutMillis: 0 });';
+    const code = `${prelude}
+export async function run() {
+  ${call}
+}
+`;
+    const result = lint(rule, code, {filename: 'src/app.ts'});
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].message).toContain(ctx.example.val('Message'));
+  });

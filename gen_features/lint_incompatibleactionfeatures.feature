@@ -171,3 +171,51 @@ Feature: Lint: incompatible-action-features
       | An action with throttle and retry                             |
       | An action with sequential and nonReentrant                    |
       | A class that is not an action, with throttle and nonReentrant |
+
+  Scenario Outline: A boolean feature counts as on when its value is not a literal, like a constant.
+    Given A constant FLAG that is true.
+    And An action with {Other}, and {Feature} = FLAG.
+    When The code is linted.
+    Then There is an error in {Feature}, saying they can't be combined, since the store also checks if it's truthy.
+    Examples: 
+      | Other               | Feature      | Type information |
+      | throttle = 1000     | nonReentrant | true             |
+      | throttle = 1000     | nonReentrant | false            |
+      | debounce = 300      | sequential   | true             |
+      | debounce = 300      | sequential   | false            |
+      | nonReentrant = true | ignoreOld    | true             |
+      | nonReentrant = true | ignoreOld    | false            |
+
+  Scenario Outline: A boolean feature set to a falsy literal does not count.
+    Given An action with throttle = 1000, and nonReentrant = {Value}.
+    When The code is linted.
+    Then There are no errors.
+    Examples: 
+      | Value     |
+      | false     |
+      | 0         |
+      | null      |
+      | undefined |
+
+  Scenario Outline: A retry set to a falsy value does not count, since the store only turns it on when it is truthy.
+    Given An action with debounce = 300, and retry = {Value}.
+    When The code is linted.
+    Then There are no errors.
+    Examples: 
+      | Value         |
+      | false         |
+      | 0             |
+      | { on: false } |
+
+  Scenario: With type information, a feature set to a constant that is false does not count.
+    Given A constant OFF that is false.
+    And An action with throttle = 1000, and nonReentrant = OFF.
+    When The code is linted with type information.
+    Then There are no errors, since the type of OFF is false.
+
+  Scenario: With type information, a feature inherited with a constant that is true counts.
+    Given A constant FLAG that is true.
+    And An abstract action with nonReentrant = FLAG.
+    And A subclass with throttle = 1000.
+    When The code is linted with type information.
+    Then There is an error in throttle.

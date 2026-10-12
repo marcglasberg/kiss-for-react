@@ -32,7 +32,8 @@ interface BaseAction {
  *
  * Suggestions: extend the base action, for each abstract class that extends `KissAction` with
  * the same state directly (up to 3), adding its import. Without type information, only the
- * base actions declared in the same file are found.
+ * base actions declared in the same file (before the action) are found. With it, also the ones
+ * exported from the other files of the program.
  */
 export default createRule({
   name: 'extend-base-action',

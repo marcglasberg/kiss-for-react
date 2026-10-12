@@ -27,6 +27,7 @@ import {
   useSelect,
   useSelector,
   useStore,
+  useStoreEffect,
 } from 'kiss-for-react';
 import { Action, Increment, LoadUser, SaveUser, State, store } from './state';
 
@@ -285,8 +286,8 @@ function DispatchInRender() {
   // (It dispatches again on every render, and loops forever if the action changes the state)
   dispatch(new LoadUser());
 
-  // OK: in the `onMount` option of `useDispatch`.
-  useDispatch({ onMount: (store) => store.dispatch(new LoadUser()) });
+  // OK: in the `onMount` of `useStoreEffect`.
+  useStoreEffect({ onMount: (store) => store.dispatch(new LoadUser()) });
 
   // OK: in an effect, in a callback that runs later.
   useEffect(() => {
@@ -336,14 +337,14 @@ function DispatchInEffect({ userId }: { userId: string }) {
     // kiss-for-react/dispatch-in-effect
     // (The effect runs when the component mounts. If the store is still reading the persisted
     // state, dispatching throws a `StoreException`)
-    // Fix (suggestion): Will replace the effect with `useDispatch({ onMount: (store) => ... })`.
+    // Fix (suggestion): Will replace the effect with `useStoreEffect({ onMount: (store) => ... })`.
     dispatch(new LoadUser());
   }, []);
 
   // kiss-for-react/dispatch-in-effect
   // (An effect with deps, and `dispatch` from `useStore()`)
   // Fix (suggestion): Will replace the effect with
-  // `useDispatch({ deps: userId, onMount: ..., onDepsChange: ... })`.
+  // `useStoreEffect({ deps: userId, onMount: ..., onDepsChange: ... })`.
   useEffect(() => dispatchFromStore(new LoadUser()), [userId]);
 
   useEffect(() => {
@@ -353,8 +354,8 @@ function DispatchInEffect({ userId }: { userId: string }) {
     return () => console.log(`Stopped ${userId}`);
   }, [userId]);
 
-  // OK: in the `onMount` option of `useDispatch`, which waits for the store to be ready.
-  useDispatch({ onMount: (store) => store.dispatch(new LoadUser()) });
+  // OK: in the `onMount` of `useStoreEffect`, which waits for the store to be ready.
+  useStoreEffect({ onMount: (store) => store.dispatch(new LoadUser()) });
 
   // OK: the effect checks if the store is ready.
   useEffect(() => {

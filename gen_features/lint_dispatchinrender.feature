@@ -44,8 +44,8 @@ export function useUser() {
   dispatch(new LoadUser());
 }                  |
 
-  Scenario: Dispatches in event handlers, effects, useDispatch options and other closures are fine.
-    Given A component that dispatches in an event handler, an effect, the onMount option of useDispatch, and a callback.
+  Scenario: Dispatches in event handlers, effects, useStoreEffect callbacks and other closures are fine.
+    Given A component that dispatches in an event handler, an effect, the onMount of useStoreEffect, and a callback.
     And It also uses the dispatch of React's useReducer in its body.
     When The code is linted.
     Then There are no warnings.

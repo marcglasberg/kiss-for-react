@@ -2,17 +2,17 @@ import { expect } from '@jest/globals';
 import { Bdd, Feature, FeatureFileReporter, reporter, val } from 'easy-bdd-tool-jest';
 import React from 'react';
 import TestRenderer, { act, ReactTestRenderer } from 'react-test-renderer';
-import { KissAction, Store, StoreProvider, useDispatch } from '../src';
+import { KissAction, Store, StoreProvider, useStoreEffect } from '../src';
 
 reporter(new FeatureFileReporter());
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const feature = new Feature('useDispatch onUnmount order');
+const feature = new Feature('useStoreEffect onUnmount order');
 
 Bdd(feature)
   .scenario('When a component is replaced by one with another key, the old onUnmount runs before the new onMount.')
-  .given('A component that uses useDispatch.')
+  .given('A component that uses useStoreEffect.')
   .and('Its onMount selects its id, and its onUnmount clears the selection.')
   .and('The component is mounted with key and id "A".')
   .when('It is replaced by the same component with key and id "B".')
@@ -37,7 +37,7 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('When a page is replaced by another page, the old onUnmount runs before the new onMount.')
-  .given('Two pages that use useDispatch.')
+  .given('Two pages that use useStoreEffect.')
   .and('Their onMount selects their id, and their onUnmount clears the selection.')
   .and('Page "A" is mounted.')
   .when('Page "A" is replaced by page "B", as in a route switch.')
@@ -61,7 +61,7 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('onUnmount runs as soon as the component unmounts.')
-  .given('A component that uses useDispatch, mounted with id "A".')
+  .given('A component that uses useStoreEffect, mounted with id "A".')
   .and('Its onUnmount clears the selection.')
   .when('The component unmounts, inside a synchronous act.')
   .then('onUnmount has already run when the act finishes.')
@@ -87,7 +87,7 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('A component mounted next to another one, in StrictMode, calls onMount and onUnmount once.')
-  .given('A page "A" that uses useDispatch, mounted in StrictMode.')
+  .given('A page "A" that uses useStoreEffect, mounted in StrictMode.')
   .when('A page "B" is mounted next to it.')
   .and('Then both are unmounted.')
   .then('onMount and onUnmount are called once for each page.')
@@ -125,7 +125,7 @@ class Select extends KissAction<State> {
 // Each call creates a new component type, so that two of them work like two different pages.
 function createPage(log: string[]): React.FC<{ id: string }> {
   return ({id}) => {
-    useDispatch({
+    useStoreEffect({
       onMount: (s: Store<State>) => {
         log.push('mount ' + id);
         s.dispatch(new Select(id));

@@ -178,10 +178,11 @@ function MyComponent() {
 };
 ```
 
-To dispatch actions when the component mounts, when some values change, and when it unmounts:
+To dispatch actions when the component mounts, when some values change, and when it unmounts,
+use `useStoreEffect` instead of a `useEffect`:
 
 ```tsx
-const dispatch = useDispatch({
+useStoreEffect({
   deps: userId,
   onMount: (store) => store.dispatch(new LoadUser(userId)),
   onDepsChange: (store, oldUserId) => {

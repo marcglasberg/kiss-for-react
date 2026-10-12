@@ -535,6 +535,128 @@ class LoadText extends KissAction<State> {
     }
   });
 
+Bdd(feature)
+  .scenario('A boolean feature counts as on when its value is not a literal, like a constant.')
+  .given('A constant FLAG that is true.')
+  .and('An action with {Other}, and {Feature} = FLAG.')
+  .when('The code is linted.')
+  .then('There is an error in {Feature}, saying they can\'t be combined, since the store also checks if it\'s truthy.')
+  .example(val('Other', 'throttle = 1000'), val('Feature', 'nonReentrant'), val('Type information', true))
+  .example(val('Other', 'throttle = 1000'), val('Feature', 'nonReentrant'), val('Type information', false))
+  .example(val('Other', 'debounce = 300'), val('Feature', 'sequential'), val('Type information', true))
+  .example(val('Other', 'debounce = 300'), val('Feature', 'sequential'), val('Type information', false))
+  .example(val('Other', 'nonReentrant = true'), val('Feature', 'ignoreOld'), val('Type information', true))
+  .example(val('Other', 'nonReentrant = true'), val('Feature', 'ignoreOld'), val('Type information', false))
+  .run(async (ctx) => {
+    const feature = ctx.example.val('Feature') as string;
+    const code = `${prelude}
+const FLAG = true;
+
+class LoadText extends KissAction<State> {
+  ${ctx.example.val('Other')};
+  ${feature} = FLAG;
+  async reduce() { const text = await loadText(); return () => new State(text); }
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages.map((m) => m.text)).toEqual([feature]);
+    expect(result.messages[0].message).toContain('can\'t be combined in the same action');
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('A boolean feature set to a falsy literal does not count.')
+  .given('An action with throttle = 1000, and nonReentrant = {Value}.')
+  .when('The code is linted.')
+  .then('There are no errors.')
+  .example(val('Value', 'false'))
+  .example(val('Value', '0'))
+  .example(val('Value', 'null'))
+  .example(val('Value', 'undefined'))
+  .run(async (ctx) => {
+    const code = `${prelude}
+class LoadText extends KissAction<State> {
+  throttle = 1000;
+  nonReentrant: any = ${ctx.example.val('Value')};
+  async reduce() { const text = await loadText(); return () => new State(text); }
+}
+`;
+    for (const types of [true, false]) {
+      const result = lint(rule, code, {types});
+      expect(result.messages).toEqual([]);
+      expect(result.typeErrors).toEqual([]);
+    }
+  });
+
+Bdd(feature)
+  .scenario('A retry set to a falsy value does not count, since the store only turns it on when it is truthy.')
+  .given('An action with debounce = 300, and retry = {Value}.')
+  .when('The code is linted.')
+  .then('There are no errors.')
+  .example(val('Value', 'false'))
+  .example(val('Value', '0'))
+  .example(val('Value', '{ on: false }'))
+  .run(async (ctx) => {
+    const code = `${prelude}
+class LoadText extends KissAction<State> {
+  debounce = 300;
+  retry: any = ${ctx.example.val('Value')};
+  async reduce() { const text = await loadText(); return () => new State(text); }
+}
+`;
+    for (const types of [true, false]) {
+      const result = lint(rule, code, {types});
+      expect(result.messages).toEqual([]);
+      expect(result.typeErrors).toEqual([]);
+    }
+  });
+
+Bdd(feature)
+  .scenario('With type information, a feature set to a constant that is false does not count.')
+  .given('A constant OFF that is false.')
+  .and('An action with throttle = 1000, and nonReentrant = OFF.')
+  .when('The code is linted with type information.')
+  .then('There are no errors, since the type of OFF is false.')
+  .run(async (_) => {
+    const code = `${prelude}
+const OFF = false;
+
+class LoadText extends KissAction<State> {
+  throttle = 1000;
+  nonReentrant = OFF;
+  async reduce() { const text = await loadText(); return () => new State(text); }
+}
+`;
+    const result = lint(rule, code, {types: true});
+    expect(result.messages).toEqual([]);
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('With type information, a feature inherited with a constant that is true counts.')
+  .given('A constant FLAG that is true.')
+  .and('An abstract action with nonReentrant = FLAG.')
+  .and('A subclass with throttle = 1000.')
+  .when('The code is linted with type information.')
+  .then('There is an error in throttle.')
+  .run(async (_) => {
+    const code = `${prelude}
+const FLAG = true;
+
+abstract class BaseAction extends KissAction<State> {
+  nonReentrant = FLAG;
+}
+
+class LoadText extends BaseAction {
+  throttle = 1000;
+  async reduce() { const text = await loadText(); return () => new State(text); }
+}
+`;
+    const result = lint(rule, code, {types: true});
+    expect(result.messages.map((m) => m.text)).toEqual(['throttle']);
+    expect(result.typeErrors).toEqual([]);
+  });
+
 // ---------------------------------------------------------------------------------------------
 // The real actions, to check that the rule agrees with the store.
 

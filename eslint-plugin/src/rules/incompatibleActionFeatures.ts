@@ -295,18 +295,18 @@ function valueOf(declaration: TSESTree.PropertyDefinition | TSESTree.TSParameter
   return declaration.parameter.type === AST_NODE_TYPES.AssignmentPattern ? declaration.parameter.right : null;
 }
 
+/** The values that turn a feature off (the store checks if they are truthy, or not `undefined`). */
+const OFF_VALUES = ['false', 'null', 'undefined', '0', '\'\'', '""', '``'];
+
 /**
  * If the feature is on, from the text of its value. A `poll` parameter property without a default
  * value is on, since the action then always has a `poll`. Other features without a value are off.
+ * A value that is not a literal, like a constant, is on (unless `literalText` found it's off).
  */
 function isOn(name: PropertyFeature, text: string | null, isParameter: boolean): boolean {
   if (text === null) return name === 'poll' && isParameter;
   const value = text.trim();
   switch (name) {
-    case 'nonReentrant':
-    case 'sequential':
-    case 'ignoreOld':
-      return value === 'true';
     case 'retry':
       return retryOf(value).on;
     case 'unlimitedRetryCheckInternet':
@@ -314,8 +314,19 @@ function isOn(name: PropertyFeature, text: string | null, isParameter: boolean):
     case 'poll':
       return value !== 'undefined';
     default:
-      return !['false', 'null', 'undefined'].includes(value);
+      return !OFF_VALUES.includes(value);
   }
+}
+
+/**
+ * With type information, the text of a value whose type is `true`, `false`, `null` or `undefined`,
+ * like a constant (`const OFF = false`). Otherwise, the text of the value itself.
+ */
+function literalText(node: ts.Node, typeInfo: TypeInfo | null, text: string): string {
+  if (!typeInfo) return text;
+  const type = typeInfo.checker.getTypeAtLocation(node);
+  const name = typeInfo.checker.typeToString(type);
+  return ['true', 'false', 'null', 'undefined'].includes(name) ? name : text;
 }
 
 /**
@@ -327,7 +338,9 @@ export function featureState(name: PropertyFeature, classNode: ClassNode, contex
   if (own) {
     const value = valueOf(own);
     const text = value ? context.sourceCode.getText(value) : null;
-    return {on: isOn(name, text, own.type === AST_NODE_TYPES.TSParameterProperty), own, text};
+    const resolved = value && text !== null && typeInfo
+      ? literalText(typeInfo.services.esTreeNodeToTSNodeMap.get(value), typeInfo, text) : text;
+    return {on: isOn(name, resolved, own.type === AST_NODE_TYPES.TSParameterProperty), own, text};
   }
 
   if (typeInfo) {
@@ -336,7 +349,8 @@ export function featureState(name: PropertyFeature, classNode: ClassNode, contex
     const initializer = (declaration as ts.PropertyDeclaration | ts.ParameterDeclaration).initializer;
     const text = initializer ? initializer.getText(declaration.getSourceFile()) : null;
     const isParameter = !!(declaration.parent as { parameters?: readonly ts.Node[] }).parameters?.includes(declaration);
-    return {on: isOn(name, text, isParameter), own: null, text};
+    const resolved = initializer && text !== null ? literalText(initializer, typeInfo, text) : text;
+    return {on: isOn(name, resolved, isParameter), own: null, text};
   }
 
   for (const superclass of classChain(classNode, context).classes.slice(1)) {

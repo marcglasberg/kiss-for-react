@@ -4,15 +4,16 @@ import { createRule, getTypeInfo, isTestFile, unwrap, isAnyOrUnknown } from '../
 
 /**
  * Reports `waitCondition`, `dispatchWhen` or `useDispatchWhen` with no timeout
- * (`{ timeoutMillis: 0 }`, or a negative number), outside tests:
+ * (`{ timeoutMillis: 0 }`, a negative number, or `Infinity`), outside tests:
  *
  * ```ts
  * store.dispatchWhen(new BuyStock('IBM'), (state) => state.price >= 100, { timeoutMillis: 0 });      // Warning
  * store.dispatchWhen(new BuyStock('IBM'), (state) => state.price >= 100, { timeoutMillis: 60_000 }); // OK
  * ```
  *
- * While the wait is pending, its condition runs on every state change, and there's no way to
- * cancel it. A wait without a timeout may never end.
+ * While the wait is pending, its condition runs on every state change. A `waitCondition` can't
+ * be cancelled, and only `logOut()` cancels a `dispatchWhen`. A wait without a timeout may never
+ * end.
  *
  * It checks the methods of the store, of `useStore()`, and of actions (`this.waitCondition`), and
  * the function returned by `useDispatchWhen()`. With type information, the object must be a Kiss
@@ -30,7 +31,7 @@ export default createRule({
     messages: {
       noTimeout:
         '`{{method}}` without a timeout may never end. While it waits, its condition runs on every ' +
-        'state change, and it can\'t be cancelled. Give it a timeout, or put the logic in an action.',
+        'state change, and {{cancel}}. Give it a timeout, or put the logic in an action.',
     },
   },
   defaultOptions: [],
@@ -60,7 +61,8 @@ export default createRule({
         if (!options || options.type === AST_NODE_TYPES.SpreadElement) return;
         const timeout = timeoutProperty(unwrap(options));
         if (!timeout || !isNoTimeout(unwrap(timeout.value))) return;
-        context.report({node: timeout, messageId: 'noTimeout', data: {method}});
+        const cancel = method === 'waitCondition' ? 'it can\'t be cancelled' : 'only a `logOut()` cancels it';
+        context.report({node: timeout, messageId: 'noTimeout', data: {method, cancel}});
       },
     };
 
@@ -83,12 +85,23 @@ function timeoutProperty(options: TSESTree.Node): TSESTree.Property | null {
   return null;
 }
 
-/** True for `0`, and for negative numbers like `-1`. */
+/** True for `0`, for negative numbers like `-1`, and for `Infinity` (or `Number.POSITIVE_INFINITY`). */
 function isNoTimeout(value: TSESTree.Node): boolean {
   if (value.type === AST_NODE_TYPES.Literal) return value.value === 0;
+  if (isInfinity(value)) return true;
   if (value.type === AST_NODE_TYPES.UnaryExpression && value.operator === '-') {
     const argument = unwrap(value.argument);
-    return argument.type === AST_NODE_TYPES.Literal && typeof argument.value === 'number' && argument.value >= 0;
+    return isInfinity(argument) ||
+      (argument.type === AST_NODE_TYPES.Literal && typeof argument.value === 'number' && argument.value >= 0);
   }
   return false;
+}
+
+/** True for `Infinity`, `Number.POSITIVE_INFINITY` and `Number.NEGATIVE_INFINITY`. */
+function isInfinity(value: TSESTree.Node): boolean {
+  if (value.type === AST_NODE_TYPES.Identifier) return value.name === 'Infinity';
+  return value.type === AST_NODE_TYPES.MemberExpression && !value.computed &&
+    value.object.type === AST_NODE_TYPES.Identifier && value.object.name === 'Number' &&
+    value.property.type === AST_NODE_TYPES.Identifier &&
+    (value.property.name === 'POSITIVE_INFINITY' || value.property.name === 'NEGATIVE_INFINITY');
 }

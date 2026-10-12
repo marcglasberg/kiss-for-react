@@ -33,7 +33,7 @@ const ELEMENT_METHODS = new Set(['at', 'get', 'find', 'findLast']);
  * ```
  *
  * Checks `this.state` (and `this.initialState`) in actions, the state parameter of the
- * functions returned by async reducers, of the selectors of `useSelect` and `useObject`, of the
+ * functions returned by async reducers, of the selectors of `useSelect`, `useSelector` and `useObject`, of the
  * conditions of `waitCondition`, `dispatchWhen` and `useDispatchWhen`, and of the function of
  * `UpdateStateAction`, and the state from `useAllState`. Reports assignments (`=`, `+=`,
  * `++`, `delete`), `Object.assign`, and the mutating methods of arrays, maps and sets.
