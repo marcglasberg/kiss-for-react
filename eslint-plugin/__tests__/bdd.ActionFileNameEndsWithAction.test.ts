@@ -107,3 +107,22 @@ export class User {
     expect(lint(rule, code, {filename}).messages).toEqual([]);
     expect(lint(rule, code, {filename, types: false}).messages).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('An action written as a class expression counts as an action.')
+  .given('A file called LoadUser.ts, which declares the LoadUser action as a class expression.')
+  .when('The code is linted.')
+  .then('The action is reported, with or without type information.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+export const LoadUser = class extends Action {
+  reduce() { return new State('Mary'); }
+};
+`;
+    const result = lint(rule, code, {filename: 'actions/LoadUser.ts', types: ctx.example.val('Type information') as boolean});
+    expect(result.typeErrors).toEqual([]);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].message).toContain('to `LoadUserAction.ts`');
+  });

@@ -33,3 +33,12 @@ abstract class UserAction extends Action {
     When The code is linted.
     Then It is reported, telling to rename it with the IDE.
     And There is no suggestion, since ESLint can only change this file.
+
+  Scenario Outline: Actions in declaration files (.d.ts) are not checked.
+    Given A declaration file that declares an action called LoadUser, without the declare keyword.
+    When The code is linted.
+    Then There are no reports, since the action is declared somewhere else.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

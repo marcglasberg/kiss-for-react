@@ -228,3 +228,20 @@ class LoadUser extends Action {
     const result = lint(rule, code, {filename: '__tests__/user.test.ts'});
     expect(result.messages.map((m) => m.text)).toEqual(['LoadUser']);
   });
+
+Bdd(feature)
+  .scenario('Actions in declaration files (.d.ts) are not checked.')
+  .given('A declaration file that declares an action called LoadUser, without the declare keyword.')
+  .when('The code is linted.')
+  .then('There are no reports, since the action is declared somewhere else.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+export class LoadUser extends Action {
+  reduce(): State;
+}
+`;
+    const result = lint(rule, code, {filename: 'types/actions.d.ts', types: ctx.example.val('Type information') as boolean});
+    expect(result.messages).toEqual([]);
+  });

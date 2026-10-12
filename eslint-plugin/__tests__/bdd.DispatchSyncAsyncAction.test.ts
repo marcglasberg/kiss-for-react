@@ -134,3 +134,25 @@ export function run(action: KissAction<State>) {
 `;
     expect(lint(rule, code).messages).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('The function from useDispatchSync is checked whatever its name.')
+  .given('An async action.')
+  .when('It is dispatched with the function from useDispatchSync, in a variable called dispatchNow.')
+  .then('There is an error, with or without type information.')
+  .and('There are no suggestions, since the function can\'t be renamed to another dispatch method.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+export function Button() {
+  const dispatchNow = useDispatchSync();
+  return () => dispatchNow(new AsyncReduce());
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.typeErrors).toEqual([]);
+    expect(result.messages.map((m) => m.text)).toEqual(['dispatchNow']);
+    expect(result.messages[0].message).toContain('`AsyncReduce` is async');
+    expect(result.messages[0].suggestions).toEqual([]);
+  });

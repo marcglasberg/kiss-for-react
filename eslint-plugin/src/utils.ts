@@ -166,9 +166,21 @@ export function isKissActionClass(
 ): boolean {
   if (!classNode.superClass) return false;
   if (!typeInfo) return findMethod(classNode, 'reduce') !== null;
-  const tsNode = typeInfo.services.esTreeNodeToTSNodeMap.get(classNode) as ts.ClassLikeDeclaration;
-  const type = typeInfo.checker.getTypeAtLocation(tsNode);
-  return extendsKissAction(type, typeInfo.checker, new Set());
+  return extendsKissAction(classInstanceType(classNode, typeInfo), typeInfo.checker, new Set());
+}
+
+/**
+ * The type of the instances of the class. For a class declaration, that's its type. For a class
+ * expression, its type is the constructor (`typeof` the class), so it's what the constructor returns.
+ */
+export function classInstanceType(
+  classNode: TSESTree.ClassDeclaration | TSESTree.ClassExpression,
+  {services, checker}: TypeInfo,
+): ts.Type {
+  const type = checker.getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(classNode));
+  if (classNode.type !== AST_NODE_TYPES.ClassExpression) return type;
+  const signature = type.getConstructSignatures()[0];
+  return signature ? checker.getReturnTypeOfSignature(signature) : type;
 }
 
 function extendsKissAction(type: ts.Type, checker: ts.TypeChecker, seen: Set<ts.Type>): boolean {

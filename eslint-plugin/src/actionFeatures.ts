@@ -1,7 +1,7 @@
 import { AST_NODE_TYPES, ASTUtils, TSESLint, TSESTree } from '@typescript-eslint/utils';
 import type * as ts from 'typescript';
 import { classDeclarationOf } from './actions.js';
-import { findMethod, isAsyncMethod, isThenable, kissImportName, memberName, TypeInfo, unwrap, isAnyOrUnknown } from './utils.js';
+import { classInstanceType, findMethod, isAsyncMethod, isThenable, kissImportName, memberName, TypeInfo, unwrap, isAnyOrUnknown } from './utils.js';
 
 // Helpers for the rules about action features: `nonReentrant`, `retry`, `checkInternet`,
 // `unlimitedRetryCheckInternet`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`,
@@ -88,8 +88,8 @@ export function findPropertyInChain(chain: ClassChain, name: string): TSESTree.P
 // With type information.
 
 /** The instance type of a class declared in this file. */
-export function instanceTypeOfClass(classNode: ClassNode, {services, checker}: TypeInfo): ts.Type {
-  return checker.getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(classNode));
+export function instanceTypeOfClass(classNode: ClassNode, typeInfo: TypeInfo): ts.Type {
+  return classInstanceType(classNode, typeInfo);
 }
 
 /** The name of the class that declares this member declaration, if any. */

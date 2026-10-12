@@ -219,3 +219,12 @@ Feature: Lint: incompatible-action-features
     And A subclass with throttle = 1000.
     When The code is linted with type information.
     Then There is an error in throttle.
+
+  Scenario Outline: An action written as a class expression is checked too.
+    Given An action written as a class expression, with throttle and nonReentrant.
+    When The code is linted.
+    Then There is an error in nonReentrant, with or without type information.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

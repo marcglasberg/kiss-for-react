@@ -103,3 +103,12 @@ export default LoadUser; |
     Given An action called LoadUser, declared in a test file.
     When The code is linted.
     Then It is reported.
+
+  Scenario Outline: Actions in declaration files (.d.ts) are not checked.
+    Given A declaration file that declares an action called LoadUser, without the declare keyword.
+    When The code is linted.
+    Then There are no reports, since the action is declared somewhere else.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

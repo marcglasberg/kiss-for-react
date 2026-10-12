@@ -210,3 +210,56 @@ export async function run() {
     expect(result.messages).toEqual([]);
     expect(result.typeErrors).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('dispatchAndWaitAll with an array that is not written in the call is checked too.')
+  .given('An action that retries forever.')
+  .when('It is dispatched with dispatchAndWaitAll, {How}.')
+  .then('There is a warning, {When}.')
+  .example(val('How', 'in an array in a const variable'), val('When', 'with or without type information'), val('Code', `
+const actions = [new LoadFewTimes(), new LoadForever()];
+export const promise = store.dispatchAndWaitAll(actions);`))
+  .example(val('How', 'in an array parameter'), val('When', 'only with type information'), val('Code', `
+export function run(actions: LoadForever[]) {
+  return store.dispatchAndWaitAll(actions);
+}`))
+  .example(val('How', 'in a tuple parameter'), val('When', 'only with type information'), val('Code', `
+export function run(actions: [LoadFewTimes, LoadForever]) {
+  return store.dispatchAndWaitAll(actions);
+}`))
+  .run(async (ctx) => {
+    const code = `${prelude}${ctx.example.val('Code')}
+`;
+    const result = lint(rule, code);
+    expect(result.typeErrors).toEqual([]);
+    expect(result.messages.length).toBe(1);
+    expect(result.messages[0].message).toContain('`LoadForever` retries forever');
+    const withoutTypes = (ctx.example.val('When') as string).startsWith('with or without') ? 1 : 0;
+    expect(lint(rule, code, {types: false}).messages.length).toBe(withoutTypes);
+  });
+
+Bdd(feature)
+  .scenario('The function from the hooks is checked whatever its name.')
+  .given('An action that retries forever.')
+  .when('It is dispatched with the function from {Hook}, in a variable called {Name}.')
+  .then('There is a warning, with or without type information.')
+  .example(val('Hook', 'useDispatchAndWait'), val('Name', 'wait'), val('Code', `
+export function Button() {
+  const wait = useDispatchAndWait();
+  return () => wait(new LoadForever());
+}`))
+  .example(val('Hook', 'useDispatchAndWaitAll'), val('Name', 'waitAll'), val('Code', `
+export function Button() {
+  const waitAll = useDispatchAndWaitAll();
+  return () => waitAll([new LoadForever()]);
+}`))
+  .run(async (ctx) => {
+    const code = `${prelude}${ctx.example.val('Code')}
+`;
+    for (const types of [true, false]) {
+      const result = lint(rule, code, {types});
+      expect(result.typeErrors).toEqual([]);
+      expect(result.messages.length).toBe(1);
+      expect(result.messages[0].message).toContain('`LoadForever` retries forever');
+    }
+  });

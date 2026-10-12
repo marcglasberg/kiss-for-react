@@ -114,3 +114,20 @@ export class LoadUserAction extends Action {
     expect(result.messages[0].message).toContain('with your IDE\'s rename refactoring');
     expect(result.messages[0].suggestions).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('Actions in declaration files (.d.ts) are not checked.')
+  .given('A declaration file that declares an action called LoadUserAction, without the declare keyword.')
+  .when('The code is linted.')
+  .then('There are no reports, since the action is declared somewhere else.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+export class LoadUserAction extends Action {
+  reduce(): State;
+}
+`;
+    const result = lint(rule, code, {filename: 'types/actions.d.ts', types: ctx.example.val('Type information') as boolean});
+    expect(result.messages).toEqual([]);
+  });

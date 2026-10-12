@@ -805,3 +805,23 @@ class RuntimeServerPush extends ServerPush<RuntimeState> {
     return -1;
   }
 }
+
+Bdd(feature)
+  .scenario('An action written as a class expression is checked too.')
+  .given('An action written as a class expression, with throttle and nonReentrant.')
+  .when('The code is linted.')
+  .then('There is an error in nonReentrant, with or without type information.')
+  .example(val('Type information', true))
+  .example(val('Type information', false))
+  .run(async (ctx) => {
+    const code = `${prelude}
+export const LoadText = class extends KissAction<State> {
+  throttle = 1000;
+  nonReentrant = true;
+  async reduce() { const text = await loadText(); return () => new State(text); }
+};
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.typeErrors).toEqual([]);
+    expect(result.messages.map((m) => m.text)).toEqual(['nonReentrant']);
+  });

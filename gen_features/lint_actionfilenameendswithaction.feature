@@ -95,3 +95,12 @@ class LoadUser extends Action {
   reduce() { return new State('Mary'); }
 }
  |
+
+  Scenario Outline: An action written as a class expression counts as an action.
+    Given A file called LoadUser.ts, which declares the LoadUser action as a class expression.
+    When The code is linted.
+    Then The action is reported, with or without type information.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

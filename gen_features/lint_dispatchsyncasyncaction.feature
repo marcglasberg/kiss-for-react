@@ -46,3 +46,13 @@ export function Button() {
     Given A function that gets an action typed as KissAction, and dispatches it with dispatchSync.
     When The code is linted with type information.
     Then There are no errors, since the action could be sync.
+
+  Scenario Outline: The function from useDispatchSync is checked whatever its name.
+    Given An async action.
+    When It is dispatched with the function from useDispatchSync, in a variable called dispatchNow.
+    Then There is an error, with or without type information.
+    And There are no suggestions, since the function can't be renamed to another dispatch method.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

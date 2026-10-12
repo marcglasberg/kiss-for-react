@@ -101,7 +101,7 @@ const RESERVED_NAMES = new Set([
 /**
  * Reports a concrete action class whose name doesn't follow the style. When the class can be
  * safely renamed in this file, it also offers a suggestion that renames it (and all its
- * references in the file).
+ * references in the file). Declaration files (`.d.ts`) are not checked.
  */
 export function checkActionName(
   context: Context,
@@ -109,7 +109,7 @@ export function checkActionName(
   style: ActionNameStyle,
   typeInfo: TypeInfo | null,
 ): void {
-  if (!classNode.id || !isConcreteActionClass(classNode, context, typeInfo)) return;
+  if (!classNode.id || isDeclarationFile(context) || !isConcreteActionClass(classNode, context, typeInfo)) return;
   const name = classNode.id.name;
   const newName = expectedActionName(name, style);
   if (!newName) return;
@@ -303,7 +303,7 @@ export function checkActionFileName(context: Context, style: ActionFileNameStyle
   const extensionMatch = EXTENSION.exec(baseName);
 
   // Not a real file, a declaration file, or a test.
-  if (!extensionMatch || baseName === '<input>' || baseName === '<text>' || /\.d\.[cm]?ts$/i.test(baseName) || isTestFile(context)) return {};
+  if (!extensionMatch || baseName === '<input>' || baseName === '<text>' || isDeclarationFile(context) || isTestFile(context)) return {};
 
   const extension = extensionMatch[0];
   const stem = baseName.slice(0, -extension.length);
@@ -328,6 +328,11 @@ export function checkActionFileName(context: Context, style: ActionFileNameStyle
       });
     },
   };
+}
+
+/** True for declaration files (`.d.ts`), whose classes are declared somewhere else. */
+function isDeclarationFile(context: Context): boolean {
+  return /\.d\.[cm]?ts$/i.test(context.filename);
 }
 
 /** The name of a class: its own name, or the name of the variable it's assigned to. */

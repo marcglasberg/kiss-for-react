@@ -1,5 +1,6 @@
 import { AST_NODE_TYPES, TSESLint } from '@typescript-eslint/utils';
 import { actionKindOfExpression } from '../actions.js';
+import { kissDispatchMethod } from '../storeUsage.js';
 import { createRule, getTypeInfo } from '../utils.js';
 
 /**
@@ -15,11 +16,15 @@ import { createRule, getTypeInfo } from '../utils.js';
  * store.dispatchSync(new LoadUser()); // Error: `reduce` returns a promise.
  * ```
  *
+ * It checks any call to a method or function called `dispatchSync`, and the function returned by
+ * `useDispatchSync()`, whatever its name.
+ *
  * The rule only reports when the action's class is known. With type information, that's
  * whenever the type of the action is a specific action class. Without it, the action must be
  * created with `new` (in the call, or in a variable), and its class declared in the same file.
  *
- * Suggestions: replace `dispatchSync` with `dispatch` or `dispatchAndWait`.
+ * Suggestions: replace `dispatchSync` with `dispatch` or `dispatchAndWait`. Only for method
+ * calls, like `store.dispatchSync(...)`.
  */
 export default createRule({
   name: 'dispatch-sync-async-action',
@@ -47,7 +52,8 @@ export default createRule({
         const isDispatchSync =
           (callee.type === AST_NODE_TYPES.Identifier && callee.name === 'dispatchSync') ||
           (callee.type === AST_NODE_TYPES.MemberExpression && !callee.computed &&
-            callee.property.type === AST_NODE_TYPES.Identifier && callee.property.name === 'dispatchSync');
+            callee.property.type === AST_NODE_TYPES.Identifier && callee.property.name === 'dispatchSync') ||
+          kissDispatchMethod(node, context, typeInfo) === 'dispatchSync';
         if (!isDispatchSync) return;
 
         const action = node.arguments[0];

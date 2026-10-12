@@ -77,3 +77,38 @@ export const promise = store.dispatchAndWait(action);                           
       | Type information |
       | true             |
       | false            |
+
+  Scenario Outline: dispatchAndWaitAll with an array that is not written in the call is checked too.
+    Given An action that retries forever.
+    When It is dispatched with dispatchAndWaitAll, {How}.
+    Then There is a warning, {When}.
+    Examples: 
+      | How                             | When                             | Code                                                                                                                |
+      | in an array in a const variable | with or without type information | 
+const actions = [new LoadFewTimes(), new LoadForever()];
+export const promise = store.dispatchAndWaitAll(actions); |
+      | in an array parameter           | only with type information       | 
+export function run(actions: LoadForever[]) {
+  return store.dispatchAndWaitAll(actions);
+}                        |
+      | in a tuple parameter            | only with type information       | 
+export function run(actions: [LoadFewTimes, LoadForever]) {
+  return store.dispatchAndWaitAll(actions);
+}          |
+
+  Scenario Outline: The function from the hooks is checked whatever its name.
+    Given An action that retries forever.
+    When It is dispatched with the function from {Hook}, in a variable called {Name}.
+    Then There is a warning, with or without type information.
+    Examples: 
+      | Hook                  | Name    | Code                                                                                                                  |
+      | useDispatchAndWait    | wait    | 
+export function Button() {
+  const wait = useDispatchAndWait();
+  return () => wait(new LoadForever());
+}            |
+      | useDispatchAndWaitAll | waitAll | 
+export function Button() {
+  const waitAll = useDispatchAndWaitAll();
+  return () => waitAll([new LoadForever()]);
+} |

@@ -1298,10 +1298,9 @@ store.dispatchSync(new SaveDraft()); // Error: it sets `checkInternet`.
 store.dispatch(new LoadUser());      // OK
 ```
 
-It checks any call to a method or function called `dispatchSync`, like `store.dispatchSync(...)`,
-`this.dispatchSync(...)`, or `dispatchSync(...)` with the function returned by
-`useDispatchSync()`, when it's named `dispatchSync`. It also checks the methods the action
-inherits from its superclasses.
+It checks any call to a method or function called `dispatchSync`, like `store.dispatchSync(...)`
+or `this.dispatchSync(...)`, and the function returned by `useDispatchSync()`, whatever its
+name. It also checks the methods the action inherits from its superclasses.
 
 The rule only reports when the action's class is known. With
 [type information](#type-information), that's whenever the action's type is a specific
@@ -1416,15 +1415,17 @@ store.dispatch(new LoadText());              // OK
 ```
 
 It checks any call to a method or function called `dispatchAndWait` or `dispatchAndWaitAll`,
-like `store.dispatchAndWait(...)`, `this.dispatchAndWait(...)`, or the functions returned by
-`useDispatchAndWait()` and `useDispatchAndWaitAll()`, when they're named `dispatchAndWait` and
-`dispatchAndWaitAll`. It also checks the `retry` and `unlimitedRetryCheckInternet` the action
-inherits from its superclasses. Not reported in tests.
+like `store.dispatchAndWait(...)` or `this.dispatchAndWait(...)`, and the functions returned by
+`useDispatchAndWait()` and `useDispatchAndWaitAll()`, whatever their names. It also checks the
+`retry` and `unlimitedRetryCheckInternet` the action inherits from its superclasses. Not
+reported in tests.
 
 The rule only reports when the action's class is known. With
 [type information](#type-information), that's whenever the action's type is a specific
 action class. Without it, the action must be created with `new` (in the call, or in a
-`const`), and its class must be declared in the same file.
+`const`), and its class must be declared in the same file. The array of `dispatchAndWaitAll`
+can be written in the call or in a `const`, or, with type information, be any array or tuple
+of actions.
 
 ---
 
@@ -1933,7 +1934,8 @@ not. Without [type information](#type-information), a class is an action if it d
 `reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
 `OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
 `KissAction` is an action. Class expressions, like
-`const LoadUser = class extends Action { ... }`, and `declare class` are not checked.
+`const LoadUser = class extends Action { ... }`, `declare class` and declaration files
+(`.d.ts`) are not checked.
 
 Quick fix (suggestion): rename the action, like `LoadUser` to `LoadUserAction`, in the
 whole file. ESLint can only change the current file, so it's not offered when the action is
@@ -1965,7 +1967,8 @@ not. Without [type information](#type-information), a class is an action if it d
 `reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
 `OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
 `KissAction` is an action. Class expressions, like
-`const LoadUser = class extends Action { ... }`, and `declare class` are not checked.
+`const LoadUser = class extends Action { ... }`, `declare class` and declaration files
+(`.d.ts`) are not checked.
 
 Quick fix (suggestion): rename the action, like `LoadUser` to `LoadUser_Action`, in the
 whole file. ESLint can only change the current file, so it's not offered when the action is
@@ -1999,7 +2002,8 @@ not. Without [type information](#type-information), a class is an action if it d
 `reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
 `OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
 `KissAction` is an action. Class expressions, like
-`const LoadUser = class extends Action { ... }`, and `declare class` are not checked.
+`const LoadUser = class extends Action { ... }`, `declare class` and declaration files
+(`.d.ts`) are not checked.
 
 Quick fix (suggestion): rename the action, like `LoadUserAction` to `LoadUser`, in the
 whole file. ESLint can only change the current file, so it's not offered when the action is
