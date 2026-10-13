@@ -103,7 +103,10 @@ function spinner(type: abstract new (...args: any[]) => KissAction<State>) {
 function errorMessage(type: new (...args: any[]) => KissAction<State>, hook: 'useIsFailed' | 'useExceptionFor') {
   const failed = new Recording<boolean>();
   const ErrorMessage: React.FC = () => {
-    failed.values.push(hook === 'useIsFailed' ? useIsFailed(type) : useExceptionFor(type) !== null);
+    // Both hooks are called on every render (the rules of hooks), but only one is recorded.
+    const isFailed = useIsFailed(type);
+    const hasException = useExceptionFor(type) !== null;
+    failed.values.push(hook === 'useIsFailed' ? isFailed : hasException);
     return null;
   };
   return { failed, ErrorMessage };

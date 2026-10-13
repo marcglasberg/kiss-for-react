@@ -19,6 +19,9 @@ export class ProcessPersistence<St> {
   // True only while the store applies the state read from the persistor. That's the only
   // dispatch allowed before the store is ready.
   isApplyingReadState = false;
+  // Called by `readInitialState` right after `isReady` becomes true. The store uses it to
+  // publish the readiness to the `useIsStoreReady` hook.
+  onReady: (() => void) | null = null;
   private readonly _ready: Promise<void>;
   private _resolveReady!: () => void;
   // Called when the persistence process currently running finishes. See `_waitForPersisting`.
@@ -66,6 +69,10 @@ export class ProcessPersistence<St> {
       // Now persist the state changes that happened while reading/saving the initial state.
       this.processAddedErrors();
       this.isReady = true;
+      // Tells the store right away, so that it publishes the readiness to `useIsStoreReady`.
+      // This runs after the read state was applied to the store (if there was one), so a
+      // component that sees the store as ready also sees the restored state.
+      this.onReady?.();
       this._resolveReady();
       if (this.isInit) this.process(null, this.newestState as St);
     }

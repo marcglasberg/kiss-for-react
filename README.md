@@ -61,6 +61,11 @@ function App() {
 };
 ```
 
+Apps usually create a single store, outside the components, and keep it for their whole life.
+If the `store` prop changes, the components below switch to the new store: they stop listening
+to the old one, read the new one right away, and the `useStoreEffect` callbacks run `onUnmount`
+for the old store and `onMount` for the new one.
+
 &nbsp;
 
 ## Components use the state
@@ -101,6 +106,24 @@ function MyComponent() {
   return <div>{state.name} is {state.age} years old</div>;    
 };
 ```
+
+These hooks connect to the store with React's own
+[`useSyncExternalStore`](https://react.dev/reference/react/useSyncExternalStore),
+so React reads the state itself, compares what each component selected, and renders only the
+components whose selection changed. React also checks the state again before committing a
+render it paused (a transition), and renders again if the state changed meanwhile, so a screen
+never shows parts of two different states at the same time.
+
+Two things follow from this:
+
+* Selectors must be **pure**: they read their `state` parameter and return the same value for
+  the same state. React may call them more than once per render, and may throw a render away.
+  Return parts of the state, not new objects (see `useObject` above for that).
+
+* Store updates are rendered right away, with React's synchronous priority. Even if you
+  dispatch inside `startTransition`, the render that shows the new state is not a deferred
+  transition. Async actions are still async: this only says how React schedules the render,
+  after the state changes. Your own local state transitions can still read the store.
 
 &nbsp;
 
@@ -795,6 +818,53 @@ const store = createStore<State>({
 await store.ready();
 store.dispatch(new InitAppAction());
 ```
+
+&nbsp;
+
+## Server-side rendering
+
+Kiss works with `renderToString` and `hydrateRoot`. Create one store per request, never a
+module-level one, so that requests don't share state.
+
+On the server, the HTML shows the `initialState` the store was created with. If you dispatch
+actions before rendering, wait for them to finish, and pass the state to render as
+`serverState`:
+
+```tsx
+const store = createStore<State>({ initialState: new State() });
+await store.dispatchAndWait(new LoadData());
+const html = renderToString(
+  <StoreProvider store={store} serverState={store.state}>
+    <App />
+  </StoreProvider>
+);
+const transfer = serialize(store.state); // Put it in the HTML, for the client.
+```
+
+On the client, create the store with the state transferred from the server, and hydrate. React
+needs to render exactly what the HTML shows, so if the client store may have changed before
+hydrating (for example, a persistor restored a newer state), pass the transferred state as
+`serverState`. After hydration, the components catch up with the live state:
+
+```tsx
+const store = createStore<State>({ initialState: deserialize(transfer) });
+hydrateRoot(
+  document.getElementById('root')!,
+  <StoreProvider store={store} serverState={store.state}>
+    <App />
+  </StoreProvider>
+);
+```
+
+Rebuild the same state on the client that the server rendered: for a plain object, JSON is
+enough; for class instances, `Map`s and `Set`s, use your own `toJSON`/`fromJSON` code, or the
+serializer you use for persistence.
+
+On the server and while hydrating, `useIsWaiting` and `useIsFailed` are `false`,
+`useExceptionFor` is `null`, and `useIsStoreReady` is `true`: the HTML never shows an action in
+progress, a failed action, or a store that is not ready. After hydration, these hooks follow
+the live store. So, on the server, wait for your actions to finish (and for `store.ready()`,
+if the server store has a persistor) before rendering.
 
 &nbsp;
 

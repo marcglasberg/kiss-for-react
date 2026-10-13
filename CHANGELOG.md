@@ -386,6 +386,32 @@
 
 ### Other
 
+* The hooks that read the store (`useSelect`, `useSelector`, `useObject`, `useAllState`,
+  `useIsWaiting`, `useIsFailed`, `useExceptionFor` and `useIsStoreReady`) now use React's
+  `useSyncExternalStore`, with the React team's `use-sync-external-store/with-selector` helper
+  for the selectors (a new runtime dependency). React reads the store and decides what to
+  render: a render that React paused (a transition) is checked against the store before it's
+  committed, so a screen never shows parts of two different states. Selectors must be pure,
+  and may be called more than once per render. Store updates are rendered with React's
+  synchronous priority, even when dispatched inside `startTransition`. The store no longer
+  runs the selectors itself, nor keeps the components' render functions. A selector that
+  throws is handled by React (an error boundary), and never fails the action. The changes a
+  sync action makes are published together when `dispatch` returns, so a `useIsWaiting` of a
+  sync action type never renders.
+
+* `StoreProvider` now follows its `store` prop: if it changes, the components below switch to
+  the new store. Before, the first store was kept. It also has a new `serverState` prop, for
+  server-side rendering and hydration: the state the server HTML was rendered from. On the
+  server and while hydrating, the status hooks say no action is waiting or failed, and the
+  store is ready. See "Server-side rendering" in the README.
+
+* `store.isWaiting()`, `store.isFailed()` and `store.exceptionFor()` are now pure reads. Before,
+  they also registered the action type, so that the store knew which components to rebuild.
+
+* `useStoreEffect` no longer uses a layout effect to keep its latest callbacks, so it doesn't
+  warn on the server with React 18 ("useLayoutEffect does nothing on the server"). Its
+  behavior is the same.
+
 * `abortDispatch()` can now read `this.state`, `this.store` and `this.initialState`. Before,
   reading them threw an error, which was swallowed, and the action was silently aborted.
 

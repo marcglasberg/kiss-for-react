@@ -22,4 +22,14 @@ export default defineConfig([
       ],
     },
   },
+  {
+    // The test components record their renders and expose their state setters in variables
+    // declared outside of them, on purpose, to check how and when they render.
+    files: ['__tests__/**/*.{ts,tsx}'],
+    rules: {
+      'react-hooks/immutability': 'off',
+      'react-hooks/globals': 'off',
+      'react-hooks/refs': 'off',
+    },
+  },
 ]);

@@ -1,4 +1,4 @@
-import React, { createContext, useMemo, useState } from 'react';
+import React, { createContext, useMemo } from 'react';
 import { UserException } from './UserException';
 import { PersistAction, Persistor } from './Persistor';
 import {
@@ -299,19 +299,76 @@ export function createStore<St>(params: ConstructorParams<St>): Store<St> {
   return new Store<St>(params);
 }
 
-class RefState<St, T> {
-  selectorAndValueAndSetValue: [(state: St) => T, T, React.Dispatch<React.SetStateAction<T>>];
+/** A function the store calls when something it publishes may have changed. */
+export type StoreListener = () => void;
 
-  constructor(selectorAndValueAndSetValue: [(state: St) => T, T, React.Dispatch<React.SetStateAction<T>>]) {
-    this.selectorAndValueAndSetValue = selectorAndValueAndSetValue;
+/** Removes a listener. Calling it more than once does nothing. */
+export type Unsubscribe = () => void;
+
+/**
+ * The listeners of one thing the store publishes (its state, the status of its actions, or its
+ * readiness). The hooks subscribe through React's `useSyncExternalStore`, which gives the store
+ * a plain callback. The store only tells the listeners that something may have changed. It
+ * doesn't know what each component selected: React reads the value again and compares it.
+ *
+ * Notifying iterates over a copy of the listeners taken when the notification starts:
+ * - A listener removed during the notification is not called (if it was not called yet).
+ * - A listener added during the notification is only called by the next notification.
+ * - A listener may dispatch, which notifies again, in a nested way, with the newest values.
+ */
+class Listeners {
+  private readonly listeners = new Set<StoreListener>();
+
+  constructor(private readonly batch: NotificationBatch) {}
+
+  add(listener: StoreListener): Unsubscribe {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  /** Calls the listeners now, or at the end of the current batch (see `NotificationBatch`). */
+  notify(): void {
+    if (this.listeners.size === 0) return;
+    if (this.batch.depth > 0) {
+      this.batch.pending.add(this);
+      return;
+    }
+    for (const listener of Array.from(this.listeners)) {
+      if (this.listeners.has(listener)) listener();
+    }
   }
 }
 
-class RefStore<St, T> {
-  selectorAndValueAndSetValue: [(store: Store<St>) => T, T, React.Dispatch<React.SetStateAction<T>>];
+/**
+ * Delays the notifications made during a synchronous dispatch until the dispatch finishes, so
+ * that they are published once, with the final values. For example, a SYNC action starts and
+ * finishes inside the same `dispatch` call: without the batch, the start would make React check
+ * the `useIsWaiting` components (and schedule a render for the ones whose action type just
+ * started), only to find the action already finished when it renders.
+ *
+ * The batch only covers the synchronous part of a dispatch. An ASYNC action publishes its start
+ * when `dispatch` returns, and its end when it finishes, outside any batch. The batch is never
+ * held across an `await`. Nested dispatches (from an observer, or `dispatchWhen`) are published
+ * together with the outer one, when it finishes. If anything throws, the batch still ends.
+ */
+class NotificationBatch {
+  depth = 0;
+  readonly pending = new Set<Listeners>();
 
-  constructor(selectorAndValueAndSetValue: [(store: Store<St>) => T, T, React.Dispatch<React.SetStateAction<T>>]) {
-    this.selectorAndValueAndSetValue = selectorAndValueAndSetValue;
+  run<T>(fn: () => T): T {
+    this.depth++;
+    try {
+      return fn();
+    } finally {
+      this.depth--;
+      if (this.depth === 0 && this.pending.size > 0) {
+        const pending = Array.from(this.pending);
+        this.pending.clear();
+        for (const listeners of pending) listeners.notify();
+      }
+    }
   }
 }
 
@@ -329,76 +386,49 @@ export class Store<St> {
   // protected, so that only the store calls them, when the action is dispatched. The store
   // calls them as `action['before']()`, which TypeScript allows for protected members.
 
-  public _refStateHooks: Set<React.RefObject<RefState<St, any> | undefined>> = new Set();
-  public _refStoreHooks: Set<React.RefObject<RefStore<St, any> | undefined>> = new Set();
+  // The store publishes three separate things to React, each with its own listeners, so that a
+  // change in one of them doesn't make React check the components that use another:
+  // - The state: changed by `_registerState`.
+  // - The status of the actions (`isWaiting`, `isFailed`, `exceptionFor`): changed when an
+  //   action starts, finishes or fails, and by `clearExceptionFor`.
+  // - The readiness (`_isReady`): changed once, when the persisted state finishes loading.
+  //
+  // The hooks give these to React's `useSyncExternalStore`: `_subscribeState` with `_getState`,
+  // `_subscribeStatus` with `isWaiting`/`isFailed`/`exceptionFor`, and `_subscribeReady` with
+  // `_getIsReady`. The store notifies the listeners AFTER all the values of a change are in
+  // place, so that a render sees them together (for example, the new state and the end of the
+  // waiting of the action that produced it). React decides when to render.
+  private readonly _notificationBatch = new NotificationBatch();
+  private readonly _stateListeners = new Listeners(this._notificationBatch);
+  private readonly _statusListeners = new Listeners(this._notificationBatch);
+  private readonly _readyListeners = new Listeners(this._notificationBatch);
 
-  // Rebuilds components because of STATE changes.
-  //
-  // We save in the ref:
-  // - The selector
-  // - The currently selected value
-  // - The setValue function
-  //
-  // Whenever the state changes, the store will:
-  // 1. Retrieve all refs
-  // 2. Apply each selector to the current state to calculate the selected value.
-  // 3. And compare the selected value with the last selected value.
-  // 4. If it changed, it calls setValue.
-  private _rebuildFromStateHooks() {
-    this._refStateHooks.forEach((hookRef) => {
-      if (hookRef.current) {
-        const [selector, currentValue, setValue] = hookRef.current.selectorAndValueAndSetValue;
-        let newSelectedValue;
-        try {
-          newSelectedValue = selector(this._state);
-        } catch {
-          // The selector threw, probably because the component is a "zombie child" that will be
-          // unmounted by its parent. Re-render it instead of failing the action: when rendering,
-          // the selector runs again with the latest props, and any error goes to React.
-          setValue(currentValue);
-          return;
-        }
-        if (!Object.is(newSelectedValue, currentValue)) {
-          setValue(newSelectedValue);
-          hookRef.current.selectorAndValueAndSetValue[1] = newSelectedValue; // Update the current value in the ref
-        }
-      }
-    });
-  }
+  /**
+   * Internal: subscribes to state changes. Used by `useSelect`, `useObject` and `useAllState`.
+   * The function is stable for the store, so React doesn't resubscribe on every render.
+   */
+  public _subscribeState: (listener: StoreListener) => Unsubscribe = (listener) => this._stateListeners.add(listener);
 
-  /// Rebuilds components because of `isWaiting`, `isFailed`, `exceptionFor` and `clearExceptionFor`.
-  //
-  // We save in the ref:
-  // - The selector
-  // - The currently selected value
-  // - The setValue function
-  //
-  // Whenever the store method results changes, the store will:
-  // 1. Retrieve all refs
-  // 2. Apply each selector to the current store to calculate the selected value.
-  // 3. And compare the selected value with the last selected value.
-  // 4. If it changed, it calls setValue.
-  private _rebuildFromStoreHooks() {
-    this._refStoreHooks.forEach((hookRef) => {
-      if (hookRef.current) {
-        const [selector, currentValue, setValue] = hookRef.current.selectorAndValueAndSetValue;
-        let newSelectedValue;
-        try {
-          newSelectedValue = selector(this);
-        } catch {
-          // The selector threw, probably because the component is a "zombie child" that will be
-          // unmounted by its parent. Re-render it instead of failing the action: when rendering,
-          // the selector runs again with the latest props, and any error goes to React.
-          setValue(currentValue);
-          return;
-        }
-        if (!Object.is(newSelectedValue, currentValue)) {
-          setValue(newSelectedValue);
-          hookRef.current.selectorAndValueAndSetValue[1] = newSelectedValue; // Update the current value in the ref
-        }
-      }
-    });
-  }
+  /**
+   * Internal: subscribes to changes in the status of the actions. Used by `useIsWaiting`,
+   * `useIsFailed` and `useExceptionFor`.
+   */
+  public _subscribeStatus: (listener: StoreListener) => Unsubscribe = (listener) => this._statusListeners.add(listener);
+
+  /** Internal: subscribes to the store becoming ready. Used by `useIsStoreReady`. */
+  public _subscribeReady: (listener: StoreListener) => Unsubscribe = (listener) => this._readyListeners.add(listener);
+
+  /** Internal: returns the current state. The same as `store.state`, as a stable function. */
+  public _getState: () => St = () => this._state;
+
+  /** Internal: returns `_isReady`, as a stable function. */
+  public _getIsReady: () => boolean = () => this._isReady;
+
+  /**
+   * Internal: the `initialState` passed to the constructor. It's the state the server rendered,
+   * and the state a client store hydrates with, unless `StoreProvider` is given a `serverState`.
+   */
+  public readonly _initialState: St;
 
   /**
    * The `Store.log()` is a static function that Kiss uses internally to log information.
@@ -725,12 +755,6 @@ export class Store<St> {
   private readonly _nonReentrantActionsRunning: Set<KissAction<St>>;
 
   /**
-   * Async actions that we may put into `_asyncActionsInProgress`.
-   * This helps to know when to rebuild to make `isWaiting` work.
-   */
-  private readonly _awaitableActions: Set<abstract new (...args: any[]) => KissAction<St>>;
-
-  /**
    * The actions that have failed recently.
    * When an action fails by throwing an `UserException`, it's added to this map
    * (indexed by its action type), and then removed when it's dispatched.
@@ -743,12 +767,6 @@ export class Store<St> {
    * getter in the error message: `throw new UserException('Invalid input').noDialog`.
    */
   private readonly _failedActions: Map<new (...args: any[]) => KissAction<St>, KissAction<St>>;
-
-  /**
-   * Async actions that we may put into `_failedActions`.
-   * This helps to know when to rebuild to make `isWaiting` work.
-   */
-  private readonly _actionsWeCanCheckFailed: Set<new (...args: any[]) => KissAction<St>>;
 
   /**
    * Helps implement the waitCondition method.
@@ -947,6 +965,7 @@ export class Store<St> {
               }: ConstructorParams<St>
   ) {
     this._state = initialState;
+    this._initialState = initialState;
     this._showUserException = showUserException || this._defaultShowUserException;
     this._processPersistence = (persistor === undefined) ? null : new ProcessPersistence(persistor, initialState);
     this._errorObserver = errorObserver;
@@ -955,9 +974,7 @@ export class Store<St> {
     this.userExceptionsQueue = [];
     this._actionsInProgress = new Set();
     this._nonReentrantActionsRunning = new Set();
-    this._awaitableActions = new Set();
     this._failedActions = new Map<new (...args: any[]) => KissAction<St>, KissAction<St>>();
-    this._actionsWeCanCheckFailed = new Set();
     Store.log = (logger === null) ? Store._noLogger : (logger || this._defaultLogger);
     this._logStateChanges = logStateChanges ?? true;
 
@@ -965,6 +982,9 @@ export class Store<St> {
       this._processPersistence.onError =
         (error: any, originalError: any, observeOnly: boolean) =>
           this._processPersistorError(error, originalError, observeOnly);
+      // Publishes the readiness as soon as it changes (the persisted state was read and applied,
+      // or the initial state was saved, or that failed and the store keeps the initial state).
+      this._processPersistence.onReady = () => this._readyListeners.notify();
       this._processPersistence.readInitialState(this, initialState).catch(() => {});
     }
 
@@ -1639,26 +1659,27 @@ export class Store<St> {
     // If `record.isRecording`, record the INI state. That's for testing only.
     this._record(action, true, this._state, this._state, null);
 
-    this._calculateIsWaitingIsFailed(action);
+    // The state and status changes made until `dispatch` returns are published together, when
+    // it returns (see `NotificationBatch`). An ASYNC action publishes the rest when it finishes.
+    this._notificationBatch.run(() => {
+      this._calculateIsWaitingIsFailed(action);
 
-    this._wraps(
-      action,
-      () => this._runFromStart(action, mustBeSync)
-    );
+      this._wraps(
+        action,
+        () => this._runFromStart(action, mustBeSync)
+      );
+    });
   }
 
   _calculateIsWaitingIsFailed(action: KissAction<St>) {
 
-    // If the action is failable (that is to say, we have once called `isFailed` for this action),
-    const failable = this._actionsWeCanCheckFailed.has(action.constructor as new (...args: any[]) => KissAction<St>);
-
-    // Dispatch is starting, so we always remove the action from the list of failed actions,
-    // even if nobody checked it yet. Otherwise, checking it later would show a stale error.
-    const wasInTheList = this._failedActions.delete(action.constructor as new (...args: any[]) => KissAction<St>);
+    // Dispatch is starting, so we remove the action from the list of failed actions.
+    // Otherwise, checking it later would show a stale error.
+    this._failedActions.delete(action.constructor as new (...args: any[]) => KissAction<St>);
 
     // Add the action to the list of actions in progress.
-    // Note: We do this BEFORE notifying the UI, so that a single rebuild sees both changes.
-    // Otherwise, the `isWaiting` selectors would still see the action as not in progress.
+    // Note: We do this BEFORE notifying the UI, so that a single render sees both changes.
+    // Otherwise, `isWaiting` would still see the action as not in progress.
     this._actionsInProgress.add(action);
     // A debounced action only takes its non-reentrant key when its debounce period ends.
     if (Store._isNonReentrant(action) && (action._debounceMillis === null)) this._nonReentrantActionsRunning.add(action);
@@ -1666,22 +1687,12 @@ export class Store<St> {
     // The action just entered the set of actions in progress, so we check the wait conditions.
     this._checkAllActionConditions(action);
 
-    // Then we notify the UI, if the action was in the list of failed actions and is failable,
-    // OR if the action is awaitable (that is to say, we have already called `isWaiting` for this action).
-    // Note we don't notify if the action was never checked.
-    // Note: We use `instanceof`, like `isWaiting` does, so that waiting for a base class
-    // also rebuilds when a subclass action starts.
-    if ((failable && wasInTheList) || this._isAwaitable(action)) {
-      this._rebuildFromStoreHooks();
-    }
-  }
-
-  // Returns true if `isWaiting` was already called for the action's type, or for one of its superclasses.
-  private _isAwaitable(action: KissAction<St>): boolean {
-    for (const type of this._awaitableActions) {
-      if (action instanceof type) return true;
-    }
-    return false;
+    // Then we publish the status change. React checks only the components that use `isWaiting`,
+    // `isFailed` or `exceptionFor`, and renders only those whose value changed. So a component
+    // waiting for another action type, or a `useIsWaiting(Base)` that is already true, doesn't
+    // render. Note a SYNC action also starts and finishes here, before `dispatch` returns, so
+    // React never sees it as in progress.
+    this._statusListeners.notify();
   }
 
   // Wraps SYNC actions.
@@ -1897,9 +1908,12 @@ export class Store<St> {
 
     // Remove the wait state for the action in progress.
     // Note: If the state was applied, this was already removed and the UI updated.
+    // If the action failed, `_processWrapsError` already recorded the failure (so `isFailed` and
+    // `exceptionFor` see it), and this same notification publishes it together with the end of
+    // the waiting.
     const removed = this._actionsInProgress.delete(action);
     if (removed) {
-      this._rebuildFromStoreHooks();
+      this._statusListeners.notify();
 
       // Check the wait-conditions after state change. We pass it the trigger-action.
       this._checkAllActionConditions(action);
@@ -2674,7 +2688,18 @@ export class Store<St> {
 
     if (newState != null && newState !== this._state) {
       this._state = newState;
-      this._rebuildFromStateHooks();
+
+      // Remove the wait state for the action in progress. This is done BEFORE publishing the
+      // new state, so that a single render sees both the new state and the end of the waiting.
+      // Note: `after()` still runs later, in `_processWrapsFinally`, and a non-reentrant key is
+      // only released there.
+      const removed = this._actionsInProgress.delete(action);
+
+      // Publish the new state, and then the status change. React checks the components that
+      // use them, and renders the ones whose selected values changed. Nothing is rendered
+      // synchronously here: React schedules the render, and reads the values again then.
+      this._stateListeners.notify();
+      if (removed) this._statusListeners.notify();
 
       // Observe the state with null error, because the reducer completed normally.
       this._observeState(action, prevState, newState, null);
@@ -2683,15 +2708,8 @@ export class Store<St> {
 
       // ---
 
-      // Remove the wait state for the action in progress.
-      // Note: We do this here, before updating the UI.
-      const removed = this._actionsInProgress.delete(action);
-
       // Check the wait-conditions after state change. We pass it the trigger-action.
-      if (removed) {
-        this._rebuildFromStoreHooks();
-        this._checkAllActionConditions(action);
-      }
+      if (removed) this._checkAllActionConditions(action);
 
       // Check the wait-conditions after state change.
       this._waitConditions = this._waitConditions.filter(condition => {
@@ -2844,9 +2862,6 @@ export class Store<St> {
    * ```
    */
   isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T): boolean {
-
-    this._awaitableActions.add(type);
-
     for (const action of this._actionsInProgress) {
       if (action instanceof type) {
         return true;
@@ -2870,7 +2885,6 @@ export class Store<St> {
   exceptionFor<T extends KissAction<St>>(type: {
     new(...args: any[]): T
   }): (UserException | null) {
-    this._actionsWeCanCheckFailed.add(type);
     const action = this._failedActions.get(type);
     const error = action?.status.wrappedError;
     return (error instanceof UserException) ? error : null;
@@ -2891,7 +2905,7 @@ export class Store<St> {
    */
   clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T }): void {
     const result = this._failedActions.delete(type);
-    if (result) this._rebuildFromStoreHooks();
+    if (result) this._statusListeners.notify();
   }
 
   /**
@@ -3990,24 +4004,55 @@ export class Store<St> {
   }
 }
 
-interface StoreProviderProps<St> {
+export interface StoreProviderProps<St> {
+  /**
+   * The store the components below get from the hooks. If it changes, the components switch to
+   * the new store: they stop listening to the old one, read the new one right away, and the
+   * `useStoreEffect` callbacks run `onUnmount` for the old store and `onMount` for the new one.
+   */
   store: Store<St>;
+
+  /**
+   * The state the server HTML was rendered from, for server-side rendering and hydration.
+   * On the server, it's the state to render. On the client, it's the state the HTML shows, which
+   * React needs to hydrate without mismatches, even if the live store already changed. After
+   * hydration, the components catch up with the live state. If not given, it's the
+   * `initialState` the store was created with, which is right when:
+   * - On the server, you put the data in the `initialState`, instead of dispatching actions
+   *   before rendering. If you dispatch before rendering, pass `serverState={store.state}`.
+   * - On the client, you create the store with the state transferred from the server. If you
+   *   create it with some other state, pass the transferred state here.
+   * It's only read while hydrating, so a later change is ignored. It should be a stable value.
+   *
+   * On the server and while hydrating, `useIsWaiting` and `useIsFailed` are false,
+   * `useExceptionFor` is null, and `useIsStoreReady` is true: the server HTML never shows an
+   * action in progress, a failed action, or a store that is not ready. After hydration, these
+   * hooks catch up with the live store too. So, on the server, wait for your actions to finish
+   * (and for `store.ready()`, if the server store has a persistor) before rendering.
+   */
+  serverState?: St;
+
   children: React.ReactNode;
 }
 
 export interface StoreContextType<St> {
   store: Store<St> | null;
+
+  /** Returns the `serverState` of the provider (or the store's `initialState`). See `StoreProviderProps`. */
+  getServerState: () => St;
 }
 
 export const StoreContext = createContext<StoreContextType<any>>({
-  store: null
+  store: null,
+  getServerState: () => undefined,
 });
 
-export function StoreProvider<St>({store, children}: StoreProviderProps<St>): React.ReactElement {
-  const [_store] = useState<Store<St>>(store);
-  const storeMemo = useMemo(() => ({ store: _store }), [_store]);
+export function StoreProvider<St>(props: StoreProviderProps<St>): React.ReactElement {
+  const {store, children} = props;
+  const serverState = ('serverState' in props) ? props.serverState as St : store._initialState;
+  const value = useMemo<StoreContextType<St>>(() => ({store, getServerState: () => serverState}), [store, serverState]);
   return (
-    <StoreContext.Provider value={storeMemo}>
+    <StoreContext.Provider value={value}>
       {children}
     </StoreContext.Provider>
   );

@@ -1,8 +1,34 @@
-import React, { useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector';
 import { UserException } from './UserException';
 import { StoreException } from './StoreException';
 import { Store, StoreContext, StoreContextType } from "./Store";
 import { KissAction, ActionStatus } from './KissAction';
+
+// How the hooks connect to the store
+//
+// The hooks that read the store use React's `useSyncExternalStore`, which gets two functions
+// from the store: one to subscribe to changes, and one to read the current value (the
+// "snapshot"). The store only tells React that something may have changed; React then reads the
+// snapshot again, compares it with the one it rendered, and renders the component only if it
+// changed. React also reads the snapshot again before committing a render that it started and
+// paused (a transition), and restarts the render if the store changed meanwhile, so a screen
+// never shows parts of two different states at the same time.
+//
+// - `useSelect`, `useObject` and `useAllState` use the React team's `useSyncExternalStoreWithSelector`,
+//   whose snapshot is the whole (immutable) state, and whose selector picks a part of it. It
+//   keeps the last selected value, and compares the new one with it (`Object.is` for `useSelect`,
+//   value by value for `useObject`), so an unchanged selection doesn't render the component.
+//
+// - `useIsWaiting`, `useIsFailed` and `useExceptionFor` read a boolean or an exception from the
+//   store, and subscribe to the status changes of the actions. `useIsStoreReady` reads a boolean
+//   and subscribes to the readiness.
+//
+// What this means for your selectors: they must be pure, and must not depend on how many times
+// they are called. React may call them more than once per render, and may throw a render away.
+// Store-driven renders are synchronous for React (even inside `startTransition`): they are not
+// deferred like local-state transitions. Async actions are still async; this only says how React
+// schedules the render after the state changes.
 
 /**
  * Returns a part of the store state:
@@ -16,12 +42,18 @@ import { KissAction, ActionStatus } from './KissAction';
  * the previous one using `Object.is`, like React does. So `NaN` is equal
  * to `NaN`, but `0` is different from `-0`.
  *
+ * The selector must be pure: it must only read its `state` parameter, and return the same
+ * value for the same state. It may be an inline function, and may use props and local state.
+ * It should return a part of the state, not a new object: a new object is never `Object.is`
+ * the previous one, so the component would rebuild for every state change. Use `useObject`
+ * for that.
+ *
  * Note: You can use `useSelect` and `useSelector` interchangeably.
  * Prefer `useSelect` because it's shorter.
  */
 export function useSelect<St, T>(selector: (state: St) => T): T {
-  const store: Store<St> = useStoreFromContext<St>();
-  return useSubscribedSelector(store._refStateHooks, RefState, selector, () => store.state, true);
+  const {store, getServerState} = useStoreContext<St>();
+  return useSyncExternalStoreWithSelector(store._subscribeState, store._getState, getServerState, selector, Object.is);
 }
 
 /**
@@ -71,19 +103,13 @@ export function useSelector<St, T>(selector: (state: St) => T): T {
  * `Set` (or `null` or `undefined`), and a class instance, a `Date`, a string, a number or a
  * function doesn't compile. Note an object whose type is an `interface` doesn't compile either,
  * since TypeScript can't tell it apart from a class instance. Declare it with `type` instead.
+ *
+ * While the values are the same, `useObject` keeps returning the object it returned before,
+ * so you can use it in the dependencies of an effect, or pass it to a memoized component.
  */
 export function useObject<St, T extends UseObjectValue>(selector: (state: St) => T): T {
-  // The last object returned. While the selector returns objects with the same values, we keep
-  // returning this same object, so that `useSelect` sees no change.
-  const lastRef = useRef<{ value: T } | null>(null);
-
-  return useSelect((state: St) => {
-    const value = selector(state);
-    const last = lastRef.current;
-    if (last !== null && _shallowEqual(last.value, value)) return last.value;
-    lastRef.current = {value};
-    return value;
-  });
+  const {store, getServerState} = useStoreContext<St>();
+  return useSyncExternalStoreWithSelector(store._subscribeState, store._getState, getServerState, selector, _shallowEqual);
 }
 
 // What a `useObject` selector can return. A class instance is not assignable to a `Record`,
@@ -363,7 +389,9 @@ export interface UseStoreEffectOptions<St, D> {
  *   For example, `onUnmount` may run while an async `onMount` is still waiting for an action.
  *
  * - Their errors are not caught, as in a `useEffect`. A sync error goes to React, which shows
- *   the nearest error boundary. A rejected promise is an unhandled promise rejection. And when
+ *   the nearest error boundary (except that React 18 doesn't give an error thrown by
+ *   `onUnmount` while the component unmounts to the boundary: it logs it as an internal React
+ *   error; React 19 fixed it). A rejected promise is an unhandled promise rejection. And when
  *   `onMount` waits for the store to be ready, or `onUnmount` waits a microtask (see above),
  *   even a sync error is an unhandled promise rejection. If `onMount` throws a sync error when
  *   the component mounts (the store is ready), `onUnmount` is not called, as the cleanup of a
@@ -386,8 +414,11 @@ export function useStoreEffect<St = any, const D = undefined>(options: UseStoreE
   const store = useStoreFromContext<St>();
 
   // The options from the latest committed render, so that the callbacks see the latest values.
+  // A passive effect is enough: the effects below, which read the ref, run after it in the
+  // same commit (effects of a component run in order). A layout effect would also warn on the
+  // server with React 18 ("useLayoutEffect does nothing on the server").
   const optionsRef = useRef(options);
-  useLayoutEffect(() => {
+  useEffect(() => {
     optionsRef.current = options;
   });
 
@@ -624,8 +655,16 @@ export function useDispatchSync(): (action: KissAction<any>) => void {
  * ```
  */
 export function useIsWaiting(type: abstract new (...args: any[]) => KissAction<any>): boolean {
-  return useStoreSelector<any, boolean>((store) => store.isWaiting(type));
+  const store = useStoreFromContext<any>();
+  const getIsWaiting = useCallback(() => store.isWaiting(type), [store, type]);
+  return useSyncExternalStore(store._subscribeStatus, getIsWaiting, _returnFalse);
 }
+
+// On the server and while hydrating, no action is waiting or failed, and the store is ready.
+// See `StoreProviderProps.serverState`.
+const _returnFalse = () => false;
+const _returnNull = () => null;
+const _returnTrue = () => true;
 
 /**
  * Returns true if the store is ready, and false while it's still loading the persisted state.
@@ -645,21 +684,7 @@ export function useIsWaiting(type: abstract new (...args: any[]) => KissAction<a
  */
 export function useIsStoreReady(): boolean {
   const store = useStoreFromContext<any>();
-  const isReady: boolean = store._isReady;
-  const [, forceRender] = useReducer((x: number) => x + 1, 0);
-
-  useEffect(() => {
-    let isMounted = true;
-    // Re-renders when the store becomes ready, or right away if it became ready after this render.
-    if (!isReady) store.ready().then(() => {
-      if (isMounted) forceRender();
-    });
-    return () => {
-      isMounted = false;
-    };
-  }, [store, isReady]);
-
-  return isReady;
+  return useSyncExternalStore(store._subscribeReady, store._getIsReady, _returnTrue);
 }
 
 /**
@@ -667,15 +692,23 @@ export function useIsStoreReady(): boolean {
  * Note: This method uses the EXACT action type. Subtypes are not considered.
  */
 export function useIsFailed(type: { new(...args: any[]): KissAction<any> }): boolean {
-  return useStoreSelector<any, boolean>((store) => store.isFailed(type));
+  const store = useStoreFromContext<any>();
+  const getIsFailed = useCallback(() => store.isFailed(type), [store, type]);
+  return useSyncExternalStore(store._subscribeStatus, getIsFailed, _returnFalse);
 }
 
 /**
  * Returns the `UserException` of the `type` that failed.
  * Note: This method uses the EXACT type in `type`. Subtypes are not considered.
+ *
+ * The exception is the object the action threw (or the one `wrapError` or the `errorObserver`
+ * returned). It's returned as is: don't change it after throwing it, since React compares it
+ * by identity to know if the component must rebuild.
  */
 export function useExceptionFor(type: { new(...args: any[]): KissAction<any> }): UserException | null {
-  return useStoreSelector<any, UserException | null>((store) => store.exceptionFor(type));
+  const store = useStoreFromContext<any>();
+  const getExceptionFor = useCallback(() => store.exceptionFor(type), [store, type]);
+  return useSyncExternalStore(store._subscribeStatus, getExceptionFor, _returnNull);
 }
 
 /**
@@ -700,97 +733,16 @@ export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction
   }, [store]);
 }
 
-function useStoreSelector<St, T>(selector: (store: Store<St>) => T): T {
-  const store: Store<St> = useStoreFromContext<St>();
-  return useSubscribedSelector(store._refStoreHooks, RefStore, selector, () => store);
-}
-
-/**
- * Selects a value and re-renders the component when it changes.
- *
- * The value is selected again on every render, using the selector passed in that render,
- * so selectors that depend on props or local state always use the latest props.
- * After each commit, the ref is updated with the latest selector and value, so that
- * when the store changes, it checks with the latest selector.
- *
- * When it subscribes, it selects again from the current store, in case the state changed
- * between the render and the subscription (for example, a child that dispatches on mount).
- *
- * If `isInputImmutable` is true (the input is the state), it only selects again after the
- * render if the input changed since the render. Otherwise, a selector that creates a new object
- * each time (like `(state) => ({ a: state.a })`) would be different every time, and the
- * component would re-render forever.
- */
-function useSubscribedSelector<In, T, R>(
-  hooks: Set<React.RefObject<R | undefined>>,
-  RefClass: new (selectorAndValueAndSetValue: [(input: In) => T, T, React.Dispatch<React.SetStateAction<T>>]) => R,
-  selector: (input: In) => T,
-  getInput: () => In,
-  isInputImmutable = false,
-): T {
-
-  // This ref will persist for the full lifetime of the component.
-  const ref = useRef<R>(undefined);
-
-  // Re-renders the component. The store calls it when the selected value changes.
-  const [, forceRender] = useReducer((x: number) => x + 1, 0);
-
-  const input = getInput();
-  const value = selector(input);
-
-  // The input used in the last committed render.
-  const renderedInputRef = useRef<In>(input);
-
-  // After every render, save in the ref the latest selector and the value it selected.
-  // Whenever the state changes, the store will:
-  // 1. Retrieve all refs
-  // 2. Apply each selector to calculate the selected value.
-  // 3. And compare the selected value with the last selected value.
-  // 4. If it changed, it calls setValue, which re-renders the component.
-  // Child effects run before parent effects, so the state may have changed since the render,
-  // while the store was still checking with the previous selector. If it did, re-render.
-  // If the selector throws, re-render too, so the error is thrown during render,
-  // where React can deal with it.
-  const rerenderIfChanged = () => {
-    // If the input is the same, the selector would select the same value it selected in the render.
-    if (isInputImmutable && getInput() === renderedInputRef.current) return;
-    try {
-      const [latestSelector, renderedValue] = (ref.current as any).selectorAndValueAndSetValue;
-      if (!Object.is(latestSelector(getInput()), renderedValue)) forceRender();
-    } catch {
-      forceRender();
-    }
-  };
-
-  useLayoutEffect(() => {
-    ref.current = new RefClass([selector, value, forceRender as React.Dispatch<React.SetStateAction<T>>]);
-    renderedInputRef.current = input;
-
-    // On later commits (already subscribed), the new selector may have missed a change.
-    if (hooks.has(ref)) rerenderIfChanged();
-  });
-
-  // Only once when the component mounts.
-  useEffect(() => {
-    hooks.add(ref);
-    rerenderIfChanged();
-
-    return () => {
-      // When the component unmounts, delete the ref.
-      hooks.delete(ref);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return value;
-}
-
-function useStoreFromContext<St>(): Store<St> {
+function useStoreContext<St>(): { store: Store<St>, getServerState: () => St } {
   const context = useContext<StoreContextType<St>>(StoreContext) as StoreContextType<St>;
   if (!context?.store) {
     throw new StoreException('useStore must be used within a StoreProvider');
   }
-  return context.store as Store<St>;
+  return context as { store: Store<St>, getServerState: () => St };
+}
+
+function useStoreFromContext<St>(): Store<St> {
+  return useStoreContext<St>().store;
 }
 
 /**
@@ -1364,21 +1316,5 @@ class StoreDispatchers<St> {
         timeoutMillis: timeoutMillis,
         onTimeout: onTimeout,
       });
-  }
-}
-
-class RefState<St, T> {
-  selectorAndValueAndSetValue: [(state: St) => T, T, React.Dispatch<React.SetStateAction<T>>];
-
-  constructor(selectorAndValueAndSetValue: [(state: St) => T, T, React.Dispatch<React.SetStateAction<T>>]) {
-    this.selectorAndValueAndSetValue = selectorAndValueAndSetValue;
-  }
-}
-
-class RefStore<St, T> {
-  selectorAndValueAndSetValue: [(store: Store<St>) => T, T, React.Dispatch<React.SetStateAction<T>>];
-
-  constructor(selectorAndValueAndSetValue: [(store: Store<St>) => T, T, React.Dispatch<React.SetStateAction<T>>]) {
-    this.selectorAndValueAndSetValue = selectorAndValueAndSetValue;
   }
 }

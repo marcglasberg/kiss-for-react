@@ -149,8 +149,14 @@ Bdd(feature)
       return null;
     };
 
+    // `Activity` exists since React 19.2. With React 18 there is nothing to test here.
+    const Activity = (React as { Activity?: React.ComponentType<{ mode: 'visible' | 'hidden', children: React.ReactNode }> }).Activity;
+    if (Activity === undefined) {
+      expect(React.version.startsWith('18.')).toBe(true);
+      return;
+    }
     const inActivity = (mode: 'visible' | 'hidden') =>
-      React.createElement(React.Activity, {mode, children: React.createElement(Comp)});
+      React.createElement(Activity, {mode, children: React.createElement(Comp)});
 
     const renderer = await render(store, inActivity('visible'), strictMode);
     expect(log).toEqual(['mount']);
@@ -252,6 +258,14 @@ Bdd(feature)
     const renderer = await render(store, tree(true, 1));
     if (callback === 'onDepsChange') await update(renderer, store, tree(true, 2));
     if (callback === 'onUnmount') await update(renderer, store, tree(false, 1));
+
+    // React 18 doesn't give an error thrown while a component unmounts to the error boundary:
+    // it logs it as an internal React error ("Attempted to capture a commit phase error inside
+    // a detached tree"). React 19 fixed it.
+    if (callback === 'onUnmount' && React.version.startsWith('18.')) {
+      expect(log).toEqual(['onMount', 'onUnmount']);
+      return;
+    }
 
     expect(log).toContain(`caught: ${callback} failed`);
     expect(log.indexOf(`caught: ${callback} failed`)).toBe(log.indexOf(callback) + 1);
