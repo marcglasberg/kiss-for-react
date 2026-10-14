@@ -16,11 +16,42 @@ import {
 } from './KissAction';
 import { ProcessPersistence } from './ProcessPersistence';
 import { AbortDispatchException, isKissAbort, kissAbort, StoreException, TimeoutException } from './StoreException';
+import { Evt, EvtState } from './Evt';
 import { capTimeoutMillis, MAX_TIMEOUT_MILLIS } from "./utils";
 
 // An active polling cycle of the given polling key. The `timer` is the one that dispatches the
 // next tick, or `null` while a tick (or the immediate run) is running.
 type PollingCycle = { key: any, timer: ReturnType<typeof setTimeout> | null };
+
+/**
+ * A function that disposes the value of a store prop, given to `setProp` as the `dispose`
+ * option. For example, `clearInterval` for an interval. It may return a promise, which
+ * `store.dispose()` waits for.
+ */
+export type PropDispose<V = any> = (value: V) => unknown;
+
+/**
+ * The options of `store.setProp` and `KissAction.setProp`.
+ */
+export interface SetPropOptions<V = any> {
+  /**
+   * How to dispose the value, when the prop is disposed (with `disposeProp`, `disposeProps`
+   * or `store.dispose()`), or when it's replaced by `setProp` with the same key. It gets the
+   * value. For example, `{ dispose: clearInterval }` for an interval, or
+   * `{ dispose: (unsubscribe) => unsubscribe() }` for an unsubscribe function. It may return a
+   * promise, which `store.dispose()` waits for.
+   *
+   * Without it, Kiss disposes the value by its type (see `setProp`). Timers and functions need
+   * it, since Kiss can't tell them from other numbers and functions.
+   */
+  dispose?: PropDispose<V>;
+}
+
+/**
+ * Selects the props to dispose, for `disposeProps` and `logOut`. Gets the key and the value
+ * of each prop, and returns `true` for the ones to dispose.
+ */
+export type PropPredicate = (key: unknown, value: unknown) => boolean;
 
 interface ConstructorParams<St> {
 
@@ -28,6 +59,79 @@ interface ConstructorParams<St> {
    * The initial state of the app.
    */
   initialState: St;
+
+  /**
+   * The environment the app is running in: production, staging, testing, etc. Any value, and
+   * usually an enum. Read it with `store.environment`, in actions with
+   * `this.store.environment`, and in components with `useEnvironment()`. It never changes
+   * while the app runs.
+   *
+   * ```ts
+   * const store = createStore<State>({
+   *   initialState: State.initialState,
+   *   environment: Environment.production,
+   * });
+   * ```
+   *
+   * See also: `configuration` and `dependencies`, which are created by factories that get
+   * the store, so they can depend on the environment.
+   */
+  environment?: unknown;
+
+  /**
+   * A factory that creates the configuration of the app: feature flags and other
+   * configuration values. It gets the store, so it can read `store.environment`. It's called
+   * once, when the store is created, before the `dependencies` factory. Read the result with
+   * `store.configuration`, in actions with `this.store.configuration`, and in components with
+   * `useConfiguration()`. It's meant to be immutable: it doesn't change while the app runs.
+   *
+   * ```ts
+   * const store = createStore<State>({
+   *   initialState: State.initialState,
+   *   environment: Environment.production,
+   *   configuration: (store) => new Config({ showAdminConsole: store.environment !== Environment.production }),
+   * });
+   * ```
+   *
+   * `store.dispose()` disposes the configuration, if it has a `[Symbol.asyncDispose]()`,
+   * `[Symbol.dispose]()` or `dispose()` method.
+   */
+  configuration?: (store: Store<St>) => unknown;
+
+  /**
+   * A factory that creates the dependencies of the app: the services, repositories, API
+   * clients, etc, that the actions use. It gets the store, so it can read `store.environment`
+   * and `store.configuration` (which is created first). It's called once, when the store is
+   * created. Read the result with `store.dependencies`, and in actions with
+   * `this.store.dependencies`. Components should usually not need the dependencies.
+   *
+   * Since the dependencies belong to the store, each test creates its own store with its own
+   * dependencies (fakes, for example), with nothing global to set up or reset:
+   *
+   * ```ts
+   * const store = createStore<State>({
+   *   initialState: State.initialState,
+   *   environment: Environment.testing,
+   *   dependencies: (store) => new FakeDependencies(),
+   * });
+   * ```
+   *
+   * `store.environment`, `store.configuration` and `store.dependencies` are typed `unknown`.
+   * Declare typed getters once, in your base action:
+   *
+   * ```ts
+   * abstract class Action extends KissAction<State> {
+   *   get env() { return this.store.environment as Environment; }
+   *   get config() { return this.store.configuration as Config; }
+   *   get deps() { return this.store.dependencies as Dependencies; }
+   * }
+   * ```
+   *
+   * `store.dispose()` disposes the dependencies, if they have a `[Symbol.asyncDispose]()`,
+   * `[Symbol.dispose]()` or `dispose()` method. They are disposed after the props, and before
+   * the configuration. `logOut` keeps them, since they belong to the app, and not to the user.
+   */
+  dependencies?: (store: Store<St>) => unknown;
 
   /**
    * Kiss calls this function automatically when actions throw `UserException`s, so that
@@ -299,6 +403,18 @@ export function createStore<St>(params: ConstructorParams<St>): Store<St> {
   return new Store<St>(params);
 }
 
+// The store implements the TC39 explicit resource management protocol, so that tests can
+// write `await using store = createStore(...)`. The methods are declared here, and added to the
+// prototype at the end of this file, only if the runtime has the symbols (older ones don't).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export interface Store<St> {
+  /** Same as `dispose()`, without waiting for the async disposals. For `using store = ...`. */
+  [Symbol.dispose](): void;
+
+  /** Same as `dispose()`. For `await using store = ...`. */
+  [Symbol.asyncDispose](): Promise<void>;
+}
+
 /** A function the store calls when something it publishes may have changed. */
 export type StoreListener = () => void;
 
@@ -380,6 +496,7 @@ class NotificationBatch {
  *
  * You can create a store with `const store = createStore()` or `const store = new Store()`.
  */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export class Store<St> {
 
   // Note: The lifecycle methods of the actions (like `before`, `reduce` and `after`) are
@@ -533,7 +650,7 @@ export class Store<St> {
 
   private _isShutDown(): boolean {
     if (this._isApplyingLogOutState) return false;
-    return this._shutDown || (this._logOutsRunning > 0);
+    return this._shutDown || this._disposed || (this._logOutsRunning > 0);
   }
 
   // How many times `clearInternalActionProps()` was called. An action dispatched before the last
@@ -853,6 +970,28 @@ export class Store<St> {
   // The errors thrown by `dispatchSync` when the action is ASYNC. See `_notSyncError`.
   private readonly _notSyncErrors = new WeakSet<StoreException>();
 
+  /**
+   * Internal: the events (`Evt`) that `useEvent` or `useLayoutEvent` already handled (spent).
+   * They are kept here, and not in the events, so that the events, and the state, stay
+   * immutable. A `WeakSet`, so that events nobody references anymore are garbage collected.
+   * Use `isEventSpent` instead.
+   */
+  public readonly _spentEvents = new WeakSet<Evt<any>>();
+
+  // The store props (see `setProp`), in the order they were set, and the `dispose` option of
+  // the ones that have one.
+  private readonly _props = new Map<unknown, unknown>();
+  private readonly _propDisposers = new Map<unknown, PropDispose>();
+
+  // True after `dispose()` was called. A disposed store doesn't accept actions or props.
+  private _disposed = false;
+
+  // The environment, the configuration and the dependencies (see `ConstructorParams`). The
+  // last two are created by factories, in the constructor.
+  private readonly _environment: unknown;
+  private readonly _configuration: unknown;
+  private readonly _dependencies: unknown;
+
   private readonly _processPersistence: ProcessPersistence<St> | null;
   private _dispatchCount = 0;
 
@@ -955,6 +1094,9 @@ export class Store<St> {
 
   constructor({
                 initialState,
+                environment,
+                configuration,
+                dependencies,
                 showUserException,
                 persistor,
                 errorObserver,
@@ -966,6 +1108,7 @@ export class Store<St> {
   ) {
     this._state = initialState;
     this._initialState = initialState;
+    this._environment = environment;
     this._showUserException = showUserException || this._defaultShowUserException;
     this._processPersistence = (persistor === undefined) ? null : new ProcessPersistence(persistor, initialState);
     this._errorObserver = errorObserver;
@@ -977,6 +1120,12 @@ export class Store<St> {
     this._failedActions = new Map<new (...args: any[]) => KissAction<St>, KissAction<St>>();
     Store.log = (logger === null) ? Store._noLogger : (logger || this._defaultLogger);
     this._logStateChanges = logStateChanges ?? true;
+
+    // The configuration is created first, so that the dependencies factory can read it. Both
+    // are created before the persisted state is read, since the `errorObserver` may read them.
+    // If a factory throws, the store creation fails.
+    this._configuration = configuration?.(this);
+    this._dependencies = dependencies?.(this);
 
     if (this._processPersistence != null) {
       this._processPersistence.onError =
@@ -2909,6 +3058,444 @@ export class Store<St> {
   }
 
   /**
+   * Returns true if the event was already handled (spent) by a component of this store, with
+   * `useEvent` or `useLayoutEvent`. Also true for `Evt.spent()` and `EvtState.spent()`, and
+   * for restored (persisted) events, which are spent in every store.
+   *
+   * Useful in component tests, to check that a component handled the event:
+   *
+   * ```ts
+   * await store.dispatchAndWait(new ScrollFeedToTop());
+   * expect(store.isEventSpent(store.state.scrollToTopEvt)).toBe(true);
+   * ```
+   *
+   * Note an `EvtState` is never spent by components, so for it this only returns true for
+   * `EvtState.spent()` and restored events.
+   */
+  isEventSpent(evt: Evt<any> | EvtState<any>): boolean {
+    return evt._spentAtCreation || (evt instanceof Evt && this._spentEvents.has(evt));
+  }
+
+  // ----------------------------------------------------------------------------------------------
+  // Environment, dependencies and configuration.
+  // ----------------------------------------------------------------------------------------------
+
+  /**
+   * The environment the app is running in (production, staging, testing, etc), as given to the
+   * store constructor, or `undefined`. It never changes while the app runs. Typed `unknown`:
+   * declare a typed getter in your base action, like
+   * `get env() { return this.store.environment as Environment; }`. In components, use
+   * `useEnvironment()`.
+   *
+   * See also: `configuration` and `dependencies`. And `setProp`, for the values that may
+   * change while the app runs.
+   */
+  get environment(): unknown {
+    return this._environment;
+  }
+
+  /**
+   * The configuration of the app (feature flags and other configuration values), created by
+   * the `configuration` factory given to the store constructor, or `undefined`. It's meant to
+   * be immutable. Typed `unknown`: declare a typed getter in your base action, like
+   * `get config() { return this.store.configuration as Config; }`. In components, use
+   * `useConfiguration()`.
+   *
+   * `store.dispose()` disposes it, if it has a `[Symbol.asyncDispose]()`, `[Symbol.dispose]()`
+   * or `dispose()` method. `logOut` keeps it.
+   *
+   * See also: `environment` and `dependencies`.
+   */
+  get configuration(): unknown {
+    return this._configuration;
+  }
+
+  /**
+   * The dependencies of the app (services, repositories, API clients, etc), created by the
+   * `dependencies` factory given to the store constructor, or `undefined`. They belong to the
+   * store: each test creates its own store with its own dependencies. Typed `unknown`: declare
+   * a typed getter in your base action, like
+   * `get deps() { return this.store.dependencies as Dependencies; }`. Components should
+   * usually not need them.
+   *
+   * `store.dispose()` disposes them, if they have a `[Symbol.asyncDispose]()`,
+   * `[Symbol.dispose]()` or `dispose()` method. `logOut` keeps them, since they belong to the
+   * app, and not to the user.
+   *
+   * See also: `environment` and `configuration`. And `mocks`, which mocks actions, while the
+   * dependencies mock services.
+   */
+  get dependencies(): unknown {
+    return this._dependencies;
+  }
+
+  /**
+   * Internal: Disposes the dependencies or the configuration, when they have a
+   * `[Symbol.asyncDispose]()`, `[Symbol.dispose]()` or `dispose()` method. Returns a promise
+   * if the disposal is async, or `null`. Neither throws nor rejects: the errors are reported
+   * with `_reportDisposeError`.
+   */
+  private _disposeInjected(value: unknown, description: string): Promise<void> | null {
+    if (value === null || typeof value !== 'object') return null;
+    const v = value as any;
+
+    let result: unknown;
+    try {
+      if (typeof Symbol.asyncDispose === 'symbol' && typeof v[Symbol.asyncDispose] === 'function') result = v[Symbol.asyncDispose]();
+      else if (typeof Symbol.dispose === 'symbol' && typeof v[Symbol.dispose] === 'function') result = v[Symbol.dispose]();
+      else if (typeof v.dispose === 'function') result = v.dispose();
+      else return null;
+    } catch (error) {
+      this._reportDisposeError(error, description);
+      return null;
+    }
+
+    if (!Store._isPromiseLike(result)) return null;
+
+    return Promise.resolve(result).then(
+      () => undefined,
+      (error) => this._reportDisposeError(error, description),
+    );
+  }
+
+  // ----------------------------------------------------------------------------------------------
+  // Store props.
+  // ----------------------------------------------------------------------------------------------
+
+  /**
+   * Sets a prop in the store. The props hold the long-lived things of the app that are not
+   * state, and must not go in the state: intervals and timeouts, WebSockets, `EventSource`s,
+   * `AbortController`s, listeners (like Firebase's `onSnapshot`, which returns an unsubscribe
+   * function), RxJS subscriptions. The props belong to the store, so that each test, or each
+   * request in server-side rendering, has its own, and so that they can all be closed at
+   * once, with `store.dispose()` (when the app finishes, or at the end of each test), or
+   * with `disposeProps()` and `logOut({ disposeProps: true })`.
+   *
+   * The `key` can be any value. Keys are compared by identity, like the keys of a `Map`, so
+   * equal strings are the same key, but two different objects are not. Read the prop with
+   * `prop(key)`, and remove it with `disposeProp(key)`, which also disposes its value.
+   *
+   * Setting a prop with a key that already exists replaces its value, and disposes the previous
+   * value (if it's a different one), so that dispatching a "start" action twice doesn't leak the
+   * first timer or listener. Setting the same value again only updates its `dispose` option.
+   *
+   * This is also available in actions, as `this.setProp()`:
+   *
+   * ```ts
+   * class StartClock extends Action {
+   *   reduce() {
+   *     const interval = setInterval(() => this.dispatch(new Tick()), 1000);
+   *     this.setProp('clock', interval, { dispose: clearInterval });
+   *     return null;
+   *   }
+   * }
+   *
+   * class StopClock extends Action {
+   *   reduce() {
+   *     this.disposeProp('clock');
+   *     return null;
+   *   }
+   * }
+   * ```
+   *
+   * How a prop is disposed, in order:
+   *
+   * 1. The `dispose` option given to `setProp`, if any, which gets the value.
+   * 2. The value's `[Symbol.asyncDispose]()` or `[Symbol.dispose]()` method (TC39 explicit
+   *    resource management, supported by TypeScript's `using`).
+   * 3. An `AbortController` is aborted.
+   * 4. A `WebSocket`, `EventSource`, `BroadcastChannel` or `MessagePort` is closed, and a
+   *    `Worker` is terminated.
+   * 5. An object with an `unsubscribe()` method (like an RxJS subscription) is unsubscribed.
+   * 6. Otherwise, the value can't be disposed, and it's only removed from the props.
+   *
+   * Note:
+   * - Timers need the `dispose` option, since in browsers `setTimeout` and `setInterval` return
+   *   numbers, which can't be told apart from other numbers. Use `{ dispose: clearInterval }` or
+   *   `{ dispose: clearTimeout }`.
+   * - Functions are not called automatically, since an unsubscribe function looks the same as a
+   *   callback kept in a prop. Use `{ dispose: (unsubscribe) => unsubscribe() }`.
+   * - Promises can't be cancelled, so they're only removed. Keep an `AbortController` in a prop
+   *   to cancel the work.
+   * - A `dispose` that throws, or returns a promise that rejects, doesn't stop the other props
+   *   from being disposed. The error is given to the `errorObserver` (with a `null` action),
+   *   and if there is none, or if it returns an error, the error is logged.
+   * - After `store.dispose()`, a prop that is set (for example, by an async action that was
+   *   still running) is disposed right away, and not kept.
+   *
+   * See also: `prop`, `props`, `disposeProp`, `disposeProps` and `dispose`.
+   */
+  setProp<V>(key: unknown, value: V, options?: SetPropOptions<V>): void {
+    const dispose = options?.dispose as PropDispose | undefined;
+
+    // A disposed store doesn't keep props, so that they don't leak.
+    if (this._disposed) {
+      Store._logLazy(() => `The prop ${Store._describeKey(key)} was set after the store was disposed, ` +
+        `so its value was disposed right away, and not kept.`);
+      void this._disposeValue(key, value, dispose);
+      return;
+    }
+
+    const hadKey = this._props.has(key);
+    const previous = this._props.get(key);
+    const previousDispose = this._propDisposers.get(key);
+
+    this._props.set(key, value);
+    if (dispose !== undefined) this._propDisposers.set(key, dispose);
+    else this._propDisposers.delete(key);
+
+    // Replacing a value disposes the previous one, so that it doesn't leak. This is done after
+    // the new value is in place, in case the disposal reads the props.
+    if (hadKey && !Object.is(previous, value)) void this._disposeValue(key, previous, previousDispose);
+  }
+
+  /**
+   * Returns the prop with the given key, or `undefined` if there is none. See `setProp`.
+   *
+   * Give it the type of the value: `const interval = store.prop<number>('clock')`.
+   *
+   * This is also available in actions, as `this.prop()`.
+   */
+  prop<V = unknown>(key: unknown): V | undefined {
+    return this._props.get(key) as V | undefined;
+  }
+
+  /**
+   * All the props of the store (see `setProp`), with their keys and values, in the order they
+   * were set. It's a read-only view: use `setProp`, `disposeProp` and `disposeProps` to change
+   * them. Useful in tests.
+   *
+   * This is also available in actions, as `this.props`.
+   */
+  get props(): ReadonlyMap<unknown, unknown> {
+    return this._props;
+  }
+
+  /**
+   * Disposes the prop with the given key, and removes it from the props. See `setProp` for
+   * how the value is disposed. Does nothing if there is no prop with that key.
+   *
+   * It doesn't wait for an async disposal (one that returns a promise) to finish. If that
+   * disposal fails, the error is given to the `errorObserver` (with a `null` action), or logged.
+   * Use `store.dispose()` to wait for all the async disposals.
+   *
+   * This is also available in actions, as `this.disposeProp()`.
+   *
+   * ```ts
+   * class StopClock extends Action {
+   *   reduce() {
+   *     this.disposeProp('clock');
+   *     return null;
+   *   }
+   * }
+   * ```
+   */
+  disposeProp(key: unknown): void {
+    if (!this._props.has(key)) return;
+    const value = this._props.get(key);
+    const dispose = this._propDisposers.get(key);
+    this._props.delete(key);
+    this._propDisposers.delete(key);
+    void this._disposeValue(key, value, dispose);
+  }
+
+  /**
+   * Disposes the props, and removes them from the props. See `setProp` for how the values are
+   * disposed. The values that can't be disposed are only removed.
+   *
+   * - Without a `predicate`, all the props are disposed and removed.
+   * - With a `predicate`, it's called with the key and the value of each prop, and only the
+   *   props for which it returns `true` are disposed and removed. The others are kept, and not
+   *   disposed.
+   *
+   * The props are disposed in the order they were set. A disposal that throws doesn't stop the
+   * others. It doesn't wait for the async disposals (the ones that return a promise) to finish.
+   * Use `store.dispose()` to wait for them.
+   *
+   * This is also available in actions, as `this.disposeProps()`.
+   *
+   * ```ts
+   * // Disposes all props.
+   * store.disposeProps();
+   *
+   * // Disposes only the props whose key starts with 'user'.
+   * store.disposeProps((key, value) => String(key).startsWith('user'));
+   * ```
+   *
+   * See also: `disposeProp`, to dispose a single prop by its key, and `logOut`, which can
+   * dispose the props with its `disposeProps` option.
+   */
+  disposeProps(predicate?: PropPredicate): void {
+    void this._disposeProps(predicate);
+  }
+
+  /**
+   * Internal: Disposes the selected props (all of them, without a predicate), and returns a
+   * promise that resolves when their async disposals finish. It never rejects: the errors are
+   * reported with `_reportDisposeError`.
+   */
+  private _disposeProps(predicate?: PropPredicate): Promise<void> {
+    const promises: Promise<void>[] = [];
+
+    // A snapshot, since a disposal may set or dispose other props.
+    for (const [key, value] of [...this._props.entries()]) {
+
+      // Skips a prop that was disposed, or replaced, by an earlier disposal.
+      if (!this._props.has(key) || !Object.is(this._props.get(key), value)) continue;
+
+      if (predicate !== undefined && !predicate(key, value)) continue;
+
+      const dispose = this._propDisposers.get(key);
+      this._props.delete(key);
+      this._propDisposers.delete(key);
+
+      const promise = this._disposeValue(key, value, dispose);
+      if (promise !== null) promises.push(promise);
+    }
+
+    return (promises.length === 0) ? Promise.resolve() : Promise.all(promises).then(() => undefined);
+  }
+
+  /**
+   * Internal: Disposes the value of a prop, as described in `setProp`. Returns a promise if the
+   * disposal is async, or `null`. Neither throws nor rejects: the errors are reported with
+   * `_reportDisposeError`.
+   */
+  private _disposeValue(key: unknown, value: unknown, dispose: PropDispose | undefined): Promise<void> | null {
+    const description = `the prop ${Store._describeKey(key)}`;
+    let result: unknown;
+    try {
+      if (dispose !== undefined) result = dispose(value);
+      else result = Store._disposeByType(value);
+    } catch (error) {
+      this._reportDisposeError(error, description);
+      return null;
+    }
+
+    if (!Store._isPromiseLike(result)) return null;
+
+    return Promise.resolve(result).then(
+      () => undefined,
+      (error) => this._reportDisposeError(error, description),
+    );
+  }
+
+  /**
+   * Internal: Disposes the value by its type (steps 2 to 5 of `setProp`), and returns the
+   * result of the disposal (a promise, if it's async). Returns `undefined` if the value can't
+   * be disposed.
+   */
+  private static _disposeByType(value: unknown): unknown {
+    if (value === null || typeof value !== 'object') return undefined;
+    const v = value as any;
+
+    // TC39 explicit resource management.
+    if (typeof Symbol.asyncDispose === 'symbol' && typeof v[Symbol.asyncDispose] === 'function')
+      return v[Symbol.asyncDispose]();
+    if (typeof Symbol.dispose === 'symbol' && typeof v[Symbol.dispose] === 'function')
+      return v[Symbol.dispose]();
+
+    // Browser and Node types. Each global may not exist in the runtime.
+    if (Store._isInstanceOfGlobal(v, 'AbortController')) return v.abort();
+    if (Store._isInstanceOfGlobal(v, 'WebSocket')
+      || Store._isInstanceOfGlobal(v, 'EventSource')
+      || Store._isInstanceOfGlobal(v, 'BroadcastChannel')
+      || Store._isInstanceOfGlobal(v, 'MessagePort')) return v.close();
+    if (Store._isInstanceOfGlobal(v, 'Worker')) return v.terminate();
+
+    // RxJS subscriptions, and others.
+    if (typeof v.unsubscribe === 'function') return v.unsubscribe();
+
+    return undefined;
+  }
+
+  // True if the global class with the given name exists in the runtime, and the value is an
+  // instance of it.
+  private static _isInstanceOfGlobal(value: object, name: string): boolean {
+    const type = (globalThis as any)[name];
+    return typeof type === 'function' && value instanceof type;
+  }
+
+  private static _isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+    return value !== null && (typeof value === 'object' || typeof value === 'function')
+      && typeof (value as any).then === 'function';
+  }
+
+  // Reports the error of a disposal (of a prop, of the dependencies or of the configuration):
+  // to the `errorObserver` (with a `null` action), if there is one. If it returns an error (or
+  // there is no observer), the error is logged. Never throws. The `description` is what was
+  // being disposed, like `the prop 'clock'` or `the dependencies`.
+  private _reportDisposeError(error: unknown, description: string): void {
+    if (this._errorObserver) {
+      error = this._observeError(error, error, null);
+      if (error === null) return;
+    }
+    Store._logLazy(() => `Disposing ${description} threw an error: ${error}. ` +
+      `The error was ignored, and the other disposals were still done.`);
+  }
+
+  // Describes a prop key for log messages. Never throws.
+  private static _describeKey(key: unknown): string {
+    return (typeof key === 'string') ? `'${key}'` : Store._describeValue(key);
+  }
+
+  // ----------------------------------------------------------------------------------------------
+  // Disposing the store.
+  // ----------------------------------------------------------------------------------------------
+
+  /**
+   * True after `dispose()` was called. A disposed store doesn't accept new actions, and
+   * doesn't keep new props.
+   */
+  get isDisposed(): boolean {
+    return this._disposed;
+  }
+
+  /**
+   * Ends the store, for tests and app shutdown:
+   *
+   * ```ts
+   * afterEach(() => store.dispose());
+   * ```
+   *
+   * It does the following, in order:
+   *
+   * 1. Shuts down the store (`setShutDown(true)`), so that the actions dispatched from now on
+   *    are aborted. This also calls `clearInternalActionProps()`, which stops the polling, the
+   *    retries, the debounce timers, the sequential queues, and the other action features.
+   * 2. Cancels the `dispatchWhen`s that are still waiting, so their actions are not dispatched,
+   *    and their `onTimeout` is not called.
+   * 3. Pauses the persistor, and cancels its pending save (a state change waiting for the
+   *    throttle). A save that is already running still finishes. If you want the current state
+   *    saved first, call `await store.persistAndPause()` before.
+   * 4. Disposes all the props (see `setProp`), and removes them.
+   * 5. Disposes the `dependencies`, and then the `configuration` (see the constructor), when
+   *    they have a `[Symbol.asyncDispose]()`, `[Symbol.dispose]()` or `dispose()` method. They
+   *    can still be read from the store after that.
+   *
+   * The returned promise resolves when the async disposals finish. It never rejects: a
+   * disposal that fails is given to the `errorObserver`, or logged, and the other disposals
+   * are still done.
+   *
+   * The store can't be used again: `setShutDown(false)` doesn't turn it back on, and a prop
+   * set after it is disposed right away. Calling `dispose()` again does nothing. Note the
+   * actions that are already running still finish, and may still change the state.
+   *
+   * The store also implements `[Symbol.dispose]` and `[Symbol.asyncDispose]`, so that tests
+   * can use TypeScript's explicit resource management: `await using store = createStore(...)`.
+   */
+  async dispose(): Promise<void> {
+    if (this._disposed) return;
+    this._disposed = true;
+    this.setShutDown(true);
+    this._cancelAllDispatchWhen();
+    this._processPersistence?.dispose();
+    await this._disposeProps();
+    await this._disposeInjected(this._dependencies, 'the dependencies');
+    await this._disposeInjected(this._configuration, 'the configuration');
+  }
+
+  /**
    * Function `Store.describeStateChange()` returns a string describing only the differences between
    * two given objects.
    *
@@ -3057,14 +3644,24 @@ export class Store<St> {
                   initialState,
                   throttle = 3000,
                   actionsThrottle = 6000,
+                  disposeProps = false,
                 }: {
     /** @deprecated Ignored. The store is always `this`. */
     store?: Store<St>,
     initialState: St,
     throttle?: number,
     actionsThrottle?: number,
+    /**
+     * Whether to dispose the store props (see `setProp`). By default, they are kept, since
+     * some of them belong to the app, and not to the user (a connectivity listener, for
+     * example). Pass `true` to dispose all of them, like `disposeProps()`, or a predicate to
+     * dispose only the ones it selects, like `disposeProps(predicate)`. They are disposed
+     * right away, when logOut starts, so that the previous user's timers and listeners stop,
+     * and logOut waits for the async disposals.
+     */
+    disposeProps?: boolean | PropPredicate,
   }): Promise<void> {
-    return this._logOut(this._processPersistence, initialState, throttle, actionsThrottle);
+    return this._logOut(this._processPersistence, initialState, throttle, actionsThrottle, disposeProps);
   }
 
   /**
@@ -3075,6 +3672,7 @@ export class Store<St> {
     initialState: St,
     throttle: number,
     actionsThrottle: number,
+    disposeProps: boolean | PropPredicate = false,
   ): Promise<void> {
 
     // Throws if the persisted state is still being read. In this case, nothing is changed.
@@ -3084,6 +3682,13 @@ export class Store<St> {
     // The store doesn't start any new actions until logOut finishes.
     this._logOutsRunning++;
     this.clearInternalActionProps();
+
+    // The props of the previous user are disposed right away, so that their timers and
+    // listeners stop. The async disposals are awaited below.
+    const propsDisposal: Promise<void> | null =
+      (disposeProps === true) ? this._disposeProps()
+        : (typeof disposeProps === 'function') ? this._disposeProps(disposeProps)
+          : null;
 
     // The actions dispatched before this point belong to the previous user. When they finish,
     // their result is discarded, and the actions they dispatch are not accepted.
@@ -3096,6 +3701,9 @@ export class Store<St> {
     let failure: { error: any } | null;
 
     try {
+      // Waits for the async disposals of the props. Note it never rejects.
+      if (propsDisposal !== null) await propsDisposal;
+
       // If the state is currently being persisted, we can't delete it right now.
       await persistence?._waitWhilePersisting();
 
@@ -3937,7 +4545,7 @@ export class Store<St> {
     const cancel = () => {
       cancelTimer();
       this._waitConditions = this._waitConditions.filter(c => c !== entry);
-      Store._logLazy(() => `logOut cancelled the dispatchWhen of ${action}.`);
+      Store._logLazy(() => `The dispatchWhen of ${action} was cancelled by logOut, or by disposing the store.`);
     };
 
     const fail = (error: unknown) => {
@@ -4137,4 +4745,18 @@ function _settleTimeout(
       reject(error);
     }
   }
+}
+
+// Adds the explicit resource management methods to the store (see the `Store` interface
+// above), if the runtime has the symbols. Older runtimes don't, and `using` can't be used with
+// them anyway.
+if (typeof Symbol.dispose === 'symbol') {
+  Store.prototype[Symbol.dispose] = function (this: Store<any>): void {
+    void this.dispose();
+  };
+}
+if (typeof Symbol.asyncDispose === 'symbol') {
+  Store.prototype[Symbol.asyncDispose] = function (this: Store<any>): Promise<void> {
+    return this.dispose();
+  };
 }

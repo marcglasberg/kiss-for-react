@@ -3,6 +3,7 @@
 
 import { BUILTIN_PREFIX } from './constant';
 import { setHiddenProperty } from './general';
+import { Evt, EvtState } from '../Evt';
 
 /** Serializes or deserializes a nested value. */
 type Converter = (value: any) => any;
@@ -258,6 +259,27 @@ if (typeof SharedArrayBuffer !== 'undefined') {
     },
   });
 }
+
+// Kiss events. They are always saved as spent, without their value, and restored as
+// `Evt.spent()` and `EvtState.spent()`, so that an old event doesn't fire when the app starts.
+// The value is not saved, as it may not be serializable (and a spent event has no value).
+// Saved as built-in types, so that they don't need to be listed in the `ClassPersistor`.
+_BUILTIN_TYPES.push(
+  {
+    constructor: Evt,
+    name: 'Evt',
+    encode: () => undefined,
+    decode: () => Evt.spent(),
+    hasItemProperties: true, // Nothing else is saved: not the value, nor `_spentAtCreation`.
+  },
+  {
+    constructor: EvtState,
+    name: 'EvtState',
+    encode: () => undefined,
+    decode: () => EvtState.spent(),
+    hasItemProperties: true,
+  },
+);
 
 const _BY_CONSTRUCTOR: ReadonlyMap<unknown, BuiltinType> =
   new Map(_BUILTIN_TYPES.map((type) => [type.constructor, type]));

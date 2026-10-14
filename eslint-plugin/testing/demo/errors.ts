@@ -2,6 +2,7 @@
 /* eslint-disable kiss-for-react/user-exception-without-cause */
 /* eslint-disable kiss-for-react/throw-in-error-observer */
 /* eslint-disable kiss-for-react/after-throws */
+/* eslint-disable kiss-for-react/error-observer-without-environment */
 
 // Demonstrates the "Errors" rules of the Kiss ESLint plugin (eslint-plugin-kiss-for-react).
 // Each warning is marked with a comment right above the line it underlines: the rule name, then
@@ -12,6 +13,9 @@
 // line. This file is not meant to run. See README.md in this directory.
 //
 // The components here use `createElement` instead of JSX, so that this file can be a `.ts` file.
+//
+// The last rule (`error-observer-without-environment`) is opt-in: it's not in
+// `kiss.configs.recommended`, but the demo config turns it on.
 
 import { createElement, useEffect, useState } from 'react';
 import {
@@ -23,6 +27,11 @@ import {
   UserExceptionAction,
 } from 'kiss-for-react';
 import { Action, fetchName, State } from './state';
+
+enum Environment {
+  production,
+  testing,
+}
 
 function parseNumber(text: string): number {
   const value = Number(text);
@@ -246,6 +255,7 @@ abstract class MyPersistor extends Persistor<State> {
 
 const storeWithoutCause = createStore<State>({
   initialState: State.initialState,
+  environment: Environment.production,
   errorObserver: ({ error }) =>
     // kiss-for-react/user-exception-without-cause
     // (In the store's `errorObserver`)
@@ -309,6 +319,7 @@ class NetworkError extends Error {}
 
 const storeWithThrow = createStore<State>({
   initialState: State.initialState,
+  environment: Environment.production,
   errorObserver: ({ error }) => {
     // kiss-for-react/throw-in-error-observer
     // (Kiss uses it like a returned error, but returning it makes clear that it replaces the error)
@@ -320,6 +331,7 @@ const storeWithThrow = createStore<State>({
 
 const storeWithMethod = new Store<State>({
   initialState: State.initialState,
+  environment: Environment.production,
   errorObserver({ error }) {
     // kiss-for-react/throw-in-error-observer
     // (A method, in `new Store`)
@@ -339,11 +351,13 @@ function errorObserver({ error }: { error: any }) {
 
 const storeWithFunction = createStore<State>({
   initialState: State.initialState,
+  environment: Environment.production,
   errorObserver,
 });
 
 const storeWithReturnType = createStore<State>({
   initialState: State.initialState,
+  environment: Environment.production,
   errorObserver: ({ error }): UserException => {
     if (error instanceof UserException) return error;
     // kiss-for-react/throw-in-error-observer
@@ -354,6 +368,7 @@ const storeWithReturnType = createStore<State>({
 
 const storeWithTry = createStore<State>({
   initialState: State.initialState,
+  environment: Environment.production,
   errorObserver: ({ error }) => {
     try {
       if (error === null) throw new Error('No error'); // OK: caught below.
@@ -365,6 +380,26 @@ const storeWithTry = createStore<State>({
       throw new Error('Never called');
     };
     console.log(check);
+    return error;
+  },
+});
+
+// ---------------------------------------------------------------------------------------------
+// error-observer-without-environment (opt-in)
+
+
+const storeWithoutEnvironment = createStore<State>({
+  initialState: State.initialState,
+  // kiss-for-react/error-observer-without-environment
+  // (Pass the `environment` too, so the observer can handle errors differently in production and in tests)
+  errorObserver: ({ error }) => error,
+});
+
+const storeWithEnvironment = createStore<State>({
+  initialState: State.initialState,
+  environment: Environment.production, // OK: the observer can read `store.environment`.
+  errorObserver: ({ error, store }) => {
+    if (store.environment === Environment.production) console.log('Sent to the monitoring service:', error);
     return error;
   },
 });

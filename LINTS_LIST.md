@@ -18,10 +18,10 @@ rules that only exist in Kiss.
 
 | Status      | Count                           |
 |-------------|---------------------------------|
-| Implemented | 53 (42 from AsyncRedux, 11 new) |
-| Skipped     | 31 (from AsyncRedux)            |
+| Implemented | 55 (44 from AsyncRedux, 11 new) |
+| Skipped     | 29 (from AsyncRedux)            |
 
-Total: the 73 AsyncRedux rules (42 implemented, 31 skipped), and 11 new rules (all
+Total: the 73 AsyncRedux rules (44 implemented, 29 skipped), and 11 new rules (all
 implemented).
 
 All rules planned here are implemented, except two that turned out not to make sense in Kiss
@@ -56,7 +56,7 @@ in the details, is documented in [`eslint-plugin/README.md`](eslint-plugin/READM
 | 20 | `equality_missing_inherited_field`        | -                                                                             | Skipped, same reason.                                                                                                                                                        |
 | 21 | `equatable_props_missing_field`           | -                                                                             | Skipped. There's no `Equatable` in TypeScript.                                                                                                                               |
 | 22 | `extend_base_action`                      | [`extend-base-action`](#extend-base-action)                                   | Implemented. |
-| 23 | `dependencies_cast_in_action`             | -                                                                             | Skipped. Kiss has no `environment`, `dependencies` or `configuration` in the store.                                                                                          |
+| 23 | `dependencies_cast_in_action`             | [`dependencies-cast-in-action`](#dependencies-cast-in-action)                 | Implemented. Kiss now has `environment`, `dependencies` and `configuration` in the store. |
 | 24 | `prefer_return_null`                      | [`prefer-return-null`](#prefer-return-null)                                   | Implemented. |
 | 25 | `stale_state_after_await`                 | `stale-state-after-await`                                                     | Implemented. |
 | 26 | `after_throws`                            | [`after-throws`](#after-throws)                                               | Implemented. |
@@ -77,9 +77,9 @@ in the details, is documented in [`eslint-plugin/README.md`](eslint-plugin/READM
 | 41 | `prefer_immutable_collections`            | [`prefer-readonly-collections`](#prefer-readonly-collections)                 | Implemented, adapted: TypeScript's `readonly T[]`, `ReadonlyMap` and `ReadonlySet`, instead of `fast_immutable_collections`. |
 | 42 | `non_state_object_in_state`               | [`non-state-object-in-state`](#non-state-object-in-state)                     | Implemented, with the TypeScript/React versions of these objects. |
 | 43 | `missing_initial_state`                   | [`missing-initial-state`](#missing-initial-state)                             | Implemented, opt-in, since the Kiss docs say a static `initialState` is optional, and often use `new State()` directly. |
-| 44 | `event_name_suffix`                       | -                                                                             | Skipped. Kiss has no events (`Evt`).                                                                                                                                         |
-| 45 | `event_not_spent_initially`               | -                                                                             | Skipped, same reason.                                                                                                                                                        |
-| 46 | `event_persisted`                         | -                                                                             | Skipped, same reason.                                                                                                                                                        |
+| 44 | `event_name_suffix`                       | [`event-name-suffix`](#event-name-suffix)                                     | Implemented. Kiss now has events (`Evt` and `EvtState`). |
+| 45 | `event_not_spent_initially`               | [`event-not-spent-initially`](#event-not-spent-initially)                     | Implemented. Also checks the `initialState` given to the store. |
+| 46 | `event_persisted`                         | -                                                                             | Skipped. The `ClassPersistor` saves events as spent, so they can be in a persisted state. A custom persistor is arbitrary code, so whether it handles events can't be checked. |
 | 47 | `dispatch_in_build`                       | [`dispatch-in-render`](#dispatch-in-render)                                   | Implemented. React's "build" is "render". |
 | 48 | `prefer_dispatch_without_context`         | -                                                                             | Skipped. In React, dispatching always goes through hooks or the store, never a `context`.                                                                                    |
 | 49 | `context_read_in_build`                   | [`store-state-in-render`](#store-state-in-render)                             | Implemented, adapted: reading `store.state` while rendering, instead of `context.read()`. |
@@ -91,7 +91,7 @@ in the details, is documented in [`eslint-plugin/README.md`](eslint-plugin/READM
 | 55 | `implements_persistor`                    | -                                                                             | Skipped. With `implements Persistor`, TypeScript makes the class implement all members of `Persistor`, including the error queue (`addError`), so nothing silently breaks. |
 | 56 | `throw_in_read_state`                     | [`throw-in-read-state`](#throw-in-read-state)                                 | Skipped. In Kiss, `addError` and `return null` don't keep the saved data either (Kiss then saves the initial state), and the `Persistor` docs say `readState` should throw when the saved state is corrupted. |
 | 57 | `initial_state_not_saved`                 | -                                                                             | Skipped. Kiss reads the saved state, and calls `saveInitialState`, by itself.                                                                                                |
-| 58 | `timer_or_stream_not_in_props`            | -                                                                             | Skipped. Kiss has no store props.                                                                                                                                            |
+| 58 | `timer_or_stream_not_in_props`            | -                                                                             | Skipped for now. Kiss has store props (`setProp`) since 2.0.0, so this rule can now be written: report timers and listeners kept in module variables or static fields of actions, and suggest `setProp`. Also consider reporting `setInterval` or `setTimeout` passed to `setProp` without the `dispose` option. |
 | 59 | `expect_without_waiting`                  | [`expect-without-waiting`](#expect-without-waiting)                           | Implemented. |
 | 60 | `vm_create_from_reused_factory`           | -                                                                             | Skipped. Kiss has no view-model factories. But see the new rule [`dispatch-same-action-twice`](#dispatch-same-action-twice), which is similar.                              |
 | 61 | `action_status_details_in_production`     | [`action-status-details-in-production`](#action-status-details-in-production) | Implemented. |
@@ -103,7 +103,7 @@ in the details, is documented in [`eslint-plugin/README.md`](eslint-plugin/READM
 | 67 | `prefer_dispatch_with_context`            | -                                                                             | Skipped, as `prefer_dispatch_without_context`.                                                                                                                               |
 | 68 | `avoid_abort_dispatch`                    | [`avoid-abort-dispatch`](#avoid-abort-dispatch-and-avoid-wrap-reduce)         | Implemented, opt-in. The Kiss docs also call it "a complex power feature that you may not need to learn". |
 | 69 | `avoid_wrap_reduce`                       | [`avoid-wrap-reduce`](#avoid-abort-dispatch-and-avoid-wrap-reduce)            | Implemented, opt-in. Same. |
-| 70 | `global_error_observer_without_env`       | -                                                                             | Skipped. Kiss has no `environment`.                                                                                                                                          |
+| 70 | `global_error_observer_without_env`       | [`error-observer-without-environment`](#error-observer-without-environment) | Implemented, opt-in. Kiss now has `environment`. Named after Kiss's `errorObserver`. |
 | 71 | `missing_key_params`                      | [`missing-key-params`](#missing-key-params)                                   | Implemented, opt-in. For `nonReentrant` actions, `OptimisticCommand`, `OptimisticSync` and `OptimisticSyncWithPush`. |
 | 72 | `route_in_state`                          | [`route-in-state`](#route-in-state)                                           | Implemented, opt-in, with React's router names. |
 | 73 | `action_without_to_string`                | -                                                                             | Skipped. Kiss's `KissAction.toString()` already shows all fields of the action.                                                                                              |
@@ -430,8 +430,8 @@ state classes). Not reported in tests. Quick fix (suggestion): change the type t
 Warning. A field of a state class that holds an object that is not state:
 
 - A `Promise`, a timer (`ReturnType<typeof setTimeout>`, `NodeJS.Timeout`), an
-  `AbortController`, a `WebSocket`, an `EventSource` or a `Worker`. Keep these outside the
-  state, for example in a module, or in the action that uses them.
+  `AbortController`, a `WebSocket`, an `EventSource` or a `Worker`. Keep these outside the state,
+  in a store prop (`this.setProp(key, value)` in the action that creates them).
 - A DOM node, like an `HTMLElement`, a React ref (`RefObject`), or a React element
   (`ReactNode`). Keep these in the component.
 
@@ -458,6 +458,48 @@ const store = createStore<State>({ initialState: State.initialState });     // O
 Reported when the state class has no static `initialState` (property, getter or method), or
 when the store calls the constructor directly. Not reported for states that are not
 classes, like `createStore<number>`, or in tests.
+
+### event-name-suffix
+
+Warning. A field of a class whose type is `Evt` or `EvtState` (or whose initializer creates
+one), and whose name doesn't end with `Evt`:
+
+```ts
+class State {
+  readonly scrollToTop: Evt;             // Warning: name it `scrollToTopEvt`.
+  readonly changeTextEvent: Evt<string>; // Warning: name it `changeTextEvt`.
+  readonly scrollToTopEvt: Evt;          // OK
+}
+```
+
+The suffix tells, where the field is used, that it's an event that fires once, and not a value
+to read. Reported in any class, not only state classes, since an `Evt` field is always meant
+for the state. No quick fix: renaming needs all the usages. Not reported in tests.
+
+### event-not-spent-initially
+
+Warning. A `new Evt()` or `new EvtState()` in the initial state: in a static `initialState`
+(property, getter or method) of a class, or in the `initialState` given to `createStore` or
+`new Store`. A new event in the initial state fires when the first component that uses it
+mounts, so the initial state should use `Evt.spent()` (or `EvtState.spent()`):
+
+```ts
+class State {
+  static initialState = new State(new Evt());     // Warning
+  static initialState = new State(Evt.spent());   // OK
+}
+```
+
+Quick fix (suggestion): replace it with `Evt.spent()` (keeping the type arguments, if any:
+`new Evt<string>('x')` becomes `Evt.spent<string>()`). Not reported in tests.
+
+Also considered, but not done:
+
+- A boolean or counter field used as an event (a `useEffect` that depends on a selected value,
+  and only does UI work). Hard to detect reliably.
+- Reading `evt.value` of an `Evt` in a component without `useEvent`, which never spends it.
+  Reading the value is legitimate in tests and in actions, and in components it's hard to tell
+  from a value used to render.
 
 ### dispatch-in-render
 
@@ -854,3 +896,49 @@ already reports the call when the override is `protected` too, but an override w
 `protected` is public. Calls with `this` or `super`, inside the action, are not reported.
 Without type information, only `new X(...)` (or a `const` initialized with it) of an action
 class declared in the same file is reported.
+
+### dependencies-cast-in-action
+
+From AsyncRedux's `dependencies_cast_in_action`, added with the store's `environment`,
+`dependencies` and `configuration`. Warning (AsyncRedux: info) for a cast of
+`store.environment`, `store.dependencies` or `store.configuration` inside an action (`as X`
+or `<X>`). They are typed `unknown`, and the docs recommend a typed getter for each, once,
+in the base action:
+
+```ts
+abstract class Action extends KissAction<State> {
+  get deps() { return this.store.dependencies as Dependencies; } // OK: the base action.
+}
+
+class LoadUser extends Action {
+  async reduce() {
+    const user = await (this.store.dependencies as Dependencies).api.loadUser(); // Warning
+    const user = await this.deps.api.loadUser();                                 // OK
+  }
+}
+```
+
+A chain of casts (`as unknown as Dependencies`) is one warning, on the whole chain. The
+store is `this.store`, or, with types, any expression of type `Store`. Not reported in
+abstract classes, outside actions, or in tests. No quick fix: the getter has to be declared
+in the base action.
+
+### error-observer-without-environment
+
+From AsyncRedux's `global_error_observer_without_env`, added with the store's `environment`.
+Opt-in warning (AsyncRedux: opt-in info) for a store created (`createStore` or `new Store`)
+with an `errorObserver`, but no `environment`. The docs suggest passing both, so that the
+observer can handle the errors differently in production, staging and tests:
+
+```ts
+createStore<State>({
+  initialState: State.initialState,
+  errorObserver: ({ error, store }) => { ... },
+  environment: Environment.production, // Without it: Warning
+});
+```
+
+Not reported in tests, nor when the options are spread from another object, which may have
+the environment. Also considered, but not done: a rule against importing services directly
+in actions, now that the dependencies are the recommended way. There's no reliable way to
+tell a service import from any other import.

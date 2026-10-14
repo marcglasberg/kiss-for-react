@@ -10,9 +10,9 @@ store-side code instead of AsyncRedux's mixins).
 
 | Feature                                                                        | Status  | Priority |
 |--------------------------------------------------------------------------------|---------|----------|
-| [Environment, dependencies and configuration](#1-environment-dependencies-and-configuration) | Planned | Medium-high |
-| [Store props, and disposing the store](#2-store-props-and-disposing-the-store)  | Planned | Medium   |
-| [Events (`Evt`)](#3-events-evt)                                                 | Planned | Medium   |
+| [Environment, dependencies and configuration](#1-environment-dependencies-and-configuration) | Done    | Medium-high |
+| [Store props, and disposing the store](#2-store-props-and-disposing-the-store)  | Done    | Medium   |
+| [Events (`Evt`)](#3-events-evt)                                                 | Done    | Medium   |
 
 When implementing any of these, also:
 
@@ -23,6 +23,27 @@ When implementing any of these, also:
 ---
 
 ## 1. Environment, dependencies and configuration
+
+**Status: implemented** (`environment`, `configuration` and `dependencies` in
+`ConstructorParams` and as getters of `Store`, in `src/Store.tsx`; `useEnvironment` and
+`useConfiguration` in `src/Hooks.tsx`; BDDs in `__tests__/bdd.Environment.test.ts`). Decisions
+taken, from the list below:
+
+- **Typing:** `unknown`, plus typed getters in the base action, like AsyncRedux. The hooks take
+  a type parameter (`useEnvironment<Environment>()`), like `store.prop<V>()`. No `Register`
+  interface, and no generic parameters on `Store` or `KissAction`.
+- **Names:** AsyncRedux's `environment`, `dependencies` and `configuration`.
+- **Creation:** the factories run in the store constructor, after the `errorObserver` is set and
+  before the persisted state is read (the `errorObserver` may read them). The configuration is
+  created first. A factory that throws makes the store creation fail.
+- **Disposal:** `store.dispose()` disposes the dependencies, then the configuration, after the
+  props, when they have `[Symbol.asyncDispose]()`, `[Symbol.dispose]()` or `dispose()`. It waits
+  for the async disposals, and a failure is given to the `errorObserver` (with a `null` action),
+  or logged, like the props. They can still be read after that.
+- **Mocks and `logOut`:** `logOut` and `clearInternalActionProps` keep them.
+- **Lint rules:** `dependencies-cast-in-action` and `error-observer-without-environment` (opt-in)
+  were added. A rule against importing services directly in actions was not done: there's no
+  reliable way to tell a service import from any other import.
 
 ### Why
 
@@ -133,6 +154,35 @@ are the recommended way (probably opt-in).
 ---
 
 ## 2. Store props, and disposing the store
+
+**Status: implemented** (`setProp`, `prop`, `props`, `disposeProp` and `disposeProps` in
+`src/Store.tsx` and `src/KissAction.ts`, `store.dispose()`, `store.isDisposed`, BDDs in
+`__tests__/bdd.StoreProps.test.ts` and `__tests__/bdd.StoreDispose.test.ts`). Decisions taken,
+from the lists below:
+
+- Replacing a prop: `setProp` with an existing key disposes the previous value, if it's a
+  different one. Setting the same value again only updates its `dispose` option.
+- Disposal errors: a disposal that throws (or rejects) doesn't stop the others. The error is
+  given to the `errorObserver` with a `null` action (like persistor errors). If there is none,
+  or if it returns an error, the error is logged. `disposeProp`, `disposeProps` and `dispose()`
+  never throw or reject because of it.
+- `disposeProps()` without a predicate disposes and removes **all** props, unlike AsyncRedux,
+  which keeps the ones that are not timers or streams. In JavaScript, a timer can't be told from
+  a number, so "disposable" is not a useful criterion.
+- `disposeProp` and `disposeProps` return `void`, as proposed. The async disposals are not
+  awaited by them, but `store.dispose()` (and `logOut`) waits for all of them.
+- `store.dispose()`: shuts down the store, cancels the waiting `dispatchWhen`s, pauses the
+  persistor and cancels its pending save (a running save still finishes), and disposes all
+  props. It's final: `setShutDown(false)` doesn't turn the store back on, and a prop set after
+  it (by an async action still running) is disposed right away and not kept. The dependencies
+  and the configuration (section 1) are not disposed, since they don't exist yet. The store
+  implements `[Symbol.dispose]` and `[Symbol.asyncDispose]` (added to the prototype only if the
+  runtime has the symbols), so tests can write `await using store = createStore(...)`.
+- `logOut`: keeps the props by default. New option `disposeProps: true | predicate`, which
+  disposes them when logOut starts, and waits for the async disposals.
+- Lint rules: the message of `non-state-object-in-state` now suggests `setProp`. The rule for
+  timers and listeners in module variables or static fields (`LINTS_LIST.md` row 58), and the
+  one for `setInterval`/`setTimeout` passed to `setProp` without `dispose`, are still to do.
 
 ### Why
 
@@ -266,6 +316,21 @@ like a connectivity listener, should survive a logout).
 ---
 
 ## 3. Events (`Evt`)
+
+**Status: implemented** (`src/Evt.ts`, `useEvent` and `useLayoutEvent` in `src/Hooks.tsx`,
+`store.isEventSpent`, BDDs in `__tests__/bdd.Events.test.ts` and
+`__tests__/bdd.EventsPersistence.test.ts`). Decisions taken, from the list at the end:
+
+- Effect timing: two hooks, `useEvent` (a `useEffect`) and `useLayoutEvent` (a `useLayoutEffect`).
+- Selector shape: one event per call.
+- `Event.map`, `Event.from` and `consumeFrom`: not ported.
+- `logOut`: nothing to do (the `WeakSet` needs no clearing). But an `EvtState` in the initial
+  state fires after `logOut` unless it's `EvtState.spent()`, so `EvtState.spent()` exists too.
+- `value` is typed `T | undefined`, since spent and restored events have no value.
+- Persistence: `Evt` and `EvtState` are built-in types of the serializer (saved as `@Evt` and
+  `@EvtState`, without their value), so they don't need to be listed in the `ClassPersistor`.
+- Lint rules: `event-name-suffix` and `event-not-spent-initially` were added. `event_persisted`
+  is not needed with the `ClassPersistor`, and can't be checked for custom persistors.
 
 ### Why
 

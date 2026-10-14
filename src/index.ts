@@ -20,10 +20,11 @@ import {
   SyncReducer,
   UpdateStateAction,
 } from './KissAction';
-import { Store, createStore, ShowUserException, StoreProvider } from './Store';
+import { Store, createStore, ShowUserException, StoreProvider, PropDispose, PropPredicate, SetPropOptions } from './Store';
 import {
   useAllState,
   useClearExceptionFor,
+  useConfiguration,
   useDispatch,
   useDispatchAll,
   useDispatchAndWait,
@@ -31,10 +32,13 @@ import {
   useDispatcher,
   useDispatchSync,
   useDispatchWhen,
+  useEnvironment,
+  useEvent,
   useExceptionFor,
   useIsFailed,
   useIsStoreReady,
   useIsWaiting,
+  useLayoutEvent,
   useObject,
   useSelect,
   useSelector,
@@ -43,6 +47,7 @@ import {
   UseStoreEffectOptions,
 } from './Hooks';
 import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
+import { Evt, EvtState } from './Evt';
 import { UserException } from './UserException';
 
 export {
@@ -52,8 +57,10 @@ export {
   KissAction,
   UserExceptionAction,
   ActionStatus, ReduxReducer, SyncReducer, AsyncReducer, AsyncReducerResult,
-  Store, createStore, useStore, useStoreEffect, UseStoreEffectOptions, useAllState, useSelect, useSelector, useObject, StoreProvider, ShowUserException,
+  Store, createStore, PropDispose, PropPredicate, SetPropOptions, useStore, useStoreEffect, UseStoreEffectOptions, useAllState, useSelect, useSelector, useObject, StoreProvider, ShowUserException,
   useIsStoreReady, useIsWaiting, useIsFailed, useExceptionFor, useClearExceptionFor,
+  useEnvironment, useConfiguration,
+  Evt, EvtState, useEvent, useLayoutEvent,
   useDispatch, useDispatchAll, useDispatchAndWait, useDispatchAndWaitAll, useDispatchSync, useDispatchWhen, useDispatcher,
   StoreException,
   AbortDispatchException,

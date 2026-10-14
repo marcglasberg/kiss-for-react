@@ -4,6 +4,91 @@
 
 ### New features
 
+* New **store props**, to keep the long-lived things of the app that are not state, and must
+  not go in the state: intervals, WebSockets, `EventSource`s, `AbortController`s, listeners
+  (like Firebase's `onSnapshot`), RxJS subscriptions. `setProp(key, value, { dispose? })`,
+  `prop(key)`, `props`, `disposeProp(key)` and `disposeProps(predicate?)`, on the store and in
+  actions. Kiss knows how to dispose an `AbortController`, a `WebSocket`, `EventSource`,
+  `BroadcastChannel`, `MessagePort` or `Worker`, an object with `unsubscribe()`, and an object
+  with `[Symbol.dispose]()` or `[Symbol.asyncDispose]()`. Timers and functions need the
+  `dispose` option. Setting a prop again with the same key disposes the previous value, so a
+  "start" action dispatched twice doesn't leak. A disposal that fails is given to the
+  `errorObserver` (with a `null` action), or logged, and the other props are still disposed.
+  `logOut` has a new `disposeProps` option (`true`, or a predicate), and keeps the props by
+  default. The lint rule `non-state-object-in-state` now suggests `setProp`.
+
+  ```ts
+  class StartClock extends Action {
+    reduce() {
+      const interval = setInterval(() => this.dispatch(new Tick()), 1000);
+      this.setProp('clock', interval, { dispose: clearInterval });
+      return null;
+    }
+  }
+
+  class StopClock extends Action {
+    reduce() { this.disposeProp('clock'); return null; }
+  }
+  ```
+
+* New `store.dispose()`, to end the store when the app finishes, or at the end of each test:
+  `afterEach(() => store.dispose())`. It shuts down the store (which also clears the internal
+  action props, stopping the polling, the retries, the debounce timers and the sequential
+  queues), cancels the `dispatchWhen`s that are still waiting, pauses the persistor and cancels
+  its pending save, and disposes all the props. It returns a promise that waits for the async
+  disposals, and never rejects. `store.isDisposed` tells if it was called. The store also
+  implements `[Symbol.dispose]` and `[Symbol.asyncDispose]`, so that tests can write
+  `await using store = createStore(...)`.
+
+* New **environment, dependencies and configuration**, injected into the store, so that the
+  actions get their services (API clients, repositories, analytics...) from the store, instead
+  of importing them from modules. Each test creates its own store with its own dependencies
+  (fakes, for example), with nothing global to set up or reset. `createStore` takes
+  `environment` (any value, usually an enum), `configuration` (a factory that gets the store,
+  for feature flags) and `dependencies` (a factory that gets the store, and can read the
+  environment and the configuration, which is created first). Read them with
+  `store.environment`, `store.configuration` and `store.dependencies` (typed `unknown`: declare
+  typed getters in your base action), and in components with the new hooks `useEnvironment()`
+  and `useConfiguration()`, which never re-render. The `errorObserver` can read
+  `store.environment`, to send errors to a monitoring service only in production.
+  `store.dispose()` disposes the dependencies and the configuration when they have a
+  `dispose()`, `[Symbol.dispose]()` or `[Symbol.asyncDispose]()` method, and `logOut` keeps
+  them. New lint rules `dependencies-cast-in-action` and `error-observer-without-environment`
+  (opt-in).
+
+  ```ts
+  const store = createStore<State>({
+    initialState: State.initialState,
+    environment: Environment.production,
+    configuration: (store) => new Config(),
+    dependencies: (store) => new Dependencies(),
+  });
+
+  abstract class Action extends KissAction<State> {
+    get deps() { return this.store.dependencies as Dependencies; }
+  }
+  ```
+
+* New **events**, for an action to ask the UI to do something once, that is not a state change:
+  scroll a list, clear or focus an input, open a dialog. The action puts a `new Evt()` (or a
+  `new Evt(value)`) in the state, and the component handles it with the new `useEvent` hook,
+  whose callback runs once per event, even if the component mounts after the action ran. The
+  store remembers which events were already handled (spent), so the event and the state stay
+  immutable, and nothing is spent during render (React may throw a render away). Also:
+  `useLayoutEvent` (runs the callback before the browser paints), `EvtState` (an event that
+  all the mounted components react to), `Evt.spent()` and `EvtState.spent()` for the initial
+  state, and `store.isEventSpent(evt)` for tests. The `ClassPersistor` saves events as spent, so
+  an old event doesn't fire when the app restarts. New lint rules `event-name-suffix` and
+  `event-not-spent-initially`.
+
+  ```tsx
+  class ScrollFeedToTop extends Action {
+    reduce() { return this.state.copy({ scrollToTopEvt: new Evt() }); }
+  }
+
+  useEvent((state: State) => state.scrollToTopEvt, () => listRef.current?.scrollTo({ top: 0 }));
+  ```
+
 * New hook `useStoreEffect()`, to use instead of a `useEffect` to dispatch actions when the
   component mounts (`onMount`), when some values change (`deps` and `onDepsChange`), and when
   it unmounts (`onUnmount`). They get the store, run only after the store is ready, and run

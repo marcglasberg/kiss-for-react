@@ -302,6 +302,54 @@ function MyComponent() {
 
 &nbsp;
 
+## Actions can send events to the UI
+
+Sometimes an action needs the UI to do something once, that is not a state change: scroll a
+list to the top, clear or focus an input, open a dialog. The UI keeps these things itself (DOM
+elements, refs, scroll positions), so the reducer can't reach them. For that, the action puts an
+**event** (`Evt`) in the state, and the component handles it with `useEvent`:
+
+```tsx
+class State {
+  constructor(
+    readonly messages: readonly Message[],
+    readonly scrollToTopEvt: Evt,          // A boolean event.
+    readonly changeTextEvt: Evt<string>,   // An event with a value.
+  ) {}
+
+  static initialState = new State([], Evt.spent(), Evt.spent());
+}
+
+class ScrollFeedToTop extends Action {
+  reduce() { return this.state.copy({ scrollToTopEvt: new Evt() }); }
+}
+
+class ChangeText extends Action {
+  async reduce() {
+    const text = await api.fetchText();
+    return (state: State) => state.copy({ changeTextEvt: new Evt(text) });
+  }
+}
+
+function Feed() {
+  const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEvent((state: State) => state.scrollToTopEvt, () => listRef.current?.scrollTo({ top: 0 }));
+  useEvent((state: State) => state.changeTextEvt, (text) => { inputRef.current!.value = text; });
+  ...
+}
+```
+
+The callback runs once per event, with its value, even if the component mounts after the
+action ran. The store remembers which events were already handled (**spent**), so the event
+and the state stay immutable. In the initial state, use `Evt.spent()`, so that nothing fires
+when the app starts. Use `useLayoutEvent` to run the callback before the browser paints, and
+`EvtState` for an event that all the mounted components react to. The `ClassPersistor` saves
+events as spent, so an old event doesn't fire when the app restarts.
+
+&nbsp;
+
 ## Actions can dispatch other actions
 
 You can use `dispatchAndWait` to dispatch an action and wait for it to finish.
@@ -800,6 +848,114 @@ running their reducer, forgets the `ignoreOld` keys, stops all polling, discards
 and stops the actions that retry (with `retry` or `unlimitedRetryCheckInternet`). Actions that
 are already running still finish, and may still change the state. It's also called when the
 store is shut down with `store.setShutDown(true)`.
+
+&nbsp;
+
+## Store props, and disposing the store
+
+Apps have long-lived things that are not state, and must not go in the state: intervals,
+WebSockets, `EventSource`s, `AbortController`s, listeners (like Firebase's `onSnapshot`, which
+returns an unsubscribe function), RxJS subscriptions. Keep them in the store **props**, with
+`setProp`, and close them with `disposeProp`:
+
+```tsx
+class StartClock extends Action {
+  reduce() {
+    const interval = setInterval(() => this.dispatch(new Tick()), 1000);
+    this.setProp('clock', interval, { dispose: clearInterval });
+    return null;
+  }
+}
+
+class StopClock extends Action {
+  reduce() {
+    this.disposeProp('clock');
+    return null;
+  }
+}
+```
+
+The props belong to the store, so each test (or each request, in server-side rendering) has its
+own, and they can all be closed at once. Kiss knows how to dispose an `AbortController`
+(aborted), a `WebSocket`, `EventSource`, `BroadcastChannel`, `MessagePort` or `Worker` (closed
+or terminated), an object with `unsubscribe()` (RxJS) and an object with `[Symbol.dispose]()`
+or `[Symbol.asyncDispose]()`. Timers and functions need the `dispose` option, since they look
+like other numbers and functions. Setting a prop again with the same key disposes the previous
+value, so dispatching `StartClock` twice doesn't leak the first interval. Read a prop with
+`prop(key)`, list them with `props`, and dispose many with `disposeProps(predicate?)`. The same
+methods exist on the store. On logout, `store.logOut({ disposeProps: true })` disposes them
+too (or pass a predicate to keep the ones that belong to the app, like a connectivity listener).
+
+To end the store, when the app finishes or at the end of each test, call `store.dispose()`. It
+shuts down the store, stops all the action features, cancels the waiting `dispatchWhen`s,
+pauses the persistor, and disposes all the props. It returns a promise that waits for the async
+disposals. The store also implements `[Symbol.dispose]` and `[Symbol.asyncDispose]`:
+
+```tsx
+afterEach(() => store.dispose());
+
+// Or, with TypeScript's explicit resource management:
+await using store = createStore<State>({ initialState: State.initialState });
+```
+
+&nbsp;
+
+## Environment, dependencies and configuration
+
+Inject the services the actions use (API clients, repositories, analytics...) into the store,
+instead of importing them from modules. Each test then creates its own store with its own
+dependencies (fakes, for example), with nothing global to set up or reset, and two stores can
+live side by side (tests running concurrently, or one store per request in server-side
+rendering). The store takes the `environment` (production, staging, testing...), a
+`configuration` factory (feature flags) and a `dependencies` factory. The factories get the
+store, so they can depend on the environment, and the configuration is created first, so the
+dependencies can read it:
+
+```tsx
+const store = createStore<State>({
+  initialState: State.initialState,
+  environment: Environment.production,
+  configuration: (store) => new Config(),
+  dependencies: (store) => new Dependencies(store.environment as Environment),
+});
+```
+
+They are typed `unknown`. Declare typed getters once, in your base action, and use them in all
+actions:
+
+```tsx
+abstract class Action extends KissAction<State> {
+  get env() { return this.store.environment as Environment; }
+  get config() { return this.store.configuration as Config; }
+  get deps() { return this.store.dependencies as Dependencies; }
+}
+
+class LoadUser extends Action {
+  async reduce() {
+    const user = await this.deps.api.loadUser(this.id);
+    return (state: State) => state.copy({ user });
+  }
+}
+```
+
+In components, `useEnvironment()` and `useConfiguration()` return the environment and the
+configuration, and never re-render, since the values don't change. Components should usually
+not need the dependencies. The `errorObserver` gets the store, so it can read
+`store.environment`, for example to send the errors to a monitoring service only in
+production. `store.dispose()` disposes the dependencies and the configuration when they have a
+`dispose()`, `[Symbol.dispose]()` or `[Symbol.asyncDispose]()` method, and `logOut` keeps them.
+In tests:
+
+```tsx
+const store = createStore<State>({
+  initialState: State.initialState,
+  environment: Environment.testing,
+  dependencies: () => new FakeDependencies(),
+});
+```
+
+Note `store.mocks` mocks actions, while the injected dependencies mock services. They
+complement each other.
 
 &nbsp;
 

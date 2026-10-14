@@ -379,7 +379,7 @@ export function classIdentifierOfValue(value: TSESTree.Node): TSESTree.Identifie
 }
 
 /** Like `kissImportName`, for type names: `Store` or `kiss.Store`. */
-function kissTypeName(typeName: TSESTree.EntityName, context: Context): string | null {
+export function kissTypeName(typeName: TSESTree.EntityName, context: Context): string | null {
   if (typeName.type === AST_NODE_TYPES.Identifier) return kissImportName(typeName, context);
   if (typeName.type !== AST_NODE_TYPES.TSQualifiedName || typeName.left.type !== AST_NODE_TYPES.Identifier) return null;
   const def = ASTUtils.findVariable(context.sourceCode.getScope(typeName), typeName.left.name)?.defs[0];

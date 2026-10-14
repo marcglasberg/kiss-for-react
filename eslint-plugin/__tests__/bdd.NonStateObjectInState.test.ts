@@ -41,7 +41,8 @@ Bdd(feature)
     expect(result.messages.length).toBe(1);
     expect(result.messages[0].message).toBe(
       `The field \`${result.messages[0].text}\` of the state class \`State\` holds a \`${type}\`, which is not state: ` +
-      'it can\'t be compared, saved or restored. Keep it outside the state, for example in a module, or in the action that uses it.');
+      'it can\'t be compared, saved or restored. Keep it outside the state, in a store prop: ' +
+      '`this.setProp(key, value)` in the action that creates it (and `disposeProp` to close it).');
   });
 
 Bdd(feature)

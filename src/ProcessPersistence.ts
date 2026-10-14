@@ -566,6 +566,16 @@ export class ProcessPersistence<St> {
   }
 
   /**
+   * For Kiss internal use only. Called by `store.dispose()`. Pauses the persistor, and cancels
+   * the pending save (a state change waiting for the throttle). A save that is already running
+   * still finishes.
+   */
+  dispose(): void {
+    this.isPaused = true;
+    this._cancelTimer();
+  }
+
+  /**
    * Persists the current state (if it's not yet persisted), then pauses the `Persistor`
    * temporarily.
    *

@@ -1,9 +1,10 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector';
 import { UserException } from './UserException';
 import { StoreException } from './StoreException';
 import { Store, StoreContext, StoreContextType } from "./Store";
 import { KissAction, ActionStatus } from './KissAction';
+import { Evt, EvtState } from './Evt';
 
 // How the hooks connect to the store
 //
@@ -688,6 +689,45 @@ export function useIsStoreReady(): boolean {
 }
 
 /**
+ * Returns the environment of the store (production, staging, testing, etc), given to
+ * `createStore` as `environment`, or `undefined`. For example, to show a debug banner:
+ *
+ * ```ts
+ * const env = useEnvironment<Environment>();
+ * if (env !== Environment.production) return <DebugBanner />;
+ * ```
+ *
+ * Give it the type of the environment, as above. It never re-renders the component, since
+ * the environment doesn't change while the app runs.
+ *
+ * See also: `useConfiguration`. There is no hook for the dependencies, since components
+ * should usually not need them. In actions, read them with `this.store.environment`,
+ * `this.store.configuration` and `this.store.dependencies`.
+ */
+export function useEnvironment<E = unknown>(): E {
+  return useStoreFromContext<any>().environment as E;
+}
+
+/**
+ * Returns the configuration of the store (feature flags and other configuration values),
+ * created by the `configuration` factory given to `createStore`, or `undefined`. For
+ * example, to hide a feature behind a flag:
+ *
+ * ```ts
+ * const config = useConfiguration<Config>();
+ * if (config.showAdminConsole) return <AdminConsole />;
+ * ```
+ *
+ * Give it the type of the configuration, as above. It never re-renders the component, since
+ * the configuration doesn't change while the app runs.
+ *
+ * See also: `useEnvironment`.
+ */
+export function useConfiguration<C = unknown>(): C {
+  return useStoreFromContext<any>().configuration as C;
+}
+
+/**
  * Returns true if the given action `type` failed with an `UserException`.
  * Note: This method uses the EXACT action type. Subtypes are not considered.
  */
@@ -731,6 +771,101 @@ export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction
   return useMemo(() => (type: { new(...args: any[]): KissAction<any> }) => {
     store.clearExceptionFor(type);
   }, [store]);
+}
+
+/**
+ * Handles an event (`Evt` or `EvtState`) from the state, by calling the `callback` with its
+ * value, once per event:
+ *
+ * ```tsx
+ * function Feed() {
+ *   const listRef = useRef<HTMLDivElement>(null);
+ *   const inputRef = useRef<HTMLInputElement>(null);
+ *
+ *   useEvent((state: State) => state.scrollToTopEvt, () => listRef.current?.scrollTo({ top: 0 }));
+ *   useEvent((state: State) => state.changeTextEvt, (text) => { inputRef.current!.value = text; });
+ *   ...
+ * }
+ * ```
+ *
+ * Events are for an action to ask the UI to do something once, that is not a state change:
+ * scroll a list, clear or focus an input, open a dialog. See `Evt` for how actions create them.
+ *
+ * The `selector` returns one event from the state (or `null`/`undefined`, to handle nothing).
+ * The `callback` runs in an effect, after the render that shows the new state is committed, like
+ * a `useEffect` (use `useLayoutEvent` to run it before the browser paints, like a
+ * `useLayoutEffect`). It's always the callback of the latest render, so it sees the latest props.
+ *
+ * For an `Evt`, the callback is called once per event, and then the event is **spent**:
+ *
+ * - A new event while the component is mounted: fires once.
+ * - An event created before the component mounts: fires once, when it mounts.
+ * - The component remounts later: doesn't fire, since the event is spent.
+ * - Two components use the same event: only the first one fires. Create two events for that.
+ * - Unrelated re-renders: doesn't fire.
+ * - In React's `StrictMode`, which runs effects twice in development: fires once.
+ *
+ * For an `EvtState`, the callback is called when the state has a different `EvtState` than the
+ * last one the component saw. It fires in every mounted component that uses it, but not when the
+ * component mounts or remounts, so events that happen while it's not mounted are missed.
+ *
+ * The store keeps which events were spent (see `store.isEventSpent`), so the events and the state
+ * stay immutable. Nothing is spent during render: React may throw a render away, so a render
+ * can't spend the event. That's why there is no way to consume an event in render, only this hook.
+ */
+export function useEvent<St, T>(
+  selector: (state: St) => Evt<T> | EvtState<T> | null | undefined,
+  callback: (value: T) => void,
+): void {
+  const handle = useEventHandler(selector);
+  useEffect(() => handle(callback), [handle, callback]);
+}
+
+/**
+ * The same as `useEvent`, but the `callback` runs in a layout effect, before the browser paints
+ * (like a `useLayoutEffect`). Use it when the UI work would otherwise flicker: a scroll, a focus,
+ * a measurement. Like `useLayoutEffect`, it does nothing on the server, and React 18 warns about it
+ * there. Prefer `useEvent` when the timing doesn't matter.
+ */
+export function useLayoutEvent<St, T>(
+  selector: (state: St) => Evt<T> | EvtState<T> | null | undefined,
+  callback: (value: T) => void,
+): void {
+  const handle = useEventHandler(selector);
+  useLayoutEffect(() => handle(callback), [handle, callback]);
+}
+
+// The implementation of `useEvent` and `useLayoutEvent`. Returns a function that handles the
+// selected event with the given callback, if it wasn't handled yet. The function changes when the
+// event (or the store) changes, so the effects above run it again then. They also run it again
+// when the callback changes (an inline callback changes in every render), which does nothing, as
+// the event is already handled. So it's always the callback of the latest render that handles a
+// new event. Running it twice does nothing, which is what `StrictMode` does with effects.
+function useEventHandler<St, T>(
+  selector: (state: St) => Evt<T> | EvtState<T> | null | undefined,
+): (callback: (value: T) => void) => void {
+  const store = useStoreFromContext<St>();
+  const evt = useSelect(selector);
+
+  // For `EvtState` only: the last event the component saw, starting with the one at mount, so
+  // that mounting doesn't fire.
+  const lastSeenRef = useRef(evt);
+
+  return useCallback((callback: (value: T) => void) => {
+    if (evt == null) return;
+
+    if (evt instanceof EvtState) {
+      if (lastSeenRef.current === evt) return;
+      lastSeenRef.current = evt;
+      if (evt._spentAtCreation) return;
+      callback(evt.value as T);
+      return;
+    }
+
+    if (store.isEventSpent(evt)) return;
+    store._spentEvents.add(evt);
+    callback(evt.value as T);
+  }, [evt, store]);
 }
 
 function useStoreContext<St>(): { store: Store<St>, getServerState: () => St } {

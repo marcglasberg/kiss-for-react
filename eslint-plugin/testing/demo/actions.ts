@@ -10,6 +10,7 @@
 /* eslint-disable kiss-for-react/server-push-associated-action */
 /* eslint-disable kiss-for-react/async-feature-in-sync-action */
 /* eslint-disable kiss-for-react/extend-base-action */
+/* eslint-disable kiss-for-react/dependencies-cast-in-action */
 /* eslint-disable kiss-for-react/avoid-abort-dispatch */
 /* eslint-disable kiss-for-react/avoid-wrap-reduce */
 /* eslint-disable kiss-for-react/missing-key-params */
@@ -881,5 +882,59 @@ class SaveNameWithKeyOk extends OptimisticCommand<State, string> { // OK: overri
 
   async sendCommandToServer(value: string) {
     await saveName(value);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// dependencies-cast-in-action
+
+enum Environment {
+  production,
+  testing,
+}
+
+/** The dependencies of the app, injected into the store with `createStore({ dependencies })`. */
+class Dependencies {
+  async loadUser(_id: number): Promise<string> {
+    return fetchName();
+  }
+}
+
+class LoadUserWithCast extends Action {
+  constructor(readonly id: number) {
+    super();
+  }
+
+  async reduce() {
+    // kiss-for-react/dependencies-cast-in-action
+    // (Declare a typed getter once, in the base action, instead of casting in each action)
+    const user = await (this.store.dependencies as Dependencies).loadUser(this.id);
+    // kiss-for-react/dependencies-cast-in-action
+    // (A chain of casts is reported once, as a whole)
+    if ((this.store.environment as unknown as Environment) === Environment.testing) return null;
+    return (state: State) => state.copy({ name: user });
+  }
+}
+
+/** A base action with typed getters, as the Kiss docs recommend. */
+abstract class ActionWithDependencies extends Action {
+  get deps() {
+    return this.store.dependencies as Dependencies; // OK: in the base action (abstract).
+  }
+
+  get env() {
+    return this.store.environment as Environment; // OK
+  }
+}
+
+class LoadUserWithGetter extends ActionWithDependencies {
+  constructor(readonly id: number) {
+    super();
+  }
+
+  async reduce() {
+    const user = await this.deps.loadUser(this.id); // OK: the typed getter.
+    if (this.env === Environment.testing) return null;
+    return (state: State) => state.copy({ name: user });
   }
 }

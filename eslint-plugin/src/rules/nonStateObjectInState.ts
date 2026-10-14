@@ -46,8 +46,8 @@ export default createRule({
     messages: {
       resource:
         'The field `{{field}}` of the state class `{{className}}` holds a `{{type}}`, which is not state: it ' +
-        'can\'t be compared, saved or restored. Keep it outside the state, for example in a module, or in the ' +
-        'action that uses it.',
+        'can\'t be compared, saved or restored. Keep it outside the state, in a store prop: ' +
+        '`this.setProp(key, value)` in the action that creates it (and `disposeProp` to close it).',
       ui:
         'The field `{{field}}` of the state class `{{className}}` holds a `{{type}}`, which is not state: it ' +
         'belongs to the UI, and can\'t be saved or restored. Keep it in the component.',

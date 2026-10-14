@@ -1,4 +1,4 @@
-import { Store } from "./Store";
+import { PropPredicate, SetPropOptions, Store } from "./Store";
 import { AbortDispatchException, kissAbort, StoreException } from "./StoreException";
 import { UserException } from "./UserException";
 import { describeValue } from "./utils";
@@ -554,6 +554,68 @@ export abstract class KissAction<St> {
    */
   protected get state(): St {
     return this.store.state;
+  }
+
+  /**
+   * Sets a prop in the store. Same as `this.store.setProp()`. The props hold the long-lived
+   * things of the app that are not state: intervals and timeouts, WebSockets, `EventSource`s,
+   * `AbortController`s, listeners, RxJS subscriptions. See `Store.setProp` for how they are
+   * disposed.
+   *
+   * ```ts
+   * class StartClock extends Action {
+   *   reduce() {
+   *     const interval = setInterval(() => this.dispatch(new Tick()), 1000);
+   *     this.setProp('clock', interval, { dispose: clearInterval });
+   *     return null;
+   *   }
+   * }
+   * ```
+   *
+   * See also: `prop`, `props`, `disposeProp` and `disposeProps`.
+   */
+  protected setProp<V>(key: unknown, value: V, options?: SetPropOptions<V>): void {
+    this.store.setProp(key, value, options);
+  }
+
+  /**
+   * Returns the prop with the given key, or `undefined` if there is none. Same as
+   * `this.store.prop()`. Give it the type of the value: `this.prop<number>('clock')`.
+   */
+  protected prop<V = unknown>(key: unknown): V | undefined {
+    return this.store.prop<V>(key);
+  }
+
+  /**
+   * All the props of the store, with their keys and values. Same as `this.store.props`.
+   */
+  protected get props(): ReadonlyMap<unknown, unknown> {
+    return this.store.props;
+  }
+
+  /**
+   * Disposes the prop with the given key, and removes it from the props. Same as
+   * `this.store.disposeProp()`. See `Store.setProp` for how the value is disposed.
+   *
+   * ```ts
+   * class StopClock extends Action {
+   *   reduce() {
+   *     this.disposeProp('clock');
+   *     return null;
+   *   }
+   * }
+   * ```
+   */
+  protected disposeProp(key: unknown): void {
+    this.store.disposeProp(key);
+  }
+
+  /**
+   * Disposes all the props, and removes them, or only the ones the `predicate` selects. Same
+   * as `this.store.disposeProps()`.
+   */
+  protected disposeProps(predicate?: PropPredicate): void {
+    this.store.disposeProps(predicate);
   }
 
   /**

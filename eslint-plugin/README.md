@@ -237,6 +237,7 @@ directories.
 - [`polling-action-restarts-polling`](#polling-action-restarts-polling) warning
 - [`server-push-associated-action`](#server-push-associated-action) error
 - [`extend-base-action`](#extend-base-action) warning
+- [`dependencies-cast-in-action`](#dependencies-cast-in-action) warning
 - [`avoid-abort-dispatch`](#avoid-abort-dispatch) opt-in warning
 - [`avoid-wrap-reduce`](#avoid-wrap-reduce) opt-in warning
 - [`missing-key-params`](#missing-key-params) opt-in warning
@@ -258,6 +259,8 @@ directories.
 - [`prefer-readonly-collections`](#prefer-readonly-collections) warning
 - [`non-state-object-in-state`](#non-state-object-in-state) warning
 - [`copy-missing-field`](#copy-missing-field) warning
+- [`event-name-suffix`](#event-name-suffix) warning
+- [`event-not-spent-initially`](#event-not-spent-initially) warning
 - [`missing-initial-state`](#missing-initial-state) opt-in warning
 - [`route-in-state`](#route-in-state) opt-in warning
 
@@ -266,6 +269,7 @@ directories.
 - [`user-exception-outside-action`](#user-exception-outside-action) warning
 - [`user-exception-without-cause`](#user-exception-without-cause) warning
 - [`throw-in-error-observer`](#throw-in-error-observer) warning
+- [`error-observer-without-environment`](#error-observer-without-environment) opt-in warning
 
 **Tests and debugging**
 
@@ -1164,6 +1168,38 @@ no longer used.
 
 ---
 
+### dependencies-cast-in-action
+
+A warning for a cast of `store.environment`, `store.dependencies` or `store.configuration`
+inside an action. They are typed `unknown`, and the Kiss docs recommend declaring a typed
+getter for each one, once, in the base action:
+
+```ts
+abstract class Action extends KissAction<State> {
+  get env() { return this.store.environment as Environment; }       // OK: the base action.
+  get deps() { return this.store.dependencies as Dependencies; }    // OK
+  get config() { return this.store.configuration as Config; }       // OK
+}
+
+class LoadUser extends Action {
+  async reduce() {
+    const user = await (this.store.dependencies as Dependencies).api.loadUser(); // Warning
+    const user = await this.deps.api.loadUser();                                 // OK
+    ...
+  }
+}
+```
+
+Both cast syntaxes are reported (`as Dependencies` and `<Dependencies>`), and a chain of casts
+(`as unknown as Dependencies`) is reported once, as a whole. The store is `this.store`, or,
+with [type information](#type-information), any expression of type `Store`. Not reported in
+abstract classes (like the base action), outside actions, or in tests, whose actions may not
+extend the base action.
+
+No quick fix: the getter has to be declared in the base action.
+
+---
+
 ### avoid-abort-dispatch
 
 An opt-in warning for every override of `abortDispatch` in an action. The Kiss docs call it "a
@@ -1595,8 +1631,8 @@ Reported for:
 
 * A `Promise` (or `PromiseLike`), a Node timer (`NodeJS.Timeout`, `NodeJS.Timer` or
   `NodeJS.Immediate`), an `AbortController`, an `AbortSignal`, a `WebSocket`, an `EventSource`,
-  a `Worker` or a `SharedWorker`. Keep these outside the state, for example in a module, or in
-  the action that uses them.
+  a `Worker` or a `SharedWorker`. Keep these outside the state, in a store prop:
+  `this.setProp(key, value)` in the action that creates them, and `disposeProp` to close them.
 * A DOM node (`Node`, `Element`, `HTMLElement` and its subtypes), a React ref (`RefObject`,
   `MutableRefObject`), or a React element (`ReactElement`, `ReactNode`, `ReactPortal`,
   `JSX.Element`). Keep these in the component.
@@ -1641,6 +1677,50 @@ destructured object (with an object type) or as separate parameters, the method 
 instance, which uses each missing field once (as `this.field`), and the fields are declared in
 the class, not optional, with a type that can't be `null` or `undefined` (and is not `any` or
 `unknown`).
+
+---
+
+### event-name-suffix
+
+A warning for an event field (of type `Evt` or `EvtState`) whose name doesn't end with `Evt`.
+The suffix tells, where the field is used, that it's an event that fires once, and not a value
+to read:
+
+```ts
+class State {
+  readonly scrollToTop: Evt;             // Warning: name it `scrollToTopEvt`.
+  readonly changeTextEvent: Evt<string>; // Warning: name it `changeTextEvt`.
+  readonly scrollToTopEvt: Evt;          // OK
+}
+```
+
+A field is an event if its declared type is `Evt` or `EvtState` (or a union with one of them),
+or, without a declared type, if its initializer is `new Evt(...)`, `Evt.spent()`, or the same
+with `EvtState`. Reported in any class, not only state classes, since an event field is always
+meant for the state. Not reported in tests.
+
+No quick fix: renaming the field needs all its usages.
+
+---
+
+### event-not-spent-initially
+
+A warning for a `new Evt()` or `new EvtState()` in the initial state. A new event in the
+initial state fires when the first component that uses it mounts, so the initial state should
+use `Evt.spent()` (or `EvtState.spent()`), an event that was already used:
+
+```ts
+class State {
+  static initialState = new State(new Evt());     // Warning
+  static initialState = new State(Evt.spent());   // OK
+}
+```
+
+Checked in a static `initialState` (a property, getter or method) of any class, and in the
+`initialState` given to `createStore`, `new Store` or `logOut`. Not reported in tests.
+
+Quick fix (suggestion): replace it with `Evt.spent()` (or `EvtState.spent()`), keeping the type
+arguments, if any: `new Evt<string>('x')` becomes `Evt.spent<string>()`.
 
 ---
 
@@ -1779,6 +1859,37 @@ function declared in the same file. Not reported: throws caught by a `try` in
 
 Quick fix (automatic): change `throw` to `return`. Not offered when `errorObserver` declares
 a return type (other than `any` or `unknown`), since the returned error may not match it.
+
+---
+
+### error-observer-without-environment
+
+An opt-in warning for a store created with an `errorObserver`, but no `environment`. The
+Kiss docs suggest passing both, so that the observer can handle the errors differently in
+production, staging and tests, for example sending them to a monitoring service only in
+production:
+
+```ts
+createStore<State>({
+  initialState: State.initialState,
+  environment: Environment.production, // Without it: Warning
+  errorObserver: ({ error, store }) => {
+    if (store.environment === Environment.production) monitoring.send(error);
+    return error;
+  },
+});
+```
+
+It checks `createStore` and `new Store`. Not reported in tests, nor when the options are
+spread from another object (`{ ...options, errorObserver }`), which may have the environment.
+
+To turn it on:
+
+```js
+rules: {
+  'kiss-for-react/error-observer-without-environment': 'warn',
+},
+```
 
 ---
 

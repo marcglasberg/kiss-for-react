@@ -2,6 +2,8 @@
 /* eslint-disable kiss-for-react/prefer-readonly-collections */
 /* eslint-disable kiss-for-react/non-state-object-in-state */
 /* eslint-disable kiss-for-react/copy-missing-field */
+/* eslint-disable kiss-for-react/event-name-suffix */
+/* eslint-disable kiss-for-react/event-not-spent-initially */
 /* eslint-disable kiss-for-react/missing-initial-state */
 /* eslint-disable kiss-for-react/route-in-state */
 
@@ -21,7 +23,7 @@
 // `missing-initial-state` and `route-in-state` are opt-in rules.
 
 import type { JSX, ReactElement, ReactNode, RefObject } from 'react';
-import { createStore, KissAction, Store } from 'kiss-for-react';
+import { createStore, Evt, EvtState, KissAction, Store } from 'kiss-for-react';
 import { User } from './state';
 
 // ===============================================================================================
@@ -157,7 +159,7 @@ class Loading {
   constructor(
     // kiss-for-react/non-state-object-in-state
     // (A `Promise` is not state: it can't be compared, saved or restored. Keep it outside the
-    // state, for example in a module, or in the action that uses it)
+    // state, in a store prop: `this.setProp(key, value)` in the action that creates it)
     readonly userPromise: Promise<User> | null,
     // kiss-for-react/non-state-object-in-state
     // (A Node timer)
@@ -315,6 +317,92 @@ class Customer {
 }
 
 abstract class CustomerAction extends KissAction<Customer> {}
+
+// ===============================================================================================
+// event-name-suffix
+
+class Chat {
+  constructor(
+    readonly messages: readonly string[],
+    // kiss-for-react/event-name-suffix
+    // (An event field without the `Evt` suffix, which tells it's an event that fires once, and
+    // not a value to read. No quick fix: renaming needs all the usages)
+    readonly scrollToTop: Evt,
+    // kiss-for-react/event-name-suffix
+    // (An event with a value, in a union)
+    readonly changeText: Evt<string> | null,
+    // kiss-for-react/event-name-suffix
+    // (An `EvtState`. The suggested name is `highlightEvt`)
+    readonly highlightEvent: EvtState<string>,
+    readonly clearInputEvt: Evt, // OK
+  ) {}
+
+  // kiss-for-react/event-name-suffix
+  // (Without a declared type, the initializer shows it's an event)
+  readonly openDialog = Evt.spent();
+
+  static initialState = new Chat([], Evt.spent(), null, EvtState.spent(), Evt.spent());
+}
+
+abstract class ChatAction extends KissAction<Chat> {}
+
+// ===============================================================================================
+// event-not-spent-initially
+
+class Feed {
+  constructor(
+    readonly scrollToTopEvt: Evt,
+    readonly changeTextEvt: Evt<string>,
+    readonly pulseEvt: EvtState<string>,
+  ) {}
+
+  static initialState = new Feed(
+    // kiss-for-react/event-not-spent-initially
+    // (A new event in the initial state fires when the first component that uses it mounts)
+    // Fix (suggestion): Will replace `new Evt()` with `Evt.spent()`.
+    new Evt(),
+    // kiss-for-react/event-not-spent-initially
+    // (With type arguments, which the suggestion keeps)
+    // Fix (suggestion): Will replace it with `Evt.spent<string>()`.
+    new Evt<string>('Hello'),
+    // kiss-for-react/event-not-spent-initially
+    // (An `EvtState`)
+    // Fix (suggestion): Will replace it with `EvtState.spent()`.
+    new EvtState('go'),
+  );
+
+  // OK: not the initial state.
+  static sample = new Feed(new Evt(), new Evt('Hi'), new EvtState('go'));
+}
+
+abstract class FeedAction extends KissAction<Feed> {}
+
+// OK: actions create new events. That's what events are for.
+class ScrollFeedToTop extends FeedAction {
+  reduce() {
+    return new Feed(new Evt(), this.state.changeTextEvt, this.state.pulseEvt);
+  }
+}
+
+class Board {
+  constructor(readonly refreshEvt: Evt) {}
+
+  static get initialState(): Board {
+    // kiss-for-react/event-not-spent-initially
+    // (In a static `initialState` getter or method)
+    // Fix (suggestion): Will replace `new Evt()` with `Evt.spent()`.
+    return new Board(new Evt());
+  }
+}
+
+const boardStore = createStore<Board>({ initialState: Board.initialState });
+
+function resetBoard() {
+  // kiss-for-react/event-not-spent-initially
+  // (In the initial state given to `createStore`, `new Store` or `logOut`)
+  // Fix (suggestion): Will replace `new Evt()` with `Evt.spent()`.
+  return boardStore.logOut({ initialState: new Board(new Evt()) });
+}
 
 // ===============================================================================================
 // missing-initial-state (opt-in)

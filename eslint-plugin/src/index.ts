@@ -13,12 +13,16 @@ import avoidUseAllState from './rules/avoidUseAllState.js';
 import avoidWrapReduce from './rules/avoidWrapReduce.js';
 import copyMissingField from './rules/copyMissingField.js';
 import debugObserverInRelease from './rules/debugObserverInRelease.js';
+import dependenciesCastInAction from './rules/dependenciesCastInAction.js';
 import dispatchAndWaitUnlimitedRetries from './rules/dispatchAndWaitUnlimitedRetries.js';
 import dispatchBeforeStoreReady from './rules/dispatchBeforeStoreReady.js';
 import dispatchInEffect from './rules/dispatchInEffect.js';
 import dispatchInRender from './rules/dispatchInRender.js';
 import dispatchSameActionTwice from './rules/dispatchSameActionTwice.js';
 import dispatchSyncAsyncAction from './rules/dispatchSyncAsyncAction.js';
+import errorObserverWithoutEnvironment from './rules/errorObserverWithoutEnvironment.js';
+import eventNameSuffix from './rules/eventNameSuffix.js';
+import eventNotSpentInitially from './rules/eventNotSpentInitially.js';
 import expectWithoutWaiting from './rules/expectWithoutWaiting.js';
 import extendBaseAction from './rules/extendBaseAction.js';
 import incompatibleActionFeatures from './rules/incompatibleActionFeatures.js';
@@ -78,6 +82,7 @@ const rules = {
   'polling-action-restarts-polling': pollingActionRestartsPolling,
   'server-push-associated-action': serverPushAssociatedAction,
   'extend-base-action': extendBaseAction,
+  'dependencies-cast-in-action': dependenciesCastInAction,
   'avoid-abort-dispatch': avoidAbortDispatch,
   'avoid-wrap-reduce': avoidWrapReduce,
   'missing-key-params': missingKeyParams,
@@ -93,11 +98,14 @@ const rules = {
   'prefer-readonly-collections': preferReadonlyCollections,
   'non-state-object-in-state': nonStateObjectInState,
   'copy-missing-field': copyMissingField,
+  'event-name-suffix': eventNameSuffix,
+  'event-not-spent-initially': eventNotSpentInitially,
   'missing-initial-state': missingInitialState,
   'route-in-state': routeInState,
   'user-exception-outside-action': userExceptionOutsideAction,
   'user-exception-without-cause': userExceptionWithoutCause,
   'throw-in-error-observer': throwInErrorObserver,
+  'error-observer-without-environment': errorObserverWithoutEnvironment,
   'expect-without-waiting': expectWithoutWaiting,
   'testing-feature-in-production': testingFeatureInProduction,
   'action-status-details-in-production': actionStatusDetailsInProduction,
@@ -127,7 +135,7 @@ const plugin = {
  * ```
  *
  * The opt-in rules are not in it. Turn them on yourself, if you want them:
- * `avoid-abort-dispatch`, `avoid-wrap-reduce`, `missing-key-params`, `missing-initial-state`, `route-in-state`, `action-name-ends-with-action`, `action-name-ends-with-underscore-action`, `action-name-without-action`, `action-file-name-ends-with-action`, `action-file-name-starts-with-action`.
+ * `avoid-abort-dispatch`, `avoid-wrap-reduce`, `missing-key-params`, `missing-initial-state`, `route-in-state`, `error-observer-without-environment`, `action-name-ends-with-action`, `action-name-ends-with-underscore-action`, `action-name-without-action`, `action-file-name-ends-with-action`, `action-file-name-starts-with-action`.
  */
 plugin.configs.recommended = {
   name: 'kiss-for-react/recommended',
@@ -157,6 +165,7 @@ plugin.configs.recommended = {
     'kiss-for-react/polling-action-restarts-polling': 'warn',
     'kiss-for-react/server-push-associated-action': 'error',
     'kiss-for-react/extend-base-action': 'warn',
+    'kiss-for-react/dependencies-cast-in-action': 'warn',
     'kiss-for-react/dispatch-sync-async-action': 'error',
     'kiss-for-react/dispatch-same-action-twice': 'error',
     'kiss-for-react/dispatch-before-store-ready': 'error',
@@ -169,6 +178,8 @@ plugin.configs.recommended = {
     'kiss-for-react/prefer-readonly-collections': 'warn',
     'kiss-for-react/non-state-object-in-state': 'warn',
     'kiss-for-react/copy-missing-field': 'warn',
+    'kiss-for-react/event-name-suffix': 'warn',
+    'kiss-for-react/event-not-spent-initially': 'warn',
     'kiss-for-react/user-exception-outside-action': 'warn',
     'kiss-for-react/user-exception-without-cause': 'warn',
     'kiss-for-react/throw-in-error-observer': 'warn',
