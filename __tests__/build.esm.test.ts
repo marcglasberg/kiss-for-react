@@ -13,6 +13,11 @@ function run(cmd: string): string {
   return execSync(cmd, { cwd: root, encoding: 'utf8', stdio: 'pipe' });
 }
 
+/** The code without its comments, which mention things like `window` and `'use client'` in examples. */
+function withoutComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
 beforeAll(() => {
   run('npm run build');
 }, 120000);
@@ -56,6 +61,63 @@ test('The hooks render on the server from the ESM build', () => {
 test('The hooks render on the server from the CJS build', () => {
   const out = run(`node ${path.join(smokeDir, 'hooks-smoke.cjs')}`);
   expect(out.trim()).toBe('<p>2:2:false:false:none:true</p>');
+});
+
+test('The react-server condition gives the server entry, without the hooks, in ESM and CJS', () => {
+  // As a React Server Components bundler resolves the package for server components.
+  for (const file of ['server-smoke.mjs', 'server-smoke.cjs']) {
+    const out = run(`node --conditions=react-server ${path.join(smokeDir, file)}`);
+    expect(out.trim()).toBe('function:undefined:undefined:2');
+  }
+});
+
+test('The "kiss-for-react/server" subpath loads the server entry, in ESM and CJS', () => {
+  const esm = run(
+    `node --input-type=module -e "const m = await import('kiss-for-react/server'); ` +
+    `console.log(typeof m.createStore, typeof m.KissAction, typeof m.useSelect, typeof m.StoreProvider)"`,
+  );
+  // The provider is there (a component the bundler turns into a client reference); no hook is.
+  expect(esm.trim()).toBe('function function undefined function');
+  const cjs = run(`node -e "const m = require('kiss-for-react/server'); console.log(typeof m.createStore, typeof m.useSelect)"`);
+  expect(cjs.trim()).toBe('function undefined');
+});
+
+test('The hooks and the provider modules keep the "use client" directive, in both builds', () => {
+  for (const file of ['esm/Hooks.mjs', 'esm/StoreProvider.mjs', 'cjs/Hooks.js', 'cjs/StoreProvider.js']) {
+    const code = fs.readFileSync(path.join(root, 'lib', file), 'utf8');
+    // The directive must be in the prologue: only "use strict" may come before it.
+    const prologue = code.split(/\r?\n/).slice(0, 2).map((line) => line.trim());
+    expect({ file, hasDirective: prologue.includes(`'use client';`) || prologue.includes(`"use client";`) })
+      .toEqual({ file, hasDirective: true });
+  }
+  // The other modules are not client-only (the directive is only mentioned in comments).
+  for (const file of ['esm/index.mjs', 'esm/server.mjs', 'esm/Store.mjs', 'esm/KissAction.mjs']) {
+    expect(withoutComments(fs.readFileSync(path.join(root, 'lib', file), 'utf8'))).not.toMatch(/use client/);
+  }
+});
+
+test('The server entry does not import react, except through the "use client" modules, which a bundler does not evaluate on the server', () => {
+  const seen = new Set<string>();
+  const clientModules = new Set<string>();
+  const visit = (file: string) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const code = withoutComments(fs.readFileSync(file, 'utf8'));
+    // A "use client" module becomes client references in the server graph: its imports don't run there.
+    if (/^\s*'use client';/.test(code)) {
+      clientModules.add(path.basename(file));
+      return;
+    }
+    for (const match of code.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+      const spec = match[1];
+      if (spec.startsWith('.')) visit(path.resolve(path.dirname(file), spec));
+      else expect({ file: path.relative(root, file), imports: spec }).toEqual({ file: path.relative(root, file), imports: 'none' });
+    }
+  };
+  visit(path.join(root, 'lib', 'esm', 'server.mjs'));
+  expect(seen.size).toBeGreaterThan(5);
+  expect([...clientModules]).toEqual(['StoreProvider.mjs']);
+  expect([...seen].some((f) => /Hooks\.mjs$/.test(f))).toBe(false);
 });
 
 test('The emitted declarations do not depend on the helper types', () => {

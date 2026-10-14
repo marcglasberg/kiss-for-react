@@ -4,43 +4,44 @@ import { State } from './State';
 import { UserException } from 'kiss-for-react';
 
 /**
- * Add a random item to the list. The item is a random fact from the NumbersAPI.
- * If the item already exists, try again until it gets a new one (unlikely, but possible).
- * If the API fails, shows an error dialog to the user.
+ * Add a random item to the list. The item is a random todo from the DummyJSON API
+ * (https://dummyjson.com), like "Play cricket". If the item already exists, try again until it
+ * gets a new one. If the API fails, shows an error dialog to the user.
  */
 export class AddRandomTodoAction extends Action {
 
   async reduce() {
 
-    let text = await this.getTextFromTheNumbersAPI();
+    let text = await this.getRandomTodoFromTheDummyJsonApi();
 
     return (state: State) => state
       .withTodos(state.todoList.addTodoFromText(text))
       .withFilter(Filter.showActive, Filter.showAll);
   }
 
-  private async getTextFromTheNumbersAPI() {
+  /**
+   * Repeats while the item already exists in the list, up to a few times: the API has a few
+   * hundred todos, so a long list could otherwise keep the button spinning for a long time.
+   */
+  private async getRandomTodoFromTheDummyJsonApi() {
 
-    let text: string;
-
-    do {
-      // Connect with the NumbersAPI to get a random fact.
-      let response = await fetch('http://numbersapi.com/random/trivia');
+    for (let attempt = 0; attempt < 10; attempt++) {
+      // Connect with the DummyJSON API to get a random todo.
+      let response = await fetch('https://dummyjson.com/todos/random/1');
 
       // If the connection failed, throw an exception.
-      if (!response.ok) throw new UserException('Failed to connect to the NumbersAPI.');
+      if (!response.ok) throw new UserException('Failed to connect to the DummyJSON API.');
 
-      // Get the response text.
-      text = await response.text();
+      // The response is a list with one todo: `[{ "todo": "Play cricket", ... }]`.
+      const json = await response.json() as { todo?: string }[];
+      const text = json[0]?.todo;
 
-      // If the response is empty, throw an exception.
-      if (text === '') throw new UserException('Failed to get text from the NumbersAPI.');
+      // If the response has no todo, throw an exception.
+      if (!text) throw new UserException('Failed to get a todo from the DummyJSON API.');
 
+      if (!this.state.todoList.ifExists(text)) return text;
     }
-      // Repeat the process if the item already exists in the todo list (unlikely, but possible).
-    while (this.state.todoList.ifExists(text));
 
-    return text;
+    throw new UserException('Could not find a random todo that is not in the list yet.');
   }
 }
-

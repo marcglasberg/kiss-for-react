@@ -114,12 +114,15 @@ export class ProcessPersistence<St> {
       // If the saved state was read successfully, we replace the store state with it.
       // In this case, the initial-state passed in the Store constructor was used
       // only while the persisted state is loading.
+      // The slices of server state merged while the persisted state was being read (see
+      // `Store.mergeServerState`) are merged into it again, so that they are not lost.
+      const stateToApply = store._applyPendingServerSlices(stateReadFromPersistor);
       let promise: Promise<unknown>;
       this.isApplyingReadState = true;
       try {
         promise = store.dispatchAndWait(
           new UpdateStateAction<St>(
-            (_) => stateReadFromPersistor,
+            (_) => stateToApply,
             false, // Do not persist the state we just read from the persistence.
           )
         );

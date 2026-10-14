@@ -13,6 +13,13 @@ export function capTimeoutMillis(millis: number): number {
   return Math.min(millis, MAX_TIMEOUT_MILLIS);
 }
 
+/** True for an object literal, or an object with no prototype. Not for class instances or arrays. */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 /**
  * Turns a value into a string, for logging. Never throws, so that a circular, BigInt,
  * prototype-less or otherwise unserializable value can still be logged.

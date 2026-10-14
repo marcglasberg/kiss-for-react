@@ -186,3 +186,25 @@ Feature: Store props
     Given Two stores.
     When A prop is set in one of them.
     Then The other store does not have it.
+
+  Scenario: A disposeProps predicate that throws is reported, and does not stop the other props from being disposed.
+    Given A store with an errorObserver, and three disposable props.
+    And A predicate that throws for the second prop, and returns true for the others.
+    When The props are disposed with the predicate.
+    Then The first and third props are disposed and removed.
+    And The second prop is kept, and not disposed.
+    And The error is given to the errorObserver, with a null action.
+
+  Scenario: Logging out with a disposeProps predicate that throws still finishes, and the store keeps working.
+    Given A store with an errorObserver, and a disposable prop.
+    When The store logs out with a disposeProps predicate that throws.
+    Then The logOut finishes, and the error is given to the errorObserver.
+    And The prop is kept.
+    And The store accepts new actions, and can log out again.
+
+  Scenario: A dispose that throws a value which cannot be converted to a string is still logged, without failing.
+    Given A store with a logger and no errorObserver, and three props.
+    And The first prop throws a Symbol when disposed, and the second throws an object whose toString throws.
+    When All props are disposed.
+    Then The errors are logged, naming the props.
+    And The third prop is disposed, and all three are removed.

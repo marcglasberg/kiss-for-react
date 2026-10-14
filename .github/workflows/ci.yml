@@ -30,3 +30,51 @@ jobs:
       - run: npm run build
       - name: Install the packed package in an isolated consumer (React ${{ matrix.react }})
         run: node scripts/pack-smoke.cjs ${{ matrix.react }}
+
+  # The server-side rendering examples (see SSR.md): each is built, started, and checked with
+  # Playwright (the server HTML with JavaScript disabled, hydration without warnings, and the
+  # store after hydration). The Next.js examples run on the two most recent Next.js majors.
+  ssr-examples:
+    name: ${{ matrix.example }} / Next ${{ matrix.next || '-' }} / React ${{ matrix.react }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { example: nextjs-app-router, next: 16, react: 19 }
+          - { example: nextjs-app-router, next: 15, react: 19 }
+          - { example: nextjs-pages-router, next: 16, react: 19 }
+          - { example: nextjs-pages-router, next: 16, react: 18 }
+          - { example: nextjs-pages-router, next: 15, react: 19 }
+          - { example: nextjs-pages-router, next: 15, react: 18 }
+          - { example: ssr-express, react: 19 }
+          - { example: ssr-express, react: 18 }
+          - { example: todo-app-nextjs, next: 16, react: 19 }
+          - { example: todo-app-nextjs, next: 15, react: 19 }
+    defaults:
+      run:
+        working-directory: examples/${{ matrix.example }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      # The examples install `kiss-for-react` from the repository root (`file:../..`, packed
+      # by npm as it is, see their `.npmrc`), so the library must be built before.
+      - name: Install the library's dependencies, and build it
+        run: npm ci && npm run build
+        working-directory: .
+      - name: Install the example
+        run: npm install --no-audit --no-fund
+      - name: Use Next.js ${{ matrix.next }}
+        if: matrix.next
+        run: npm install --no-save --no-audit --no-fund next@${{ matrix.next }}
+      - name: Use React ${{ matrix.react }}
+        if: matrix.react == 18
+        run: npm install --no-save --no-audit --no-fund react@18 react-dom@18 @types/react@18 @types/react-dom@18
+      - name: Install Playwright's browser
+        run: npx playwright install --with-deps chromium
+      - name: Build, start and test the example
+        run: npm test
+        env:
+          CI: true

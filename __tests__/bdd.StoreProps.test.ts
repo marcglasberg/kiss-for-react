@@ -815,3 +815,101 @@ Bdd(feature)
     expect(store2.prop('res')).toBeUndefined();
     expect(store2.props.size).toBe(0);
   });
+
+Bdd(feature)
+  .scenario('A disposeProps predicate that throws is reported, and does not stop the other props from being disposed.')
+  .given('A store with an errorObserver, and three disposable props.')
+  .and('A predicate that throws for the second prop, and returns true for the others.')
+  .when('The props are disposed with the predicate.')
+  .then('The first and third props are disposed and removed.')
+  .and('The second prop is kept, and not disposed.')
+  .and('The error is given to the errorObserver, with a null action.')
+  .run(async (_) => {
+    const observed: any[] = [];
+    const store = createStore({ errorObserver: (params) => { observed.push(params); return null; } });
+    const error = new Error('Predicate failed');
+    const first = new Disposable();
+    const second = new Disposable();
+    const third = new Disposable();
+    store.setProp('first', first);
+    store.setProp('second', second);
+    store.setProp('third', third);
+
+    expect(() => store.disposeProps((key) => {
+      if (key === 'second') throw error;
+      return true;
+    })).not.toThrow();
+
+    expect(first.disposed).toBe(1);
+    expect(third.disposed).toBe(1);
+    expect(second.disposed).toBe(0);
+    expect([...store.props.keys()]).toEqual(['second']);
+    expect(observed).toHaveLength(1);
+    expect(observed[0].error).toBe(error);
+    expect(observed[0].action).toBeNull();
+  });
+
+Bdd(feature)
+  .scenario('Logging out with a disposeProps predicate that throws still finishes, and the store keeps working.')
+  .given('A store with an errorObserver, and a disposable prop.')
+  .when('The store logs out with a disposeProps predicate that throws.')
+  .then('The logOut finishes, and the error is given to the errorObserver.')
+  .and('The prop is kept.')
+  .and('The store accepts new actions, and can log out again.')
+  .run(async (_) => {
+    const observed: any[] = [];
+    const store = createStore({ errorObserver: (params) => { observed.push(params); return null; } });
+    const error = new Error('Predicate failed');
+    const value = new Disposable();
+    store.setProp('res', value);
+    await store.dispatchAndWait(new Tick());
+    expect(store.state.count).toBe(1);
+
+    await expect(store.logOut({
+      initialState: new State(0),
+      throttle: 0,
+      actionsThrottle: 0,
+      disposeProps: () => { throw error; },
+    })).resolves.toBeUndefined();
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0].error).toBe(error);
+    expect(store.prop('res')).toBe(value);
+    expect(value.disposed).toBe(0);
+
+    // The store was reset, and it accepts new actions.
+    expect(store.state.count).toBe(0);
+    await store.dispatchAndWait(new Tick());
+    expect(store.state.count).toBe(1);
+
+    // A later logOut, with a predicate that works, also finishes.
+    await store.logOut({ initialState: new State(0), throttle: 0, actionsThrottle: 0, disposeProps: () => true });
+    expect(store.state.count).toBe(0);
+    expect(value.disposed).toBe(1);
+    expect(store.props.size).toBe(0);
+  });
+
+Bdd(feature)
+  .scenario('A dispose that throws a value which cannot be converted to a string is still logged, without failing.')
+  .given('A store with a logger and no errorObserver, and three props.')
+  .and('The first prop throws a Symbol when disposed, and the second throws an object whose toString throws.')
+  .when('All props are disposed.')
+  .then('The errors are logged, naming the props.')
+  .and('The third prop is disposed, and all three are removed.')
+  .run(async (_) => {
+    const logs: string[] = [];
+    const store = createStore({ logger: (obj) => logs.push(String(obj)) });
+    const third = new Disposable();
+    const unprintable = { toString() { throw new Error('Cannot print'); } };
+
+    store.setProp('first', 'fails', { dispose: () => { throw Symbol('Dispose failed'); } });
+    store.setProp('second', 'fails', { dispose: () => { throw unprintable; } });
+    store.setProp('third', third);
+
+    expect(() => store.disposeProps()).not.toThrow();
+
+    expect(third.disposed).toBe(1);
+    expect(store.props.size).toBe(0);
+    expect(logs.some(log => log.includes(`'first'`) && log.includes('threw an error'))).toBe(true);
+    expect(logs.some(log => log.includes(`'second'`) && log.includes('threw an error'))).toBe(true);
+  });

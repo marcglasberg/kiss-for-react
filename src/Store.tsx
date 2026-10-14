@@ -1,4 +1,3 @@
-import React, { createContext, useMemo } from 'react';
 import { UserException } from './UserException';
 import { PersistAction, Persistor } from './Persistor';
 import {
@@ -6,6 +5,7 @@ import {
   AsyncReducer,
   AsyncReducerResult,
   KissAction,
+  MergeServerStateAction,
   OptimisticCommand,
   Poll,
   ReduxReducer,
@@ -17,11 +17,18 @@ import {
 import { ProcessPersistence } from './ProcessPersistence';
 import { AbortDispatchException, isKissAbort, kissAbort, StoreException, TimeoutException } from './StoreException';
 import { Evt, EvtState } from './Evt';
-import { capTimeoutMillis, MAX_TIMEOUT_MILLIS } from "./utils";
+import { capTimeoutMillis, describeValue, isPlainObject, MAX_TIMEOUT_MILLIS } from "./utils";
 
 // An active polling cycle of the given polling key. The `timer` is the one that dispatches the
-// next tick, or `null` while a tick (or the immediate run) is running.
-type PollingCycle = { key: any, timer: ReturnType<typeof setTimeout> | null };
+// next tick, or `null` while a tick (or the immediate run) is running, or while a tick that
+// came due waits for the app to be focused or online again (see `pollOnlyWhenFocused` and
+// `pollOnlyWhenOnline`). In that last case, `cancelWait` stops listening for them, and drops
+// the tick.
+type PollingCycle = {
+  key: any,
+  timer: ReturnType<typeof setTimeout> | null,
+  cancelWait: (() => void) | null,
+};
 
 /**
  * A function that disposes the value of a store prop, given to `setProp` as the `dispose`
@@ -171,6 +178,24 @@ interface ConstructorParams<St> {
    * serializing it to a string and saving it to the local device storage.
    */
   persistor?: Persistor<St>;
+
+  /**
+   * How `store.mergeServerState(slice)` and the `StoreSlice` component merge a slice of
+   * state, loaded on the server for a route, into the store state (see "Server-side rendering"
+   * in the README). It gets the current state and the slice, and returns the new state. Return
+   * the same state when nothing changes, so that nothing is published.
+   *
+   * Without it, the state must be a plain object, and the merge is shallow:
+   * `{ ...state, ...slice }`. A class-based state needs this option, where its deserialization
+   * also goes, since a slice is a plain object (in Next.js, it's a prop that a server component
+   * gives to a client component, so it must be serializable):
+   *
+   * ```ts
+   * mergeServerState: (state, slice: { user?: UserJson }) =>
+   *   slice.user ? state.withUser(User.fromJson(slice.user)) : state,
+   * ```
+   */
+  mergeServerState?: (state: St, slice: any) => St;
 
   /**
    * The `logger` is a function that Kiss uses when it calls `Store.log()`
@@ -389,7 +414,73 @@ interface ConstructorParams<St> {
    * ```
    */
   stateObserver?: (action: KissAction<St>, prevState: St, newState: St, error: any, dispatchCount: number) => void;
+
+  /**
+   * Where the store learns whether the app is **focused** (see `store.isFocused`). By default,
+   * in the browser, the app is focused when the document is visible (`document.visibilityState`,
+   * following the `visibilitychange` event), so switching to another browser tab, or minimizing
+   * the window, makes it not focused. On the server, in Node and in React Native, where there
+   * is no `document`, the default says the app is always focused.
+   *
+   * Give a source to use something else. It gets a `setFocused` function to call whenever the
+   * value changes (and right away, with the current value, if it knows it), and returns a
+   * function that stops listening, called by `store.dispose()`. For example, in React Native:
+   *
+   * ```ts
+   * import { AppState } from 'react-native';
+   *
+   * const store = createStore<State>({
+   *   initialState: State.initialState,
+   *   focusSource: (setFocused) => {
+   *     setFocused(AppState.currentState === 'active');
+   *     const sub = AppState.addEventListener('change', (s) => setFocused(s === 'active'));
+   *     return () => sub.remove();
+   *   },
+   * });
+   * ```
+   *
+   * The source is started lazily, when something first reads the signal: `store.isFocused`,
+   * `useIsFocused()`, or a `useStoreEffect` with `onFocus`/`onBlur`. Until the source sets a
+   * value, the app counts as focused. In tests, use `store.setFocused(bool)` instead.
+   */
+  focusSource?: AppSignalSource;
+
+  /**
+   * Where the store learns whether the app is **online** (see `store.isOnline`). By default, in
+   * the browser, it's `navigator.onLine`, following the `online` and `offline` window events.
+   * Where there is no `navigator.onLine` (the server, Node, React Native), the default says the
+   * app is always online.
+   *
+   * Give a source to use something else, like `NetInfo` in React Native, or a ping to your own
+   * server. It gets a `setOnline` function to call whenever the value changes (and right away,
+   * with the current value, if it knows it), and returns a function that stops listening,
+   * called by `store.dispose()`:
+   *
+   * ```ts
+   * import NetInfo from '@react-native-community/netinfo';
+   *
+   * const store = createStore<State>({
+   *   initialState: State.initialState,
+   *   onlineSource: (setOnline) => NetInfo.addEventListener((s) => setOnline(s.isConnected === true)),
+   * });
+   * ```
+   *
+   * The online signal is also what the `checkInternet` and `unlimitedRetryCheckInternet`
+   * action features check by default (the default `hasInternet()` of the actions reads
+   * `store.isOnline`), so a custom source makes them work in React Native with no change to the
+   * actions. The source is started lazily, when something first reads the signal. Until the
+   * source sets a value, the app counts as online. In tests, use `store.setOnline(bool)`, or
+   * `store.forceInternetOnOffSimulation`, which takes precedence for the action features.
+   */
+  onlineSource?: AppSignalSource;
 }
+
+/**
+ * A source of the focus or online signal of the app (see `focusSource` and `onlineSource` in
+ * `createStore`). It gets a function to call with the new value whenever it changes, and may
+ * return a function that stops listening, called when the store is disposed.
+ */
+export type AppSignalSource = (set: (value: boolean) => void) => (() => void) | void;
 
 /**
  * The store holds the state of the application and allows the state to be updated
@@ -486,7 +577,152 @@ class NotificationBatch {
       }
     }
   }
+
+  /**
+   * Like `run`, but instead of publishing the notifications when `fn` finishes, returns a
+   * function that publishes them, for the caller to call when it's safe. Used by `StoreSlice`,
+   * which changes the state while React renders it (where a notification would make React warn
+   * about updating other components during a render), and publishes after the commit. Inside
+   * another batch, the notifications are left to that batch, and the returned function does
+   * nothing.
+   */
+  suspend(fn: () => void): () => void {
+    this.depth++;
+    try {
+      fn();
+    } finally {
+      this.depth--;
+    }
+    if (this.depth > 0 || this.pending.size === 0) return () => {};
+    const pending = Array.from(this.pending);
+    this.pending.clear();
+    return () => {
+      for (const listeners of pending) listeners.notify();
+    };
+  }
 }
+
+/**
+ * One of the signals of the app the store publishes: whether the app is focused, or online
+ * (see `focusSource` and `onlineSource` in `ConstructorParams`). The value comes from a source,
+ * started lazily the first time the value is read or subscribed to, so that a store that never
+ * needs the signal (a server store, most tests) never listens to anything. The value is `true`
+ * until the source says otherwise.
+ *
+ * Tests set the value by hand with `set(boolean)`, which disconnects the source (otherwise a
+ * late start of the source could overwrite the value the test set). `set(null)` connects the
+ * source again. After `dispose()`, the source is stopped and never started again.
+ */
+class AppSignal {
+  private _value = true;
+  private _isStarted = false;
+  private _isManual = false;
+  private _isDisposed = false;
+  private _stopSource: (() => void) | void = undefined;
+
+  constructor(
+    private readonly source: AppSignalSource,
+    private readonly listeners: Listeners,
+    private readonly onStopError: (error: unknown) => void,
+  ) {}
+
+  get value(): boolean {
+    this._start();
+    return this._value;
+  }
+
+  subscribe(listener: StoreListener): Unsubscribe {
+    this._start();
+    return this.listeners.add(listener);
+  }
+
+  set(value: boolean | null): void {
+    if (value === null) {
+      if (!this._isManual) return;
+      this._isManual = false;
+      // Starts the source again, from the default value, and notifies once if the value
+      // changed, whether the source set it or not (where there is no source, it's `true` again).
+      const old = this._value;
+      this._value = true;
+      this._isSilent = true;
+      try {
+        this._start();
+      } finally {
+        this._isSilent = false;
+      }
+      if (this._value !== old) this.listeners.notify();
+      return;
+    }
+    this._isManual = true;
+    this._stop();
+    this._update(value);
+  }
+
+  // True while the source is started again by `set(null)`, so that `_update` doesn't notify.
+  private _isSilent = false;
+
+  dispose(): void {
+    this._isDisposed = true;
+    this._stop();
+  }
+
+  private _start(): void {
+    if (this._isStarted || this._isManual || this._isDisposed) return;
+    this._isStarted = true;
+    this._stopSource = this.source((value) => {
+      if (this._isStarted) this._update(value === true);
+    });
+  }
+
+  private _stop(): void {
+    if (!this._isStarted) return;
+    this._isStarted = false;
+    const stop = this._stopSource;
+    this._stopSource = undefined;
+    try {
+      stop?.();
+    } catch (error) {
+      this.onStopError(error);
+    }
+  }
+
+  private _update(value: boolean): void {
+    if (value === this._value) return;
+    this._value = value;
+    if (!this._isSilent) this.listeners.notify();
+  }
+}
+
+// The default sources only touch the browser globals when they exist, so that the same code
+// runs on the server, in Node and in React Native (which has `window` and `navigator`, but no
+// `document` and no `navigator.onLine`).
+
+/** The default `focusSource`: the document is visible. See `ConstructorParams.focusSource`. */
+const defaultFocusSource: AppSignalSource = (setFocused) => {
+  const doc: Document | undefined = (typeof document === 'undefined') ? undefined : document;
+  if (doc === undefined || typeof doc.addEventListener !== 'function') return;
+  const update = () => setFocused(doc.visibilityState !== 'hidden');
+  update();
+  doc.addEventListener('visibilitychange', update);
+  return () => doc.removeEventListener('visibilitychange', update);
+};
+
+/** The default `onlineSource`: `navigator.onLine`. See `ConstructorParams.onlineSource`. */
+const defaultOnlineSource: AppSignalSource = (setOnline) => {
+  const nav: Navigator | undefined = (typeof navigator === 'undefined') ? undefined : navigator;
+  if (nav === undefined || typeof nav.onLine !== 'boolean') return;
+  setOnline(nav.onLine);
+  const win: Window | undefined = (typeof window === 'undefined') ? undefined : window;
+  if (win === undefined || typeof win.addEventListener !== 'function') return;
+  const online = () => setOnline(true);
+  const offline = () => setOnline(false);
+  win.addEventListener('online', online);
+  win.addEventListener('offline', offline);
+  return () => {
+    win.removeEventListener('online', online);
+    win.removeEventListener('offline', offline);
+  };
+};
 
 /**
  * The store holds the state of the application and allows the state to be updated
@@ -540,6 +776,88 @@ export class Store<St> {
 
   /** Internal: returns `_isReady`, as a stable function. */
   public _getIsReady: () => boolean = () => this._isReady;
+
+  // The focus and online signals of the app (see `focusSource` and `onlineSource` in
+  // `ConstructorParams`). Each has its own listeners, like the state, the status and the
+  // readiness, so that a change in one doesn't make React check the components using the other.
+  private readonly _focusListeners = new Listeners(this._notificationBatch);
+  private readonly _onlineListeners = new Listeners(this._notificationBatch);
+  private readonly _focus: AppSignal;
+  private readonly _online: AppSignal;
+
+  /** Internal: subscribes to the focus signal. Used by `useIsFocused` and `useStoreEffect`. */
+  public _subscribeFocus: (listener: StoreListener) => Unsubscribe = (listener) => this._focus.subscribe(listener);
+
+  /** Internal: subscribes to the online signal. Used by `useIsOnline` and `useStoreEffect`. */
+  public _subscribeOnline: (listener: StoreListener) => Unsubscribe = (listener) => this._online.subscribe(listener);
+
+  /** Internal: returns `isFocused`, as a stable function. */
+  public _getIsFocused: () => boolean = () => this._focus.value;
+
+  /** Internal: returns `isOnline`, as a stable function. */
+  public _getIsOnline: () => boolean = () => this._online.value;
+
+  /**
+   * Whether the app is focused. In the browser, by default, this means the document is visible:
+   * the user is on the tab that shows the app, and the window is not minimized. Where the store
+   * can't know (the server, Node, React Native without a `focusSource`), it's always `true`.
+   * See `focusSource` in `createStore` to change where it comes from.
+   *
+   * In components, use `useIsFocused()`, or `useStoreEffect` with `onFocus` and `onBlur` to
+   * dispatch actions when the app is focused again (for example, to reload the data on screen).
+   *
+   * The first read starts listening to the source. In tests, set it with `setFocused`.
+   */
+  get isFocused(): boolean {
+    return this._focus.value;
+  }
+
+  /**
+   * Whether the app is online. In the browser, by default, it's `navigator.onLine`, which only
+   * says if there is a local network connection, not if the internet is reachable. Where the
+   * store can't know (the server, Node, React Native without an `onlineSource`), it's always
+   * `true`. See `onlineSource` in `createStore` to change where it comes from (for example,
+   * `NetInfo` in React Native, or a ping to your server).
+   *
+   * It's what the `checkInternet` and `unlimitedRetryCheckInternet` action features check by
+   * default (through the default `hasInternet()` of the actions). In components, use
+   * `useIsOnline()`, or `useStoreEffect` with `onOnline` and `onOffline` to dispatch actions
+   * when the internet comes back.
+   *
+   * The first read starts listening to the source. In tests, set it with `setOnline`.
+   */
+  get isOnline(): boolean {
+    return this._online.value;
+  }
+
+  /**
+   * Sets `isFocused` by hand, for tests. The store then stops listening to its `focusSource`,
+   * and only changes when you call this again. Pass `null` to listen to the source again:
+   *
+   * ```ts
+   * store.setFocused(false); // The user went to another tab.
+   * store.setFocused(true);  // The user came back: `onFocus` callbacks run.
+   * ```
+   */
+  setFocused(isFocused: boolean | null): void {
+    this._focus.set(isFocused);
+  }
+
+  /**
+   * Sets `isOnline` by hand, for tests. The store then stops listening to its `onlineSource`,
+   * and only changes when you call this again. Pass `null` to listen to the source again:
+   *
+   * ```ts
+   * store.setOnline(false); // The internet went down: `checkInternet` actions fail.
+   * store.setOnline(true);  // It's back: `onOnline` callbacks run.
+   * ```
+   *
+   * See also `forceInternetOnOffSimulation`, which only affects the action features, and takes
+   * precedence over this for them.
+   */
+  setOnline(isOnline: boolean | null): void {
+    this._online.set(isOnline);
+  }
 
   /**
    * Internal: the `initialState` passed to the constructor. It's the state the server rendered,
@@ -916,6 +1234,17 @@ export class Store<St> {
     this._dispatchWhenQueue = [];
   }
 
+  // Rejects the `waitCondition`s and `waitActionCondition`s (which also serve `waitAllActions`,
+  // `waitActionType` etc.) that are still waiting, with an `AbortDispatchException`, and cancels
+  // their timeouts. Called by `dispose()`, after `_cancelAllDispatchWhen()` removed the
+  // `dispatchWhen` entries from `_waitConditions`, so that only real waits are left.
+  private _abortAllWaits(): void {
+    const waits = [...this._waitConditions, ...this._waitActionConditions];
+    this._waitConditions = [];
+    this._waitActionConditions = [];
+    for (const wait of waits) wait.reject(kissAbort('The store was disposed, so the wait was aborted.'));
+  }
+
   /**
    * Helps implement the `waitActionCondition` method.
    */
@@ -998,6 +1327,18 @@ export class Store<St> {
   // A function that shows `UserExceptions` to the user, using some UI like a dialog or a toast.
   // This function is passed to the constructor. If not passed, the `UserException` is ignored.
   private readonly _showUserException: ShowUserException;
+
+  // The `mergeServerState` option of the constructor. See `_mergeSlice`.
+  private readonly _mergeServerStateFn: ((state: St, slice: any) => St) | undefined;
+
+  // The slices merged before the store was ready (the persistor still reading). The persisted
+  // state replaces the state when it arrives, and these are merged into it again, so that the
+  // server data of the route is not lost. Cleared when the store is ready.
+  private _pendingServerSlices: object[] = [];
+
+  // True while `_mergeServerState` dispatches, so that the dispatch is allowed before the
+  // store is ready (like the persistor's own `UpdateStateAction`).
+  private _applyingServerSlice = false;
 
   private readonly _errorObserver?: ConstructorParams<St>['errorObserver'];
   private readonly _actionObserver?: (action: KissAction<St>, dispatchCount: number, ini: boolean) => void;
@@ -1099,17 +1440,25 @@ export class Store<St> {
                 dependencies,
                 showUserException,
                 persistor,
+                mergeServerState,
                 errorObserver,
                 actionObserver,
                 stateObserver,
                 logger,
                 logStateChanges,
+                focusSource,
+                onlineSource,
               }: ConstructorParams<St>
   ) {
     this._state = initialState;
+    this._focus = new AppSignal(focusSource ?? defaultFocusSource, this._focusListeners,
+      (error) => this._reportDisposeError(error, 'Stopping the focus source threw an error'));
+    this._online = new AppSignal(onlineSource ?? defaultOnlineSource, this._onlineListeners,
+      (error) => this._reportDisposeError(error, 'Stopping the online source threw an error'));
     this._initialState = initialState;
     this._environment = environment;
     this._showUserException = showUserException || this._defaultShowUserException;
+    this._mergeServerStateFn = mergeServerState;
     this._processPersistence = (persistor === undefined) ? null : new ProcessPersistence(persistor, initialState);
     this._errorObserver = errorObserver;
     this._actionObserver = actionObserver;
@@ -1133,7 +1482,10 @@ export class Store<St> {
           this._processPersistorError(error, originalError, observeOnly);
       // Publishes the readiness as soon as it changes (the persisted state was read and applied,
       // or the initial state was saved, or that failed and the store keeps the initial state).
-      this._processPersistence.onReady = () => this._readyListeners.notify();
+      this._processPersistence.onReady = () => {
+        this._pendingServerSlices = [];
+        this._readyListeners.notify();
+      };
       this._processPersistence.readInitialState(this, initialState).catch(() => {});
     }
 
@@ -1437,7 +1789,7 @@ export class Store<St> {
   // changes. The only exception is the store itself, applying the state it read.
   private _throwIfNotReady(action: KissAction<St>): void {
     const pp = this._processPersistence;
-    if (pp !== null && !pp.isReady && !pp.isApplyingReadState)
+    if (pp !== null && !pp.isReady && !pp.isApplyingReadState && !this._applyingServerSlice)
       throw new StoreException(
         `Dispatched ${action} before the store is ready. ` +
         'Wait for store.ready() before dispatching actions.');
@@ -2472,7 +2824,7 @@ export class Store<St> {
     key: any,
     reduce: () => ReduxReducer<St>,
   ): ReduxReducer<St> {
-    const cycle: PollingCycle = { key, timer: null };
+    const cycle: PollingCycle = { key, timer: null, cancelWait: null };
     this._pollingCycles.push(cycle);
 
     if (action.pollWaitsForRun === false) {
@@ -2510,11 +2862,8 @@ export class Store<St> {
   ): void {
     if (!this._pollingCycles.includes(cycle)) return;
 
-    cycle.timer = setTimeout(() => {
+    const runTick = () => {
       if (!this._pollingCycles.includes(cycle)) return;
-
-      // While the tick runs there is no timer, but the cycle is still active.
-      cycle.timer = null;
 
       const waitsForRun = action.pollWaitsForRun !== false;
 
@@ -2531,13 +2880,54 @@ export class Store<St> {
       tick.finally(() => {
         if (waitsForRun) this._scheduleNextPollingTick(action, cycle);
       });
+    };
+
+    cycle.timer = setTimeout(() => {
+      if (!this._pollingCycles.includes(cycle)) return;
+
+      // While the tick runs (or waits for the app to be focused or online) there is no timer,
+      // but the cycle is still active.
+      cycle.timer = null;
+
+      if (this._pollingCanTick(action)) runTick();
+      else this._waitToTick(action, cycle, runTick);
     }, capTimeoutMillis(action._pollIntervalMillis!));
+  }
+
+  // True if the app is focused and online, as far as the action's `pollOnlyWhenFocused` and
+  // `pollOnlyWhenOnline` require. Only reads the signals the action requires, so that an action
+  // that requires none doesn't make the store listen to the sources.
+  private _pollingCanTick(action: KissAction<St>): boolean {
+    if (action.pollOnlyWhenFocused !== false && !this.isFocused) return false;
+    if (action.pollOnlyWhenOnline !== false && !this.isOnline) return false;
+    return true;
+  }
+
+  // A tick came due while the app is not focused or not online (see `_pollingCanTick`). Waits
+  // for the signals the action requires, and then runs the tick right away. Stopping the cycle
+  // meanwhile (`Poll.stop`, `Poll.runNowAndRestart`, `clearInternalActionProps()`) drops the tick.
+  private _waitToTick(action: KissAction<St>, cycle: PollingCycle, runTick: () => void): void {
+    const unsubscribes: Unsubscribe[] = [];
+    const cancelWait = () => {
+      cycle.cancelWait = null;
+      for (const unsubscribe of unsubscribes) unsubscribe();
+    };
+    cycle.cancelWait = cancelWait;
+
+    const onChange = () => {
+      if (!this._pollingCanTick(action)) return;
+      cancelWait();
+      runTick();
+    };
+    if (action.pollOnlyWhenFocused !== false) unsubscribes.push(this._focus.subscribe(onChange));
+    if (action.pollOnlyWhenOnline !== false) unsubscribes.push(this._online.subscribe(onChange));
   }
 
   // Cancels the timer of the polling cycle, and removes the cycle, so that its ticks stop.
   private _stopPollingCycle(cycle: PollingCycle): void {
     if (cycle.timer !== null) clearTimeout(cycle.timer);
     cycle.timer = null;
+    cycle.cancelWait?.();
     this._pollingCycles = this._pollingCycles.filter(entry => entry !== cycle);
   }
 
@@ -2551,6 +2941,7 @@ export class Store<St> {
     for (const cycle of cycles) {
       if (cycle.timer !== null) clearTimeout(cycle.timer);
       cycle.timer = null;
+      cycle.cancelWait?.();
     }
   }
 
@@ -3139,14 +3530,15 @@ export class Store<St> {
     if (value === null || typeof value !== 'object') return null;
     const v = value as any;
 
+    const what = `Disposing ${description} threw an error`;
     let result: unknown;
     try {
-      if (typeof Symbol.asyncDispose === 'symbol' && typeof v[Symbol.asyncDispose] === 'function') result = v[Symbol.asyncDispose]();
-      else if (typeof Symbol.dispose === 'symbol' && typeof v[Symbol.dispose] === 'function') result = v[Symbol.dispose]();
+      const bySymbol = Store._disposeBySymbol(v);
+      if (bySymbol !== null) result = bySymbol.result;
       else if (typeof v.dispose === 'function') result = v.dispose();
       else return null;
     } catch (error) {
-      this._reportDisposeError(error, description);
+      this._reportDisposeError(error, what);
       return null;
     }
 
@@ -3154,7 +3546,7 @@ export class Store<St> {
 
     return Promise.resolve(result).then(
       () => undefined,
-      (error) => this._reportDisposeError(error, description),
+      (error) => this._reportDisposeError(error, what),
     );
   }
 
@@ -3312,6 +3704,10 @@ export class Store<St> {
    * others. It doesn't wait for the async disposals (the ones that return a promise) to finish.
    * Use `store.dispose()` to wait for them.
    *
+   * A `predicate` that throws for a prop is treated like a disposal that throws: the error is
+   * given to the `errorObserver` (or logged), the prop is kept, and the other props are still
+   * disposed. This method never throws.
+   *
    * This is also available in actions, as `this.disposeProps()`.
    *
    * ```ts
@@ -3343,7 +3739,18 @@ export class Store<St> {
       // Skips a prop that was disposed, or replaced, by an earlier disposal.
       if (!this._props.has(key) || !Object.is(this._props.get(key), value)) continue;
 
-      if (predicate !== undefined && !predicate(key, value)) continue;
+      // A predicate that throws is reported, and the prop is kept, as if it returned false.
+      if (predicate !== undefined) {
+        let selected: boolean;
+        try {
+          selected = predicate(key, value);
+        } catch (error) {
+          this._reportDisposeError(error,
+            `The disposeProps predicate threw an error for the prop ${Store._describeKey(key)}, which was kept`);
+          continue;
+        }
+        if (!selected) continue;
+      }
 
       const dispose = this._propDisposers.get(key);
       this._props.delete(key);
@@ -3362,13 +3769,13 @@ export class Store<St> {
    * `_reportDisposeError`.
    */
   private _disposeValue(key: unknown, value: unknown, dispose: PropDispose | undefined): Promise<void> | null {
-    const description = `the prop ${Store._describeKey(key)}`;
+    const what = `Disposing the prop ${Store._describeKey(key)} threw an error`;
     let result: unknown;
     try {
       if (dispose !== undefined) result = dispose(value);
       else result = Store._disposeByType(value);
     } catch (error) {
-      this._reportDisposeError(error, description);
+      this._reportDisposeError(error, what);
       return null;
     }
 
@@ -3376,8 +3783,22 @@ export class Store<St> {
 
     return Promise.resolve(result).then(
       () => undefined,
-      (error) => this._reportDisposeError(error, description),
+      (error) => this._reportDisposeError(error, what),
     );
+  }
+
+  /**
+   * Internal: Disposes the value with the TC39 explicit resource management protocol, if it
+   * has a `[Symbol.asyncDispose]()` or `[Symbol.dispose]()` method, and returns the result of
+   * the disposal (a promise, if it's async), wrapped. Returns `null` if it has neither method.
+   * The wrapper is needed because a disposal may legitimately return `undefined`.
+   */
+  private static _disposeBySymbol(v: any): { result: unknown } | null {
+    if (typeof Symbol.asyncDispose === 'symbol' && typeof v[Symbol.asyncDispose] === 'function')
+      return { result: v[Symbol.asyncDispose]() };
+    if (typeof Symbol.dispose === 'symbol' && typeof v[Symbol.dispose] === 'function')
+      return { result: v[Symbol.dispose]() };
+    return null;
   }
 
   /**
@@ -3390,10 +3811,8 @@ export class Store<St> {
     const v = value as any;
 
     // TC39 explicit resource management.
-    if (typeof Symbol.asyncDispose === 'symbol' && typeof v[Symbol.asyncDispose] === 'function')
-      return v[Symbol.asyncDispose]();
-    if (typeof Symbol.dispose === 'symbol' && typeof v[Symbol.dispose] === 'function')
-      return v[Symbol.dispose]();
+    const bySymbol = Store._disposeBySymbol(v);
+    if (bySymbol !== null) return bySymbol.result;
 
     // Browser and Node types. Each global may not exist in the runtime.
     if (Store._isInstanceOfGlobal(v, 'AbortController')) return v.abort();
@@ -3421,22 +3840,102 @@ export class Store<St> {
       && typeof (value as any).then === 'function';
   }
 
-  // Reports the error of a disposal (of a prop, of the dependencies or of the configuration):
-  // to the `errorObserver` (with a `null` action), if there is one. If it returns an error (or
-  // there is no observer), the error is logged. Never throws. The `description` is what was
-  // being disposed, like `the prop 'clock'` or `the dependencies`.
-  private _reportDisposeError(error: unknown, description: string): void {
+  // Reports an error of the disposal of the props (a prop, or the disposeProps predicate), of
+  // the dependencies, or of the configuration: to the `errorObserver` (with a `null` action), if
+  // there is one. If it returns an error (or there is no observer), the error is logged. Never
+  // throws: the error may not be convertible to a string (a Symbol, or an object whose
+  // `toString` throws), so it's described with `_describeValue`. The `what` is the start of the
+  // log message, like `Disposing the prop 'clock' threw an error`.
+  private _reportDisposeError(error: unknown, what: string): void {
     if (this._errorObserver) {
       error = this._observeError(error, error, null);
       if (error === null) return;
     }
-    Store._logLazy(() => `Disposing ${description} threw an error: ${error}. ` +
+    Store._logLazy(() => `${what}: ${Store._describeValue(error)}. ` +
       `The error was ignored, and the other disposals were still done.`);
   }
 
   // Describes a prop key for log messages. Never throws.
   private static _describeKey(key: unknown): string {
     return (typeof key === 'string') ? `'${key}'` : Store._describeValue(key);
+  }
+
+  // ----------------------------------------------------------------------------------------------
+  // Server-side rendering: merging the server-loaded state of a route.
+  // ----------------------------------------------------------------------------------------------
+
+  /**
+   * Merges a slice of state, loaded on the server for a route, into the store state,
+   * synchronously, by dispatching a `MergeServerStateAction`. In a server-rendered app with
+   * several routes, each route's server code loads its own data (a server component in the
+   * Next.js app router, `getServerSideProps` in the pages router, a loader in Remix), and the
+   * `StoreSlice` component gives it to the store with this method, on the server and on the
+   * client, so that the HTML shows it, hydration matches, and client-side navigation shows the
+   * new route's data in its first render. See "Server-side rendering" in the README.
+   *
+   * How the slice is merged: the `mergeServerState` option of the constructor, or, without it,
+   * a shallow merge for plain-object states (`{ ...state, ...slice }`). When nothing changes,
+   * the state is kept (same reference), and nothing is published.
+   *
+   * The server data wins: a field in the slice replaces the field in the state, even if the
+   * client changed it. To keep client fields, use the `mergeServerState` option.
+   *
+   * Before the store is ready (a persistor still reading the persisted state), the slice is
+   * merged right away, and merged again into the persisted state when it arrives, so that the
+   * route's server data is not lost. The persistor may persist the merged state.
+   */
+  mergeServerState(slice: object): void {
+    this._mergeServerState(slice);
+  }
+
+  /**
+   * Internal: like `mergeServerState`, but doesn't publish the state change. Returns a function
+   * that publishes it. For `StoreSlice`, which merges while React renders it (the children
+   * must read the merged state in the same render), and publishes after the commit, since
+   * publishing during a render would make React warn about updating other components.
+   */
+  _mergeServerStateSilently(slice: object): () => void {
+    return this._notificationBatch.suspend(() => this._mergeServerState(slice));
+  }
+
+  private _mergeServerState(slice: object): void {
+    const pp = this._processPersistence;
+    if (pp !== null && !pp.isReady) this._pendingServerSlices.push(slice);
+    this._applyingServerSlice = true;
+    try {
+      this.dispatchSync(new MergeServerStateAction<St>(slice));
+    } finally {
+      this._applyingServerSlice = false;
+    }
+  }
+
+  /**
+   * Internal: merges a slice into a state, with the `mergeServerState` option of the
+   * constructor, or with the default shallow merge. Used by `MergeServerStateAction` (for the
+   * store state) and by `StoreSlice` (for the server state of its subtree).
+   */
+  _mergeSlice(state: St, slice: object): St {
+    if (this._mergeServerStateFn !== undefined) return this._mergeServerStateFn(state, slice);
+    if (!isPlainObject(state) || !isPlainObject(slice))
+      throw new StoreException(
+        `Cannot merge the server state slice ${describeValue(slice)} into the state: the default merge is a ` +
+        `shallow merge of plain objects, and the state (or the slice) is not a plain object. Give ` +
+        `createStore the \`mergeServerState\` option, with how to merge a slice into your state.`);
+    const current = state as Record<string, unknown>;
+    for (const key of Object.keys(slice)) {
+      if (!Object.is(current[key], slice[key])) return { ...current, ...slice } as St;
+    }
+    return state;
+  }
+
+  /**
+   * Internal: merges the slices merged before the store was ready into the persisted state,
+   * which replaces the store state. Called by `ProcessPersistence`.
+   */
+  _applyPendingServerSlices(persistedState: St): St {
+    let state = persistedState;
+    for (const slice of this._pendingServerSlices) state = this._mergeSlice(state, slice);
+    return state;
   }
 
   // ----------------------------------------------------------------------------------------------
@@ -3464,12 +3963,19 @@ export class Store<St> {
    *    are aborted. This also calls `clearInternalActionProps()`, which stops the polling, the
    *    retries, the debounce timers, the sequential queues, and the other action features.
    * 2. Cancels the `dispatchWhen`s that are still waiting, so their actions are not dispatched,
-   *    and their `onTimeout` is not called.
+   *    and their `onTimeout` is not called. The `waitCondition`s, `waitActionCondition`s,
+   *    `waitAllActions`s and the other waits still pending are rejected with an
+   *    `AbortDispatchException`, and their timeouts are cancelled, so that no timer is left
+   *    behind. Inside an action, this aborts the action. Elsewhere, catch the rejection, or
+   *    don't dispose the store while you still wait for it.
    * 3. Pauses the persistor, and cancels its pending save (a state change waiting for the
    *    throttle). A save that is already running still finishes. If you want the current state
    *    saved first, call `await store.persistAndPause()` before.
-   * 4. Disposes all the props (see `setProp`), and removes them.
-   * 5. Disposes the `dependencies`, and then the `configuration` (see the constructor), when
+   * 4. Stops listening to the focus and online sources (see `focusSource` and `onlineSource`
+   *    in the constructor), if they were started. `isFocused` and `isOnline` keep their last
+   *    values.
+   * 5. Disposes all the props (see `setProp`), and removes them.
+   * 6. Disposes the `dependencies`, and then the `configuration` (see the constructor), when
    *    they have a `[Symbol.asyncDispose]()`, `[Symbol.dispose]()` or `dispose()` method. They
    *    can still be read from the store after that.
    *
@@ -3489,7 +3995,10 @@ export class Store<St> {
     this._disposed = true;
     this.setShutDown(true);
     this._cancelAllDispatchWhen();
+    this._abortAllWaits();
     this._processPersistence?.dispose();
+    this._focus.dispose();
+    this._online.dispose();
     await this._disposeProps();
     await this._disposeInjected(this._dependencies, 'the dependencies');
     await this._disposeInjected(this._configuration, 'the configuration');
@@ -3657,7 +4166,8 @@ export class Store<St> {
      * example). Pass `true` to dispose all of them, like `disposeProps()`, or a predicate to
      * dispose only the ones it selects, like `disposeProps(predicate)`. They are disposed
      * right away, when logOut starts, so that the previous user's timers and listeners stop,
-     * and logOut waits for the async disposals.
+     * and logOut waits for the async disposals. A disposal, or a predicate, that throws
+     * doesn't stop the logOut: the error is given to the `errorObserver` (or logged).
      */
     disposeProps?: boolean | PropPredicate,
   }): Promise<void> {
@@ -4610,60 +5120,6 @@ export class Store<St> {
       Store.log(`dispatchWhen failed to dispatch ${action}: ${error}`);
     }
   }
-}
-
-export interface StoreProviderProps<St> {
-  /**
-   * The store the components below get from the hooks. If it changes, the components switch to
-   * the new store: they stop listening to the old one, read the new one right away, and the
-   * `useStoreEffect` callbacks run `onUnmount` for the old store and `onMount` for the new one.
-   */
-  store: Store<St>;
-
-  /**
-   * The state the server HTML was rendered from, for server-side rendering and hydration.
-   * On the server, it's the state to render. On the client, it's the state the HTML shows, which
-   * React needs to hydrate without mismatches, even if the live store already changed. After
-   * hydration, the components catch up with the live state. If not given, it's the
-   * `initialState` the store was created with, which is right when:
-   * - On the server, you put the data in the `initialState`, instead of dispatching actions
-   *   before rendering. If you dispatch before rendering, pass `serverState={store.state}`.
-   * - On the client, you create the store with the state transferred from the server. If you
-   *   create it with some other state, pass the transferred state here.
-   * It's only read while hydrating, so a later change is ignored. It should be a stable value.
-   *
-   * On the server and while hydrating, `useIsWaiting` and `useIsFailed` are false,
-   * `useExceptionFor` is null, and `useIsStoreReady` is true: the server HTML never shows an
-   * action in progress, a failed action, or a store that is not ready. After hydration, these
-   * hooks catch up with the live store too. So, on the server, wait for your actions to finish
-   * (and for `store.ready()`, if the server store has a persistor) before rendering.
-   */
-  serverState?: St;
-
-  children: React.ReactNode;
-}
-
-export interface StoreContextType<St> {
-  store: Store<St> | null;
-
-  /** Returns the `serverState` of the provider (or the store's `initialState`). See `StoreProviderProps`. */
-  getServerState: () => St;
-}
-
-export const StoreContext = createContext<StoreContextType<any>>({
-  store: null,
-  getServerState: () => undefined,
-});
-
-export function StoreProvider<St>(props: StoreProviderProps<St>): React.ReactElement {
-  const {store, children} = props;
-  const serverState = ('serverState' in props) ? props.serverState as St : store._initialState;
-  const value = useMemo<StoreContextType<St>>(() => ({store, getServerState: () => serverState}), [store, serverState]);
-  return (
-    <StoreContext.Provider value={value}>
-      {children}
-    </StoreContext.Provider>
-  );
 }
 
 class Mocks<St> {

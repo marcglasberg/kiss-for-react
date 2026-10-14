@@ -382,3 +382,20 @@ Bdd(feature)
     expect(store.isDisposed).toBe(true);
     expect(disposable.finished).toBe(true);
   });
+
+Bdd(feature)
+  .scenario('An async disposal that rejects with a value which cannot be converted to a string does not make dispose fail.')
+  .given('A store with a logger and no errorObserver, and a prop whose dispose returns a promise that rejects with a Symbol.')
+  .when('The store is disposed.')
+  .then('The dispose finishes, the store is disposed, and the error is logged, naming the prop.')
+  .run(async (_) => {
+    const logs: string[] = [];
+    const store = createStore({ logger: (obj) => logs.push(String(obj)) });
+    store.setProp('res', 'fails', { dispose: () => Promise.reject(Symbol('Dispose failed')) });
+
+    await expect(store.dispose()).resolves.toBeUndefined();
+
+    expect(store.isDisposed).toBe(true);
+    expect(store.props.size).toBe(0);
+    expect(logs.some(log => log.includes(`'res'`) && log.includes('threw an error'))).toBe(true);
+  });

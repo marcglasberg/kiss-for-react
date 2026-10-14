@@ -1,7 +1,7 @@
 import { PropPredicate, SetPropOptions, Store } from "./Store";
 import { AbortDispatchException, kissAbort, StoreException } from "./StoreException";
 import { UserException } from "./UserException";
-import { describeValue } from "./utils";
+import { describeValue, isPlainObject } from "./utils";
 
 /**
  * A SYNC reducer can return:
@@ -139,55 +139,44 @@ export abstract class KissAction<St> {
   }
 
   /**
-  * Checks if the device has an internet connection.
-  * Can be overridden by subclasses to provide custom internet connectivity checks.
-  *   
-  * By default, in web environment it uses `navigator.onLine`, and for other environments it returns `true`.  
-  * Note `navigator.onLine` is not very useful, as it only tells you if there's a local connection, 
-  * and not whether the internet is accessible.
-  * 
-  * It's recommended to override this method in your base action, to check for internet connectivity
-  * in some other way that suits your needs.
-  * 
-  * For example, in React Native environments, we could use the `NetInfo` package 
-  * (https://www.npmjs.com/package/@react-native-community/netinfo) to check for internet connectivity.
-  * 
-  * First, add NetInfo to your `package.json`:
-  * 
-  * ```json
-  * "dependencies": {
-  *   "@react-native-community/netinfo": "^11.4.1"
-  * }
-  * ```	
-  * 
-  * Then, import it in your action:
-  * 
+  * Checks if the device has an internet connection, for `checkInternet` and
+  * `unlimitedRetryCheckInternet`.
+  *
+  * By default, it returns the online signal of the store, `store.isOnline`. In the browser,
+  * that's `navigator.onLine` (following the `online`/`offline` events), and elsewhere (Node.js,
+  * React Native) it's `true`, unless the store was created with an `onlineSource`. Note
+  * `navigator.onLine` only tells you if there's a local connection, not whether the internet
+  * is accessible.
+  *
+  * The recommended way to check the connection in some other way is to give the store an
+  * `onlineSource` (see `createStore`), which also feeds `useIsOnline()` and the `onOnline`
+  * callback of `useStoreEffect`. For example, in React Native, with the `NetInfo` package
+  * (https://www.npmjs.com/package/@react-native-community/netinfo):
+  *
   * ```typescript
   * import NetInfo from '@react-native-community/netinfo';
+  *
+  * const store = createStore<State>({
+  *   initialState: State.initialState,
+  *   onlineSource: (setOnline) => NetInfo.addEventListener((s) => setOnline(s.isConnected === true)),
+  * });
   * ```
-  * 
-  * Finally, override the `hasInternet()` method:
-  * 
+  *
+  * You can also override this method, in your base action, to check the connection on demand
+  * each time an action needs it (for example, with https://www.npmjs.com/package/is-online, or
+  * by pinging your own server). The override then ignores `store.isOnline`:
+  *
   * ```typescript
   * protected hasInternet(): Promise<boolean> {
-  *   return NetInfo.fetch().then(state => state.isConnected);
+  *   return NetInfo.fetch().then(state => state.isConnected === true);
   * }
   * ```
-  * 
-  * Another option, for Node.js and the browser is using https://www.npmjs.com/package/is-online
-  * 
-  * Note: Instead of adding this to every action, you can create a base class 
-  * that extends `KissAction` and implement the `hasInternet()` method there.
   *
   * Note: This method is not called while the internet connection is being simulated with
   * `internetOnOffSimulation` or `store.forceInternetOnOffSimulation`.
   */
   protected hasInternet(): Promise<boolean> {
-
-    // In the browser, use navigator.onLine. Otherwise (Node.js, React Native, which has
-    // `navigator` but no `navigator.onLine`), assume connected.
-    const hasOnLine = typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean';
-    return Promise.resolve(hasOnLine ? navigator.onLine : true);
+    return Promise.resolve(this.store.isOnline);
   }
 
   /**
@@ -2569,6 +2558,50 @@ export abstract class KissAction<St> {
   declare pollWaitsForRun?: boolean;
 
   /**
+   * Whether the polling ticks only run while the app is focused (see `store.isFocused`: in the
+   * browser, the document is visible). The default is `true`. This is only used by actions
+   * that use polling (see `poll`).
+   *
+   * While the app is not focused, a tick that comes due doesn't run. It waits, and runs as soon
+   * as the app is focused again. The polling then goes on at the normal interval. If the app is
+   * focused again before the tick is due, the tick runs at its normal time. So, coming back to
+   * the tab refreshes the data at once if it's old, and nothing is polled while the user is
+   * away. The immediate run of `Poll.start` and `Poll.runNowAndRestart` is not affected.
+   *
+   * Set it to `false` to keep polling while the app is not focused:
+   *
+   * ```ts
+   * pollOnlyWhenFocused = false;
+   * ```
+   *
+   * Where the store can't know if the app is focused (the server, Node, React Native without a
+   * `focusSource` in `createStore`), the app counts as focused, and the polling never pauses.
+   */
+  declare pollOnlyWhenFocused?: boolean;
+
+  /**
+   * Whether the polling ticks only run while the app is online (see `store.isOnline`: in the
+   * browser, `navigator.onLine`). The default is `true`. This is only used by actions that use
+   * polling (see `poll`).
+   *
+   * While the app is offline, a tick that comes due doesn't run. It waits, and runs as soon as
+   * the app is online again. The polling then goes on at the normal interval. So, the polling
+   * doesn't fail on every tick while offline, and the data is refreshed as soon as the internet
+   * is back. The immediate run of `Poll.start` and `Poll.runNowAndRestart` is not affected.
+   *
+   * Set it to `false` to keep polling while the app is offline (for example, when the polled
+   * action doesn't use the internet):
+   *
+   * ```ts
+   * pollOnlyWhenOnline = false;
+   * ```
+   *
+   * Where the store can't know if the app is online (the server, Node, React Native without an
+   * `onlineSource` in `createStore`), the app counts as online, and the polling never pauses.
+   */
+  declare pollOnlyWhenOnline?: boolean;
+
+  /**
    * Must return a new action instance that the timer will dispatch on each tick. This can be
    * the same action class with `Poll.once`, or a completely different action class (see the
    * documentation of `poll` for both patterns).
@@ -3769,6 +3802,14 @@ export abstract class KissAction<St> {
         `Action ${this.constructor.name} has an invalid pollInterval: ` +
         `it must be a number >= 0 (milliseconds), but got ` +
         `${typeof pollInterval === 'string' ? `"${pollInterval}"` : String(pollInterval)}.`);
+
+    for (const name of ['pollOnlyWhenFocused', 'pollOnlyWhenOnline'] as const) {
+      const value: any = this[name];
+      if (value !== undefined && typeof value !== 'boolean')
+        throw new StoreException(
+          `Action ${this.constructor.name} has an invalid ${name}: ` +
+          `it must be true or false, but got ${typeof value === 'string' ? `"${value}"` : String(value)}.`);
+    }
 
     if (this.ifRetryIsOn)
       throw new StoreException(
@@ -6321,7 +6362,7 @@ export function _isSameNonReentrantKey(a: any, b: any): boolean {
   if (Array.isArray(a) && Array.isArray(b))
     return a.length === b.length && a.every((value, i) => _isSameNonReentrantKey(value, b[i]));
 
-  if (_isPlainObject(a) && _isPlainObject(b)) {
+  if (isPlainObject(a) && isPlainObject(b)) {
     const keysA = Object.keys(a);
     const keysB = Object.keys(b);
     return keysA.length === keysB.length &&
@@ -6329,12 +6370,6 @@ export function _isSameNonReentrantKey(a: any, b: any): boolean {
   }
 
   return false;
-}
-
-function _isPlainObject(value: any): boolean {
-  if (value === null || typeof value !== 'object') return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
 }
 
 /**
@@ -6363,6 +6398,34 @@ export class UpdateStateAction<St> extends KissAction<St> {
 
   toString(): string {
     return `${this.constructor.name}(state)`;
+  }
+}
+
+/**
+ * Merges a slice of state loaded on the server into the store state, synchronously. It's
+ * dispatched by `store.mergeServerState(slice)`, and by the `StoreSlice` component, which
+ * gives each route of a server-rendered app its own server-loaded data. See "Server-side
+ * rendering" in the README.
+ *
+ * The merge is the `mergeServerState` option given to `createStore`, or, without it, a
+ * shallow merge for plain-object states: `{ ...state, ...slice }`. When nothing changes, the
+ * state is kept as is (same reference), so that nothing is published.
+ *
+ * The persistor may persist the merged state, like any other state change.
+ */
+export class MergeServerStateAction<St> extends KissAction<St> {
+
+  constructor(readonly slice: object) {
+    super();
+  }
+
+  protected reduce(): St | null {
+    return this.store._mergeSlice(this.state, this.slice);
+  }
+
+  toString(): string {
+    const keys = isPlainObject(this.slice) ? Object.keys(this.slice).join(', ') : 'slice';
+    return `${this.constructor.name}(${keys})`;
   }
 }
 

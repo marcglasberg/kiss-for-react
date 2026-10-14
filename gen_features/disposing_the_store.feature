@@ -73,3 +73,8 @@ Feature: Disposing the store
     Given A block that creates a store with `await using`, and sets a disposable prop.
     When The block ends.
     Then The store is disposed, and so is the prop.
+
+  Scenario: An async disposal that rejects with a value which cannot be converted to a string does not make dispose fail.
+    Given A store with a logger and no errorObserver, and a prop whose dispose returns a promise that rejects with a Symbol.
+    When The store is disposed.
+    Then The dispose finishes, the store is disposed, and the error is logged, naming the prop.

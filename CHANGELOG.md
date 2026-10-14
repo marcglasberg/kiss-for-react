@@ -34,11 +34,80 @@
 * New `store.dispose()`, to end the store when the app finishes, or at the end of each test:
   `afterEach(() => store.dispose())`. It shuts down the store (which also clears the internal
   action props, stopping the polling, the retries, the debounce timers and the sequential
-  queues), cancels the `dispatchWhen`s that are still waiting, pauses the persistor and cancels
-  its pending save, and disposes all the props. It returns a promise that waits for the async
-  disposals, and never rejects. `store.isDisposed` tells if it was called. The store also
-  implements `[Symbol.dispose]` and `[Symbol.asyncDispose]`, so that tests can write
-  `await using store = createStore(...)`.
+  queues), cancels the `dispatchWhen`s that are still waiting, rejects the `waitCondition`s,
+  `waitActionCondition`s, `waitAllActions`s and the other waits still pending (with an
+  `AbortDispatchException`, so that an action awaiting them is aborted, not failed) and cancels
+  their timeouts, pauses the persistor and cancels its pending save, and disposes all the
+  props. It returns a promise that waits for the async disposals, and never rejects.
+  `store.isDisposed` tells if it was called. The store also implements `[Symbol.dispose]` and
+  `[Symbol.asyncDispose]`, so that tests can write `await using store = createStore(...)`.
+  On a server, dispose the store of each request after rendering, so that no timer is left
+  behind in the Node process.
+
+* The store now knows whether the app is **focused** and **online**: `store.isFocused` (in the
+  browser, the document is visible, following the `visibilitychange` event) and
+  `store.isOnline` (`navigator.onLine`, following the `online` and `offline` events). Where the
+  store can't know (the server, Node, React Native), both are `true`, unless `createStore` is
+  given a `focusSource` or an `onlineSource` (a function that gets a setter and returns an
+  unsubscribe, for `AppState` and `NetInfo` in React Native, or a ping to your server). The
+  sources are started lazily, when the signal is first read, and stopped by `store.dispose()`.
+  In tests, `store.setFocused(bool)` and `store.setOnline(bool)` set them by hand (and
+  disconnect the source; `null` connects it again).
+
+  - `useStoreEffect` has new callbacks `onFocus`, `onBlur`, `onOnline` and `onOffline`, called
+    on the transitions only, while the component is mounted and after `onMount`. Use them to
+    reload the data on screen when the user comes back to the tab, or when the internet comes
+    back (with a `fresh` period on the action to skip recent data):
+
+    ```tsx
+    useStoreEffect({
+      onMount: (store) => store.dispatch(new LoadPrices()),
+      onFocus: (store) => store.dispatch(new LoadPrices()),
+      onOnline: (store) => store.dispatch(new LoadPrices()),
+    });
+    ```
+
+  - New hooks `useIsFocused()` and `useIsOnline()`, for example for an "offline" banner. Both
+    are `true` on the server.
+
+  - The default `hasInternet()` of the actions, used by `checkInternet` and
+    `unlimitedRetryCheckInternet`, now returns `store.isOnline`, so an `onlineSource` makes them
+    work in React Native with no change to the actions. In the browser the behavior is the same
+    as before (`navigator.onLine`). Overriding `hasInternet()` still works, and
+    `store.forceInternetOnOffSimulation` still takes precedence.
+
+  - Polling has new options `pollOnlyWhenFocused` and `pollOnlyWhenOnline`, both `true` by
+    default: the ticks only run while the app is focused and online. A tick that comes due
+    while the user is on another tab, or offline, waits, and runs as soon as the user comes
+    back, or the internet is back; the polling then goes on at the normal interval. The
+    immediate run of `Poll.start` and `Poll.runNowAndRestart` is not affected. Set them to
+    `false` to keep polling anyway. Where the store can't know (the server, Node, React Native
+    without sources), the polling never pauses.
+
+* **Server-side rendering**, with React 18 and 19: every hook has a server snapshot, so the
+  components render with `renderToString`, `renderToPipeableStream` and
+  `renderToReadableStream` (with Suspense boundaries that resolve during the streaming), and
+  hydrate with `hydrateRoot` without mismatches. The new `serverState` prop of `StoreProvider`
+  (see below) is the state the server HTML was rendered from, which hydration renders even if
+  the client store already changed (for example, a persistor restored a newer state). For
+  React Server Components (the Next.js app router): the hooks and the `StoreProvider` are
+  marked `'use client'`, and the package has a `react-server` export condition, so that server
+  components get its server entry, with the store and the actions but no hooks (also exported
+  as `kiss-for-react/server`; it also exports the `StoreProvider` and `StoreSlice` components,
+  which the bundler turns into client references). See "Server-side rendering" in the README,
+  and the examples `examples/nextjs-app-router`, `examples/nextjs-pages-router` and
+  `examples/ssr-express`, each with a Playwright test of the server HTML and the hydration.
+
+* New **`StoreSlice`** component, for server-rendered apps with several routes: each route
+  loads its own data on the server (a server component, `getServerSideProps`, a loader) and
+  renders its content inside `<StoreSlice state={{ user }} key={user.id}>`. The slice is merged
+  into the store once per mount, before the children render: on the server, the HTML shows the
+  route's data; on the client, hydration matches, and client-side navigation shows the new
+  route's data in its first render. It's a `MergeServerStateAction`, dispatched by the new
+  `store.mergeServerState(slice)`, with the new `mergeServerState` option of `createStore` (the
+  default is a shallow merge for plain-object states; class-based states need the option). A
+  slice merged before the store is ready (persistor still reading) is merged again into the
+  persisted state when it arrives.
 
 * New **environment, dependencies and configuration**, injected into the store, so that the
   actions get their services (API clients, repositories, analytics...) from the store, instead

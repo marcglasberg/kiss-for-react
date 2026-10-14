@@ -4,6 +4,16 @@
   "description": "Kiss state management, launched May 2025. Visit kissforreact.org for detailed docs and plenty of examples.",
   "exports": {
     ".": {
+      "react-server": {
+        "import": {
+          "types": "./lib/esm/types/server.d.ts",
+          "default": "./lib/esm/server.mjs"
+        },
+        "require": {
+          "types": "./lib/cjs/types/server.d.ts",
+          "default": "./lib/cjs/server.js"
+        }
+      },
       "import": {
         "types": "./lib/esm/types/index.d.ts",
         "default": "./lib/esm/index.mjs"
@@ -12,7 +22,18 @@
         "types": "./lib/cjs/types/index.d.ts",
         "default": "./lib/cjs/index.js"
       }
-    }
+    },
+    "./server": {
+      "import": {
+        "types": "./lib/esm/types/server.d.ts",
+        "default": "./lib/esm/server.mjs"
+      },
+      "require": {
+        "types": "./lib/cjs/types/server.d.ts",
+        "default": "./lib/cjs/server.js"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "types": "./lib/cjs/types/index.d.ts",
   "main": "./lib/cjs/index.js",

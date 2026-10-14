@@ -1,0 +1,12 @@
+node_modules
+.next
+next-env.d.ts
+*.tsbuildinfo
+playwright-report
+test-results
+
+# The todos the app saves on the server (the seed, data/todos.seed.json, is committed).
+data/todos.json
+data/todos.json.tmp
+*.e2e.json
+*.e2e.json.tmp

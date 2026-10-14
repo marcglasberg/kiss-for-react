@@ -60,7 +60,7 @@ if (fs.existsSync(path.join(consumer, 'node_modules', '@types', 'use-sync-extern
 
 // 4) ESM and CJS smoke, from the built artifacts of the installed package.
 const smokeSource = path.join(root, '__tests__', 'fixtures', 'built-package');
-for (const file of ['hooks-smoke-shared.cjs', 'hooks-smoke.mjs', 'hooks-smoke.cjs'])
+for (const file of ['hooks-smoke-shared.cjs', 'hooks-smoke.mjs', 'hooks-smoke.cjs', 'server-smoke.mjs', 'server-smoke.cjs'])
   fs.copyFileSync(path.join(smokeSource, file), path.join(consumer, file));
 const expected = '<p>2:2:false:false:none:true</p>';
 for (const file of ['hooks-smoke.mjs', 'hooks-smoke.cjs']) {
@@ -68,16 +68,27 @@ for (const file of ['hooks-smoke.mjs', 'hooks-smoke.cjs']) {
   if (out !== expected) throw new Error(`${file} printed ${JSON.stringify(out)}, expected ${JSON.stringify(expected)}`);
 }
 
+// 4b) Under the `react-server` condition (React Server Components), the package resolves to its
+// server entry, which has no hooks and doesn't need React's client features.
+const expectedServer = 'function:undefined:undefined:2';
+for (const file of ['server-smoke.mjs', 'server-smoke.cjs']) {
+  const out = run(`node --conditions=react-server ${file}`, consumer).trim();
+  if (out !== expectedServer) throw new Error(`${file} printed ${JSON.stringify(out)}, expected ${JSON.stringify(expectedServer)}`);
+}
+
 // 5) The published types: valid uses compile, invalid ones don't.
 fs.writeFileSync(path.join(consumer, 'tsconfig.json'), JSON.stringify({
   compilerOptions: {
     strict: true, noEmit: true, jsx: 'react-jsx', module: 'ESNext', moduleResolution: 'bundler',
-    target: 'ES2022', lib: ['ES2022', 'DOM'], skipLibCheck: false, types: [],
+    // 'ESNext.Disposable' declares Symbol.dispose, which the store's types use (`await using`).
+    // A consumer with skipLibCheck off needs it, or @types/node: the README says so.
+    target: 'ES2022', lib: ['ES2022', 'DOM', 'ESNext.Disposable'], skipLibCheck: false, types: [],
   },
   files: ['consumer.tsx'],
 }, null, 2));
 fs.writeFileSync(path.join(consumer, 'consumer.tsx'), `
 import { createStore, KissAction, StoreProvider, useIsWaiting, useObject, useSelect, useStoreEffect } from 'kiss-for-react';
+import { createStore as createServerStore, KissAction as ServerAction } from 'kiss-for-react/server';
 
 class Point { constructor(readonly x: number) {} }
 type State = { readonly count: number; readonly point: Point; readonly items: readonly string[] };
@@ -99,6 +110,13 @@ export function View() {
 }
 
 export const app = <StoreProvider store={store} serverState={store.state}><View /></StoreProvider>;
+
+// The server entry (for React Server Components) has the store and the actions, with the same types.
+class ServerIncrement extends ServerAction<State> {
+  reduce() { return { ...this.state, count: this.state.count + 1 }; }
+}
+export const serverStore = createServerStore<State>({ initialState: { count: 0, point: new Point(1), items: [] } });
+serverStore.dispatch(new ServerIncrement());
 `);
 run('npx tsc -p tsconfig.json', consumer);
 

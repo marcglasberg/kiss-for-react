@@ -1,8 +1,10 @@
+'use client';
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector';
 import { UserException } from './UserException';
 import { StoreException } from './StoreException';
-import { Store, StoreContext, StoreContextType } from "./Store";
+import { Store } from './Store';
+import { StoreContext, StoreContextType } from './StoreProvider';
 import { KissAction, ActionStatus } from './KissAction';
 import { Evt, EvtState } from './Evt';
 
@@ -314,6 +316,28 @@ export interface UseStoreEffectOptions<St, D> {
 
   /** Called once, when the component unmounts (but only if `onMount` was called). */
   onUnmount?: (store: Store<St>) => unknown;
+
+  /**
+   * Called when the app is focused again (in the browser, when the document becomes visible:
+   * the user comes back to the tab, or restores the window), while the component is mounted.
+   * Not called on mount. See `store.isFocused` and `focusSource` in `createStore`.
+   */
+  onFocus?: (store: Store<St>) => unknown;
+
+  /**
+   * Called when the app loses focus (in the browser, when the document becomes hidden), while
+   * the component is mounted. See `store.isFocused`.
+   */
+  onBlur?: (store: Store<St>) => unknown;
+
+  /**
+   * Called when the app is online again, while the component is mounted. Not called on mount.
+   * See `store.isOnline` and `onlineSource` in `createStore`.
+   */
+  onOnline?: (store: Store<St>) => unknown;
+
+  /** Called when the app goes offline, while the component is mounted. See `store.isOnline`. */
+  onOffline?: (store: Store<St>) => unknown;
 }
 
 /**
@@ -410,6 +434,33 @@ export interface UseStoreEffectOptions<St, D> {
  * Note: Changing `deps` doesn't call `onMount` again. If you want to dispatch the same actions
  * on mount and when `deps` change, call the same function from both `onMount` and
  * `onDepsChange`. Each of them sees the values from the latest render.
+ *
+ * To reload the data on screen when the user comes back to the tab, or when the internet comes
+ * back, use `onFocus` and `onOnline` (and `onBlur` and `onOffline` for the opposite):
+ *
+ * ```tsx
+ * useStoreEffect({
+ *   onMount: (store) => store.dispatch(new LoadPrices()),
+ *   onFocus: (store) => store.dispatch(new LoadPrices()),
+ *   onOnline: (store) => store.dispatch(new LoadPrices()),
+ * });
+ * ```
+ *
+ * - They are called on the transitions only (hidden → visible, offline → online, and back),
+ *   never on mount, and only while the component is mounted and after `onMount` was called
+ *   (so, after the store is ready). Like the other callbacks, they get the store, see the
+ *   values of the latest render, and are not awaited.
+ *
+ * - To only reload when the data is old, give the action a `fresh` period: a focus within the
+ *   period is then aborted silently. Without `fresh`, the action runs on every focus.
+ *
+ * - What "focused" and "online" mean comes from the store: `store.isFocused` and
+ *   `store.isOnline`, with `focusSource` and `onlineSource` in `createStore` to change the
+ *   defaults (for example, in React Native). In tests, drive them with `store.setFocused()` and
+ *   `store.setOnline()`.
+ *
+ * - A component that doesn't give these callbacks doesn't make the store listen to the focus
+ *   and online sources.
  */
 export function useStoreEffect<St = any, const D = undefined>(options: UseStoreEffectOptions<St, D>): void {
   const store = useStoreFromContext<St>();
@@ -495,6 +546,45 @@ export function useStoreEffect<St = any, const D = undefined>(options: UseStoreE
     if (_depsAreEqual(oldDeps, deps)) return;
     lastDepsRef.current = deps;
     optionsRef.current?.onDepsChange?.(store, oldDeps);
+  });
+
+  // Listens to the focus and online signals of the store, only while some render gave one of
+  // their callbacks, so that a component with `onMount` only doesn't start the sources. The
+  // callbacks run on the transitions only, and only after `onMount` was called.
+  const listensToFocus = !!(options.onFocus || options.onBlur);
+  const listensToOnline = !!(options.onOnline || options.onOffline);
+
+  useEffect(() => {
+    if (!listensToFocus) return;
+    return _listenToSignal(store._subscribeFocus, store._getIsFocused, (isFocused) => {
+      if (mountedStoreRef.current !== store) return;
+      if (isFocused) optionsRef.current?.onFocus?.(store);
+      else optionsRef.current?.onBlur?.(store);
+    });
+  }, [store, listensToFocus]);
+
+  useEffect(() => {
+    if (!listensToOnline) return;
+    return _listenToSignal(store._subscribeOnline, store._getIsOnline, (isOnline) => {
+      if (mountedStoreRef.current !== store) return;
+      if (isOnline) optionsRef.current?.onOnline?.(store);
+      else optionsRef.current?.onOffline?.(store);
+    });
+  }, [store, listensToOnline]);
+}
+
+// Subscribes to a boolean signal of the store, and calls `onChange` each time it changes.
+function _listenToSignal(
+  subscribe: (listener: () => void) => () => void,
+  get: () => boolean,
+  onChange: (value: boolean) => void,
+): () => void {
+  let last = get();
+  return subscribe(() => {
+    const value = get();
+    if (value === last) return;
+    last = value;
+    onChange(value);
   });
 }
 
@@ -686,6 +776,34 @@ const _returnTrue = () => true;
 export function useIsStoreReady(): boolean {
   const store = useStoreFromContext<any>();
   return useSyncExternalStore(store._subscribeReady, store._getIsReady, _returnTrue);
+}
+
+/**
+ * Returns true if the app is focused (in the browser, if the document is visible: the user is
+ * on the tab that shows the app). See `store.isFocused`. The component re-renders when it
+ * changes. On the server, it's always `true`.
+ *
+ * To dispatch an action when the app is focused again, use `useStoreEffect` with `onFocus`.
+ */
+export function useIsFocused(): boolean {
+  const store = useStoreFromContext<any>();
+  return useSyncExternalStore(store._subscribeFocus, store._getIsFocused, _returnTrue);
+}
+
+/**
+ * Returns true if the app is online. See `store.isOnline`. The component re-renders when it
+ * changes, so you can show an "offline" banner. On the server, it's always `true`.
+ *
+ * ```tsx
+ * const isOnline = useIsOnline();
+ * if (!isOnline) return <Banner>You are offline</Banner>;
+ * ```
+ *
+ * To dispatch an action when the internet comes back, use `useStoreEffect` with `onOnline`.
+ */
+export function useIsOnline(): boolean {
+  const store = useStoreFromContext<any>();
+  return useSyncExternalStore(store._subscribeOnline, store._getIsOnline, _returnTrue);
 }
 
 /**

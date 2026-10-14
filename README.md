@@ -216,6 +216,26 @@ useStoreEffect({
 });
 ```
 
+To reload the data on screen when the user comes back to the browser tab, or when the internet
+comes back, add `onFocus` and `onOnline` (there are also `onBlur` and `onOffline`). They run
+only on the transitions, while the component is mounted, never on mount. Give the action a
+`fresh` period to skip the reload when the data is recent:
+
+```tsx
+useStoreEffect({
+  onMount: (store) => store.dispatch(new LoadPrices()),
+  onFocus: (store) => store.dispatch(new LoadPrices()),
+  onOnline: (store) => store.dispatch(new LoadPrices()),
+});
+```
+
+The store knows whether the app is focused and online: `store.isFocused` (in the browser, the
+document is visible) and `store.isOnline` (`navigator.onLine`), also available in components
+with `useIsFocused()` and `useIsOnline()`, for an "offline" banner. Where the store can't know
+(the server, Node, React Native), both are `true`, unless you give `createStore` a `focusSource`
+or an `onlineSource` (for example, `AppState` and `NetInfo` in React Native). In tests, drive
+them with `store.setFocused(false)` and `store.setOnline(false)`.
+
 &nbsp;
 
 ## Actions can do asynchronous work
@@ -495,6 +515,11 @@ Use `checkInternet = { dialog: false }` to fail without a dialog, so you can sho
 in your components with `isFailed`. Or use `checkInternet = { abort: true }` to abort the
 action silently, as if it had never been dispatched, without any errors.
 
+The connection checked is the store's online signal, `store.isOnline`: in the browser,
+`navigator.onLine`; elsewhere, always online, unless you give `createStore` an `onlineSource`
+(like `NetInfo` in React Native). To check in some other way for each action, override
+`hasInternet()` in your base action.
+
 In tests, simulate the internet connection as off (or on) for all actions with
 `store.forceInternetOnOffSimulation = () => false`. Return `null` to use the real connection.
 
@@ -736,6 +761,13 @@ dispatch(new LoadPrices(Poll.stop)); // Stop polling.
 
 The default `pollInterval` is 10000 milliseconds. Each tick waits for the previous run to
 finish, so runs never overlap. Set `pollWaitsForRun = false` to tick at a fixed rate instead.
+
+By default, the ticks only run while the app is focused (in the browser, the tab is visible)
+and online. A tick that comes due while the user is away waits, and runs as soon as the user
+comes back to the tab, or the internet comes back. Set `pollOnlyWhenFocused = false` or
+`pollOnlyWhenOnline = false` to keep polling anyway. Where the store can't know if the app is
+focused or online (the server, Node, React Native without a `focusSource`/`onlineSource`), the
+polling never pauses.
 By default, actions of the same class share the same polling. Override `pollingKeyParams()`
 to give each value of some fields its own polling, or `computePollingKey()` so that actions
 of different classes share it. To stop all polling at once (for example, on logout), call
@@ -898,6 +930,9 @@ afterEach(() => store.dispose());
 await using store = createStore<State>({ initialState: State.initialState });
 ```
 
+The types of `[Symbol.dispose]` need `Symbol.dispose` declared: add `"ESNext.Disposable"` to
+the `lib` of your `tsconfig.json` (or have `@types/node`), unless `skipLibCheck` is on.
+
 &nbsp;
 
 ## Environment, dependencies and configuration
@@ -1021,6 +1056,72 @@ On the server and while hydrating, `useIsWaiting` and `useIsFailed` are `false`,
 progress, a failed action, or a store that is not ready. After hydration, these hooks follow
 the live store. So, on the server, wait for your actions to finish (and for `store.ready()`,
 if the server store has a persistor) before rendering.
+
+After rendering, dispose the server store with `await store.dispose()`. It stops the polling,
+debounce, retry and other timers, cancels the pending `dispatchWhen`s, and rejects the waits
+still pending (`waitCondition`, `waitAllActions`...), so that a request leaves nothing behind
+in the Node process. Streaming works the same way: with `renderToPipeableStream` or
+`renderToReadableStream`, the Suspense boundaries that resolve later also render the
+`serverState`, and the complete HTML hydrates without mismatches.
+
+### Next.js and React Server Components
+
+In a React Server Components app, like the Next.js **app router**, the hooks and the
+`StoreProvider` can only be used in client components (they are marked `'use client'`). In
+server components, `kiss-for-react` resolves to its server entry (through the `react-server`
+export condition), which has the store and the actions, but no hooks, so that importing a hook
+there is a build error instead of a runtime one. The pattern is: a server component loads the
+data (it can create a store and dispatch actions for that, one store per request, disposed
+after), and passes the state as a prop to a client component, which creates the store once
+and renders the `StoreProvider` with that state as `serverState`:
+
+```tsx
+'use client';
+export function KissProvider({ initialState, children }: { initialState: State, children: ReactNode }) {
+  const [store] = useState(() => createStore<State>({ initialState, persistor: clientPersistor() }));
+  return <StoreProvider store={store} serverState={initialState}>{children}</StoreProvider>;
+}
+```
+
+Render it in the root layout, so that the store survives client-side navigation. The subpath
+`kiss-for-react/server` is the same server entry, for code that must never pull in the hooks.
+In the Next.js **pages router**, there are no server components: load the data in
+`getServerSideProps`, and create the store once in `_app.tsx`, from the first page's props.
+
+**Several routes.** Each route loads its own data on the server (a server component in the app
+router, `getServerSideProps` in the pages router), and gives it to the store with `StoreSlice`:
+
+```tsx
+// app/users/[id]/page.tsx, a server component.
+export default async function UserPage({ params }: { params: Promise<{ id: string }> }) {
+  const user = await fetchUser((await params).id);
+  return <StoreSlice state={{ user }} key={`${user.id}:${user.updatedAt}`}><UserView /></StoreSlice>;
+}
+```
+
+The slice is a plain object (a prop a server component gives to a client component). On the
+server, the components inside the slice render the merged state, so the HTML shows the route's
+data; on the client, the slice is merged into the live store before they render, so hydration
+matches, and client-side navigation shows the new route's data in its first render, with no
+empty or stale frame. The slice is merged once per mount: give it a `key` that changes when the
+route's data changes. The merge is shallow (`{ ...state, ...slice }`) for a plain-object state;
+a class-based state needs the `mergeServerState` option of `createStore`, which gets the state
+and the slice and returns the new state (that's also where the slice is deserialized). The
+server data wins over the client's; to keep client fields, use the option. You can also call
+`store.mergeServerState(slice)` yourself (it dispatches a `MergeServerStateAction`). Mutations
+are ordinary Kiss actions, which may call a server action (app router) or an API route.
+
+Complete examples, each with a persistor on the client (which restores state before hydration)
+and a Playwright test that checks the server HTML, the absence of hydration warnings, and the
+store after hydration:
+
+- [Next.js app router](examples/nextjs-app-router)
+- [Next.js pages router](examples/nextjs-pages-router) (`getServerSideProps`, store in `_app.tsx`)
+- [Express, with streaming](examples/ssr-express) (`renderToPipeableStream` and `hydrateRoot`, no framework)
+- [Todo app with Next.js](examples/todo-app-nextjs): the [Vite todo app](examples/todo-app-example)
+  ported to the app router, with the same business code, a class-based state that travels as
+  JSON and is rebuilt on the client, and the `ClassPersistor` (its classes declare
+  `static typeName`, since Next.js minifies class names)
 
 &nbsp;
 

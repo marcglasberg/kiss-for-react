@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "todos": [
+    { "text": "Render on the server", "completed": false },
+    { "text": "Hydrate on the client", "completed": false },
+    { "text": "Dispatch actions", "completed": false }
+  ]
+}

@@ -11,6 +11,7 @@ import {
   PushMetadata,
   ServerPush,
   KissAction,
+  MergeServerStateAction,
   Poll,
   UserExceptionAction,
   ReduxReducer,
@@ -20,9 +21,12 @@ import {
   SyncReducer,
   UpdateStateAction,
 } from './KissAction';
-import { Store, createStore, ShowUserException, StoreProvider, PropDispose, PropPredicate, SetPropOptions } from './Store';
+import { Store, createStore, ShowUserException, PropDispose, PropPredicate, SetPropOptions, AppSignalSource } from './Store';
+import { StoreProvider, StoreProviderProps, StoreSlice, StoreSliceProps } from './StoreProvider';
 import {
   useAllState,
+  useIsFocused,
+  useIsOnline,
   useClearExceptionFor,
   useConfiguration,
   useDispatch,
@@ -55,10 +59,11 @@ export {
   ClassPersistor,
   ProcessPersistence,
   KissAction,
+  MergeServerStateAction,
   UserExceptionAction,
   ActionStatus, ReduxReducer, SyncReducer, AsyncReducer, AsyncReducerResult,
-  Store, createStore, PropDispose, PropPredicate, SetPropOptions, useStore, useStoreEffect, UseStoreEffectOptions, useAllState, useSelect, useSelector, useObject, StoreProvider, ShowUserException,
-  useIsStoreReady, useIsWaiting, useIsFailed, useExceptionFor, useClearExceptionFor,
+  Store, createStore, PropDispose, PropPredicate, SetPropOptions, AppSignalSource, useStore, useStoreEffect, UseStoreEffectOptions, useAllState, useSelect, useSelector, useObject, StoreProvider, StoreProviderProps, StoreSlice, StoreSliceProps, ShowUserException,
+  useIsStoreReady, useIsWaiting, useIsFailed, useExceptionFor, useClearExceptionFor, useIsFocused, useIsOnline,
   useEnvironment, useConfiguration,
   Evt, EvtState, useEvent, useLayoutEvent,
   useDispatch, useDispatchAll, useDispatchAndWait, useDispatchAndWaitAll, useDispatchSync, useDispatchWhen, useDispatcher,
