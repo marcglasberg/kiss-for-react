@@ -18,8 +18,12 @@ export default defineConfig([
           args: 'after-used',
           ignoreRestSiblings: false,
           argsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
         },
       ],
+      // The store's reducer wrappers use nested named functions (hoisted, and named in stack
+      // traces), which have their own `this`, so they reach the store through `const store = this`.
+      '@typescript-eslint/no-this-alias': ['error', { allowedNames: ['store'] }],
     },
   },
   {

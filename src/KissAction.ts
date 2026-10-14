@@ -2186,7 +2186,7 @@ export abstract class KissAction<St> {
    * Note: If `discardQueueOnError()` throws an error, the error is logged, and the queue
    * continues with the next action.
    */
-  protected discardQueueOnError(error: any): boolean {
+  protected discardQueueOnError(_error: any): boolean {
     return false;
   }
 

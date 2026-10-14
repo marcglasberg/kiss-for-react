@@ -196,6 +196,9 @@ const DispatchDuringCommit: React.FC<{ id: number; onId: number; action: () => K
   const store = useStore() as any;
   React.useLayoutEffect(() => {
     if (id === onId) store.dispatch(action());
+    // Must run only when the id changes. `action` is a new function on each render, so with it
+    // in the dependencies the effect would run (and dispatch) on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
   return null;
 };

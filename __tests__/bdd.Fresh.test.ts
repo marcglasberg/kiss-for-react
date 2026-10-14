@@ -495,7 +495,7 @@ Bdd(feature)
       async reduce() {
         this.trace.push(`load ${this.loaded}`);
         if (this.loaded === 0) this.removeFreshKey();
-        return (state: State) => new State(this.loaded);
+        return () => new State(this.loaded);
       }
     }
 

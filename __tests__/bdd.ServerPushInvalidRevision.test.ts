@@ -118,7 +118,7 @@ const push = (liked: boolean, serverRevision: any) =>
 function dispatchIgnoringErrors(store: Store<State>, action: PushLike) {
   try {
     store.dispatch(action);
-  } catch (_) {
+  } catch {
     // Ignored.
   }
 }
