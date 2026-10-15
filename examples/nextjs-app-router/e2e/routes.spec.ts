@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 // End-to-end checks of the routes that load their own data on the server and merge it into the
 // store with `StoreSlice` (`/users` and `/users/[id]`), and of the rename through a server
-// action. Against the production build (see playwright.config.ts). What they prove is in
-// SSR.md, sections 3 to 5, at the repository root.
+// action. Against the production build (see playwright.config.ts). What they prove is in the
+// "Server-side rendering" section of the README at the repository root.
 //
 // The users live in memory, in the server process, and the tests of this file run in order, in
 // one worker: the rename test puts the data back as it found it.

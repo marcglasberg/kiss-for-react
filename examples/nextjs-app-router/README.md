@@ -1,8 +1,8 @@
 # Kiss with the Next.js app router
 
 A small app that shows how to use Kiss with server-side rendering in the Next.js **app router**
-(React Server Components). It's also an end-to-end test of Kiss's SSR support: see `SSR.md` at
-the root of the repository.
+(React Server Components). It's also an end-to-end test of Kiss's SSR support: see the
+"Server-side rendering" section of the README at the root of the repository.
 
 ## What it shows
 

@@ -12,7 +12,8 @@ import { failOnConsoleErrors, hydrate, mount, unmountAll, useCommitProbe } from 
 import { ControlledPersistor } from './fixtures/ControlledPersistor';
 import { Deferred } from './fixtures/deferred';
 
-// The per-route merge of server-loaded state (see SSR.md, section 3): a `StoreSlice` merges the
+// The per-route merge of server-loaded state (see the "Server-side rendering" section of
+// README.md): a `StoreSlice` merges the
 // state a route's server code loaded into the store, on the server and on the client, so that
 // the HTML shows it, hydration matches, and client-side navigation renders it at once.
 

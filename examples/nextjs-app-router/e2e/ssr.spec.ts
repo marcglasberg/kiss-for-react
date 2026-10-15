@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
 // End-to-end checks of the server rendering and the hydration, against the production build
-// (see playwright.config.ts). What they prove is in SSR.md, section 4.2, at the repository root.
+// (see playwright.config.ts). What they prove is in the "Server-side rendering" section of the
+// README at the repository root.
 
 /** Collects the console errors and warnings, and the uncaught errors, of the page. */
 function collectErrors(page: Page): string[] {

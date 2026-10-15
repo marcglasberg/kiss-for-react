@@ -5,8 +5,8 @@ on the server: the server renders the list from its own storage, every change go
 server through server actions, and the browser hydrates without mismatches. The business code
 (the state classes and the actions) is the same as in the Vite app, with the actions calling
 the server. It's also an end-to-end test of Kiss's SSR support with a class-based state,
-`StoreSlice`, server actions and the `ClassPersistor`: see `SSR.md` at the root of the
-repository.
+`StoreSlice`, server actions and the `ClassPersistor`: see the "Server-side rendering" section
+of the README at the root of the repository.
 
 ## What it shows
 

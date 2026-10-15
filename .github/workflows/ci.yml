@@ -25,13 +25,20 @@ jobs:
         if: matrix.react == 18
         run: npm install --no-save react@18 react-dom@18 react-test-renderer@18 @types/react@18 @types/react-dom@18 @types/react-test-renderer@18
       - run: npx tsc --noEmit -p tsconfig.json
+      # ESLint (v10) looks up the config file from each linted file's directory, so the root
+      # lint checks `eslint-plugin/testing/demo` with the demo's own config, which loads the
+      # BUILT plugin (`eslint-plugin/lib`, not committed) and throws when it's not built.
+      - name: Build the ESLint plugin (the root lint checks its demo files with it)
+        run: npm run build
+        working-directory: eslint-plugin
       - run: npm run lint
       - run: npm test
       - run: npm run build
       - name: Install the packed package in an isolated consumer (React ${{ matrix.react }})
         run: node scripts/pack-smoke.cjs ${{ matrix.react }}
 
-  # The server-side rendering examples (see SSR.md): each is built, started, and checked with
+  # The server-side rendering examples (see the "Server-side rendering" section of README.md):
+  # each is built, started, and checked with
   # Playwright (the server HTML with JavaScript disabled, hydration without warnings, and the
   # store after hydration). The Next.js examples run on the two most recent Next.js majors.
   ssr-examples:

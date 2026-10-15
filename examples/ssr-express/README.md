@@ -3,8 +3,8 @@
 A small app that shows how to use Kiss with server-side rendering **without a framework**:
 Node, Express, `renderToPipeableStream` on the server, `hydrateRoot` on the client. It isolates
 Kiss from the conventions of a framework: everything that happens is in these few files. It's
-also an end-to-end test of Kiss's SSR support, with streaming: see `SSR.md` at the root of the
-repository.
+also an end-to-end test of Kiss's SSR support, with streaming: see the "Server-side rendering"
+section of the README at the root of the repository.
 
 ## What it shows
 
@@ -17,7 +17,10 @@ repository.
   in the same response, with React's inline script that puts it in place. Without JavaScript,
   the content is still in the HTML, hidden. The lazy component is created per request
   (`lazyLateItems`, in `src/App.tsx`), since `React.lazy` keeps the module once loaded: a
-  module-level one would stream on the first request of the server only.
+  module-level one would stream on the first request of the server only. The boundary is next
+  to the components that read the store, not inside one: in React 18, a boundary that hasn't
+  hydrated yet is client-rendered (with a console error) when a component above it re-renders
+  synchronously, and the store changes right after the shell hydrates (see `HomePage`).
 - **The state travels as JSON.** The whole document is rendered by React (`src/App.tsx`),
   including a `<script id="kiss-state" type="application/json">` with the state, with `<`
   escaped as `\u003c`, so that no text in the state can close the script early. The client

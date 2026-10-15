@@ -1,8 +1,9 @@
 # Kiss with the Next.js pages router
 
 A small app that shows how to use Kiss with server-side rendering in the Next.js **pages router**
-(`getServerSideProps`). It's also an end-to-end test of Kiss's SSR support: see `SSR.md` at the
-root of the repository. The app-router version is in `../nextjs-app-router`.
+(`getServerSideProps`). It's also an end-to-end test of Kiss's SSR support: see the
+"Server-side rendering" section of the README at the root of the repository. The app-router
+version is in `../nextjs-app-router`.
 
 ## What it shows
 

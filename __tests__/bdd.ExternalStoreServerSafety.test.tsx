@@ -15,7 +15,8 @@ import {
 } from '../src';
 import { Deferred } from './fixtures/deferred';
 
-// A server creates one store per request, renders, and discards the store (see SSR.md). This
+// A server creates one store per request, renders, and discards the store (see the "Server-side
+// rendering" section of README.md). This
 // file runs in the default Node environment, with no DOM, as a server does, and checks that a
 // server store leaves no live timers behind, which would leak in a long-lived Node process.
 // Jest's fake timers count the pending timers (`jest.getTimerCount()`).

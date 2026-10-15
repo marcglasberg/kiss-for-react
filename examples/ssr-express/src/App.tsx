@@ -68,10 +68,32 @@ export function serializeState(state: State): string {
 }
 
 /**
- * The home page. On the server, the hooks render the `serverState` of the provider; the status
- * hooks render "nothing in progress".
+ * The home page. Its content, which reads the store, is in `HomeContent`, and the Suspense
+ * boundary with the streamed `LateItems` is next to it, not inside it, on purpose. The hooks
+ * re-render the components that read the store synchronously when the store changes, and, in
+ * React 18, a Suspense boundary that hasn't hydrated yet gives up and renders on the client
+ * (with the console error "This Suspense boundary received an update before it finished
+ * hydrating") when a component above it re-renders synchronously. Here the store changes right
+ * after the shell hydrates (`MarkHydrated`, and the persistor restoring the clicks), while
+ * `LateItems` is still loading, so the boundary must not be inside a component that reads the
+ * store. React 19 hydrates the boundary first, and doesn't need this.
  */
 function HomePage({ LateItems }: { LateItems: ComponentType }) {
+  return (
+    <main>
+      <HomeContent />
+      <Suspense fallback={<p data-testid="late-items-fallback">Loading the item count…</p>}>
+        <LateItems />
+      </Suspense>
+    </main>
+  );
+}
+
+/**
+ * The content of the home page. On the server, the hooks render the `serverState` of the
+ * provider; the status hooks render "nothing in progress".
+ */
+function HomeContent() {
   const loadedAt = useSelect((s: State) => s.loadedAt);
   const items = useObject((s: State) => s.items);
   const clicks = useSelect((s: State) => s.clicks);
@@ -87,7 +109,7 @@ function HomePage({ LateItems }: { LateItems: ComponentType }) {
   useStoreEffect({ onMount: (store) => store.dispatch(new MarkHydrated()) });
 
   return (
-    <main>
+    <>
       <h1>Kiss + Express</h1>
       <p>
         Items loaded on the server at <code data-testid="loaded-at">{loadedAt}</code>
@@ -127,11 +149,7 @@ function HomePage({ LateItems }: { LateItems: ComponentType }) {
         {' · '}
         Store ready: <span data-testid="ready">{isReady ? 'yes' : 'no'}</span>
       </p>
-
-      <Suspense fallback={<p data-testid="late-items-fallback">Loading the item count…</p>}>
-        <LateItems />
-      </Suspense>
-    </main>
+    </>
   );
 }
 
