@@ -32,6 +32,7 @@ import {
   UnlimitedRetryCheckInternet,
   SyncReducer,
   UpdateStateAction,
+  StatusOptions,
 } from './KissAction';
 import { Store, createStore, ShowUserException, PropDispose, PropPredicate, SetPropOptions, AppSignalSource } from './Store';
 import { StoreProvider, StoreProviderProps, StoreSlice, StoreSliceProps } from './StoreProvider';
@@ -46,7 +47,7 @@ export {
   KissAction,
   MergeServerStateAction,
   UserExceptionAction,
-  ActionStatus, ReduxReducer, SyncReducer, AsyncReducer, AsyncReducerResult,
+  ActionStatus, ReduxReducer, SyncReducer, AsyncReducer, AsyncReducerResult, StatusOptions,
   Store, createStore, PropDispose, PropPredicate, SetPropOptions, AppSignalSource, ShowUserException,
   StoreProvider, StoreProviderProps, StoreSlice, StoreSliceProps,
   Evt, EvtState,

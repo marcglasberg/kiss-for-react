@@ -822,7 +822,7 @@ The methods are the ones Kiss calls:
   `abortReduce`, `hasInternet`, `nonReentrantKeyParams`, `computeNonReentrantKey`,
   `debounceLockBuilder`, `ignoreOldKeyParams`, `computeIgnoreOldKey`, `throttleLockBuilder`,
   `freshKeyParams`, `computeFreshKey`, `sequentialKeyParams`, `discardQueueOnError`,
-  `createPollingAction`, `pollingKeyParams` and `computePollingKey`.
+  `createPollingAction`, `pollingKeyParams`, `computePollingKey` and `shouldRetry`.
 - `OptimisticCommand`: `optimisticValue`, `applyValueToState`, `getValueFromState`,
   `sendCommandToServer`, `applyServerResponseToState`, `reloadFromServer`, `rollbackState`,
   `shouldRollback`, `shouldReload`, `shouldApplyReload` and `applyReloadResultToState`.

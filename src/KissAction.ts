@@ -712,6 +712,69 @@ export abstract class KissAction<St> {
   }
 
   /**
+   * An optional key that tells apart the actions of the same class, for `isWaiting`, `isFailed`,
+   * `exceptionFor` and `clearExceptionFor` (and the hooks `useIsWaiting`, `useIsFailed`,
+   * `useExceptionFor` and `useClearExceptionFor`).
+   *
+   * By default, those functions work per action class: `useIsWaiting(LoadUser)` is `true` while
+   * any `LoadUser` runs, and `useIsFailed(LoadUser)` is `true` if any `LoadUser` failed. In a
+   * list of users where each row dispatches its own `LoadUser(userId)`, that would show a
+   * spinner in every row while any one user loads.
+   *
+   * Override this getter to return a value that identifies the action instance. Then, pass the
+   * same value to the status functions, in `statusKey`:
+   *
+   * ```ts
+   * class LoadUser extends Action {
+   *   constructor(readonly userId: string) { super(); }
+   *   get statusKey() { return this.userId; }
+   *   async reduce() { ... }
+   * }
+   *
+   * // In the row of one user:
+   * const isWaiting = useIsWaiting(LoadUser, { statusKey: userId });
+   * const isFailed = useIsFailed(LoadUser, { statusKey: userId });
+   * const error = useExceptionFor(LoadUser, { statusKey: userId });
+   * ```
+   *
+   * The key can be any value: a string, a number, an array like `[userId, cartId]`, or a plain
+   * object. Arrays and plain objects are compared by their content, and everything else with
+   * `Object.is`. Without `statusKey` in the options, the status functions consider all actions
+   * of the type, as usual, whatever their keys.
+   *
+   * ### What is kept in memory
+   *
+   * For `isWaiting`, nothing extra is kept: the store already holds the actions in progress,
+   * and reads their `statusKey` when asked.
+   *
+   * For `isFailed` and `exceptionFor`, the store keeps a record of each failure: the action
+   * type, the `statusKey` and the error (not the action itself). Without a `statusKey`, there
+   * is at most one record per action class. With a `statusKey`, there is one record per key
+   * that failed: for example, one per user whose `LoadUser` failed. A record is removed when an
+   * action of the same type and key is dispatched again, by `clearExceptionFor`, or by
+   * `clearAllExceptions` (which `clearInternalActionProps`, `logOut` and the shutdown of the
+   * store call). So, when a `statusKey` can take many values, remember that the failures that
+   * are never retried stay in memory until one of those is called.
+   *
+   * ### The key must always be the same
+   *
+   * Derive the key only from the action's own fields, the ones set in its constructor, like
+   * `this.userId` above. The getter must return the same value every time it's read, for the
+   * whole life of the action. Don't use anything that can change: a field the action itself
+   * changes in `before` or `reduce`, something read from the state or from the store props,
+   * the current time, or a random value.
+   *
+   * The reason is that the store reads the key at different moments: when the action is
+   * dispatched (to clear its old failure), when it fails (to record the failure), and every
+   * time `isWaiting` is asked. If the key changed between those moments, the old failure would
+   * never be cleared, or `isWaiting(LoadUser, { statusKey: userId })` would stop matching the
+   * action that is running.
+   */
+  get statusKey(): unknown {
+    return undefined;
+  }
+
+  /**
    * You can use `isWaiting` and pass it an action `type`:
    * - It returns true if an action of the given type (or of a subclass) is currently being processed.
    * - It returns false if no action of the given type is currently being processed.
@@ -726,27 +789,42 @@ export abstract class KissAction<St> {
    * this.dispatch(new MyAction());
    * if (this.isWaiting(MyAction)) { ... } // Show a spinner
    * ```
+   *
+   * Pass `{ statusKey }` to consider only the actions with that `statusKey` (see `statusKey`):
+   * `this.isWaiting(LoadUser, { statusKey: userId })`.
    */
-  isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T): boolean {
-    return this.store.isWaiting(type);
+  isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T, options?: StatusOptions): boolean {
+    return this.store.isWaiting(type, options);
   }
 
   /**
-   * Returns true if the given action `type` failed with an `UserException`.
+   * Returns true if the given action `type` failed, with any error, not only with a
+   * `UserException`. Use `exceptionFor` to get the error, if it was a `UserException`.
+   * An error swallowed by `wrapError` or the `errorObserver` (they returned `null`), and
+   * an `AbortDispatchException`, don't count as failures.
    * Note: This method uses the EXACT action type. Subtypes are not considered.
+   *
+   * Pass `{ statusKey }` to consider only the failures with that `statusKey` (see `statusKey`):
+   * `this.isFailed(LoadUser, { statusKey: userId })`.
    */
-  isFailed<T extends KissAction<any>>(type: { new(...args: any[]): T }): boolean {
-    return this.store.isFailed(type);
+  isFailed<T extends KissAction<any>>(type: { new(...args: any[]): T }, options?: StatusOptions): boolean {
+    return this.store.isFailed(type, options);
   }
 
   /**
-   * Returns the `UserException` of the `type` that failed.
+   * Returns the `UserException` of the `type` that failed. Returns `null` if it didn't fail,
+   * or if it failed with an error that is not a `UserException` (in that case, `isFailed` is
+   * still true).
    * Note: This method uses the EXACT type in `type`. Subtypes are not considered.
+   *
+   * Pass `{ statusKey }` to get the exception of the failure with that `statusKey` (see
+   * `statusKey`): `this.exceptionFor(LoadUser, { statusKey: userId })`. Without it, if actions
+   * with different keys failed, you get the `UserException` of the most recent failure.
    */
   exceptionFor<T extends KissAction<St>>(type: {
     new(...args: any[]): T
-  }): (UserException | null) {
-    return this.store.exceptionFor(type);
+  }, options?: StatusOptions): (UserException | null) {
+    return this.store.exceptionFor(type, options);
   }
 
   /**
@@ -761,9 +839,24 @@ export abstract class KissAction<St> {
    * ```ts
    * this.clearExceptionFor(MyAction);
    * ```
+   *
+   * Pass `{ statusKey }` to clear only the failure with that `statusKey` (see `statusKey`):
+   * `this.clearExceptionFor(LoadUser, { statusKey: userId })`. Without it, all the failures of
+   * the type are cleared, whatever their keys.
    */
-  clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T }): void {
-    return this.store.clearExceptionFor(type);
+  clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T }, options?: StatusOptions): void {
+    return this.store.clearExceptionFor(type, options);
+  }
+
+  /**
+   * Clears the failures of all action types, so that `isFailed` is `false` and `exceptionFor`
+   * is `null` for all of them. Same as `store.clearAllExceptions()`.
+   *
+   * You rarely need this, since `clearInternalActionProps()`, `logOut()` and the shutdown of
+   * the store already call it.
+   */
+  clearAllExceptions(): void {
+    return this.store.clearAllExceptions();
   }
 
   /**
@@ -2766,6 +2859,10 @@ export abstract class KissAction<St> {
    *   again, and retrying it makes no sense. Dispatching an action with retry and a SYNC
    *   reducer fails with a `StoreException`, even if the reducer itself succeeds.
    *
+   * - By default, every error is retried, including `UserException`s. To give up on some errors
+   *   (for example, a 404, or a 401, which will fail again), override `shouldRetry(error, attempt)`
+   *   to return `false` for them. The action then fails right away with that error.
+   *
    * - If necessary, you can know the current "attempt number" by using `this.attempts`.
    *
    * - It can be combined with `sequential`. The retries then happen while the action holds
@@ -2786,6 +2883,54 @@ export abstract class KissAction<St> {
 
   get ifRetryIsOn(): boolean {
     return (this.retry as RetryOptions)?.on === true;
+  }
+
+  /**
+   * Returns true if the action should retry after it failed with the given `error`. It's called
+   * by `retry` and `unlimitedRetryCheckInternet`, after each failed attempt that still has
+   * retries left, and by an `OptimisticCommand` with `retry`, after each failed
+   * `sendCommandToServer`.
+   *
+   * The default returns `true` for every error, including `UserException`s: a `UserException`
+   * thrown by the reducer may well be transient ("Could not reach the server"), and only the
+   * action knows. Override it to give up on errors that are permanent, like a 404, a 401, or a
+   * validation error from the server, which would fail again on every retry:
+   *
+   * ```ts
+   * class LoadUser extends Action {
+   *   retry = { on: true };
+   *
+   *   shouldRetry(error: unknown, attempt: number) {
+   *     return !(error instanceof NotFoundError) && !(error instanceof UnauthorizedError);
+   *   }
+   *
+   *   async reduce() { ... }
+   * }
+   * ```
+   *
+   * - `error` is the error thrown by the attempt that just failed.
+   * - `attempt` is the number of that attempt, starting at `1`. It's the same as `this.attempts`.
+   *
+   * When it returns `false`, the action fails right away with that error, as if the retries had
+   * run out. With `unlimitedRetryCheckInternet`, this is the only way to stop an action that
+   * would otherwise retry forever. It's not called when there is no internet, since the action
+   * then waits for the internet, and doesn't fail.
+   *
+   * It's not called when the retries ran out (the action fails anyway), nor for an
+   * `AbortDispatchException`, which means the action was aborted on purpose, and is never
+   * retried. If `shouldRetry` itself throws, the action fails with that error.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- The parameters document the signature to override.
+  protected shouldRetry(error: unknown, attempt: number): boolean {
+    return true;
+  }
+
+  /**
+   * For Kiss internal use only.
+   * Calls the (protected) `shouldRetry()` method.
+   */
+  _shouldRetry(error: unknown, attempt: number): boolean {
+    return this.shouldRetry(error, attempt);
   }
 
   /**
@@ -2874,6 +3019,11 @@ export abstract class KissAction<St> {
    *   store with `store.setShutDown(true)`, stops the retries. The action is then aborted with
    *   an `AbortDispatchException`, so it doesn't fail.
    * - Make sure your `before` method does not throw an error, or the retry will NOT happen.
+   *
+   * - Every error is retried, including `UserException`s, unless `shouldRetry(error, attempt)`
+   *   returns `false` for it. Override it to stop retrying permanent errors (like a 404), which
+   *   would otherwise be retried forever. The action then fails with that error. It's not called
+   *   when there is no internet, which keeps waiting until there is.
    * - It only works with ASYNC reducers, that return `Promise<(state: St) => St>`, just like
    *   `retry`. Dispatching it with a SYNC reducer fails with a `StoreException`.
    * - An action that aborts itself by throwing an `AbortDispatchException` is not retried.
@@ -4298,6 +4448,10 @@ export class ActionStatus {
  * entire reducer was retried on each attempt. The optimistic state remains in place during
  * retries, and the rollback only happens if all retry attempts fail.
  *
+ * Every error is retried, including `UserException`s, unless `shouldRetry(error, attempt)` returns
+ * `false` for it. The command then gives up right away: it rolls back (if `shouldRollback` says
+ * so), reloads (if `shouldReload` says so), and fails with that error.
+ *
  * `store.clearInternalActionProps()` (which is also called by `store.setShutDown(true)`) stops
  * the retries, which is useful on logout. A command waiting to retry is aborted right away, and
  * a command whose server call is running is aborted if that call fails (if it succeeds, the
@@ -4695,6 +4849,8 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
         if (this.store._wereInternalActionPropsCleared(this)) throw this._stopRetrying();
         this._retry.attempts++;
         if (this._retry.attempts > this._retry.maxRetries) throw error;
+        // The command can give up on some errors (`shouldRetry`).
+        if (!this.shouldRetry(error, this._retry.attempts)) throw error;
         try {
           // It also stops waiting right away when `clearInternalActionProps()` is called.
           await this.store._waitRetryDelay(this, this._nextRetryDelay());
@@ -6356,6 +6512,17 @@ function _checkIncompatibleFeatures(action: KissAction<any>, description: string
  * `Object.is`, except arrays and plain objects, which are compared by their contents.
  * For Kiss internal use only.
  */
+/**
+ * Options for `isWaiting`, `isFailed`, `exceptionFor` and `clearExceptionFor` (and the hooks
+ * `useIsWaiting`, `useIsFailed`, `useExceptionFor` and `useClearExceptionFor`).
+ *
+ * - `statusKey`: Only consider the actions whose `statusKey` is equal to this one. Leave it
+ *   out (or pass `undefined`) to consider all actions of the type. See `KissAction.statusKey`.
+ */
+export type StatusOptions = {
+  statusKey?: unknown;
+};
+
 export function _isSameNonReentrantKey(a: any, b: any): boolean {
   if (Object.is(a, b)) return true;
 

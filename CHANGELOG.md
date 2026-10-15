@@ -309,6 +309,26 @@
   action, override its `internetOnOffSimulation` getter. The ESLint plugin's
   `testing-feature-in-production` rule reports both outside tests.
 
+* New `shouldRetry(error, attempt)` action method, to give up retrying on some errors. By
+  default, `retry` retries every error, including `UserException`s. Override `shouldRetry` to
+  return `false` for errors that will fail again anyway (like a 404 or a 401), and the action
+  fails right away with that error. It's called after each failed attempt that still has retries
+  left, with the error and the attempt number (starting at 1). It also works with
+  `unlimitedRetryCheckInternet` (where it's the only way to stop a permanent error from being
+  retried forever; it's not called when there is no internet) and with an `OptimisticCommand`
+  with `retry` (which then rolls back and fails right away). An `AbortDispatchException` is
+  never retried, and doesn't reach `shouldRetry`.
+
+  ```ts
+  class LoadUser extends Action {
+    retry = { on: true };
+
+    shouldRetry(error: unknown, attempt: number) {
+      return !(error instanceof NotFoundError);
+    }
+  }
+  ```
+
 * New `unlimitedRetryCheckInternet` action property. With `unlimitedRetryCheckInternet = true`,
   the internet is checked before each attempt. If there is no internet, the reducer doesn't
   run, and the action retries unlimited times until there is internet. It also retries
@@ -351,7 +371,33 @@
   so that different action classes share the same key. These keys are shared with
   `OptimisticCommand`.
 
+* New **`statusKey`** on actions, to tell apart the actions of the same class in `isWaiting`,
+  `isFailed`, `exceptionFor` and `clearExceptionFor` (on the store, in actions, and in the
+  hooks `useIsWaiting`, `useIsFailed`, `useExceptionFor` and `useClearExceptionFor`). Override
+  the getter to return a value made from the action's own fields, like `get statusKey() {
+  return this.userId; }`, and pass the same value in the new options parameter:
+  `useIsWaiting(LoadUser, { statusKey: userId })`. Without the option, the functions consider
+  all actions of the type, as before. Arrays and plain objects used as keys are compared by
+  content. The key must always return the same value for the same action.
+
+  - The store now keeps, for each failure, only the action type, its `statusKey` and the error,
+    instead of the whole action object. Without `statusKey` there is at most one record per
+    action class; with it, one per key that failed, replaced when the same key fails again and
+    removed when an action with that key is dispatched again.
+  - `clearExceptionFor(Type, { statusKey })` clears one key; `clearExceptionFor(Type)` clears
+    all keys of the type. New `clearAllExceptions()` (store and action) clears all types.
+    `clearInternalActionProps()` now calls it, so `logOut()`, `setShutDown(true)` and
+    `dispose()` clear the failures too.
+  - New exported type `StatusOptions` (`{ statusKey?: unknown }`).
+
 ### Breaking changes
+
+* `isFailed` (and `useIsFailed`) is now `true` when the action failed with **any** error, not
+  only with a `UserException`. Before, an action that failed with a plain `Error` was not
+  reported as failed, so a component could not show "Loading failed" unless the action turned
+  the error into a `UserException` in `wrapError`. `exceptionFor` (and `useExceptionFor`) still
+  returns only a `UserException`, or `null` for other errors. Errors swallowed by `wrapError` or
+  the `errorObserver`, and `AbortDispatchException`, still don't count as failures.
 
 * `globalWrapError` was removed, and `errorObserver` now does its job too, like the
   `GlobalErrorObserver` of AsyncRedux. It's now called with

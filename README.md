@@ -320,6 +320,30 @@ function MyComponent() {
 }
 ```
 
+These hooks work per action class: `useIsWaiting(LoadUser)` is true while **any** `LoadUser`
+runs. In a list where each row loads its own user, give the action a `statusKey`, and pass the
+same key to the hooks, so that each row sees only its own user:
+
+```tsx
+class LoadUser extends Action {
+  constructor(readonly userId: string) { super(); }
+  get statusKey() { return this.userId; }
+  async reduce() { ... }
+}
+
+function UserRow({ userId }: { userId: string }) {
+  const isWaiting = useIsWaiting(LoadUser, { statusKey: userId });
+  const isFailed = useIsFailed(LoadUser, { statusKey: userId });
+  ...
+}
+```
+
+The key must come from the action's own fields, and never change. `useExceptionFor` and
+`useClearExceptionFor` take the same option. The store keeps one failure record per key that
+failed (the action type, the key and the error), until the action runs again for that key, or
+`clearExceptionFor` or `clearAllExceptions` is called. `logOut` and `clearInternalActionProps`
+clear them all.
+
 &nbsp;
 
 ## Actions can send events to the UI
@@ -496,6 +520,26 @@ class LoadText extends Action {
   async reduce() { ... }
 }
 ```
+
+By default, every error is retried, including `UserException`s. To give up on errors that
+will fail again anyway (like a 404 or a 401), override `shouldRetry`. The action then fails
+right away with that error:
+
+```tsx
+class LoadText extends Action {
+  retry = {on: true}
+
+  shouldRetry(error: unknown, attempt: number) {
+    return !(error instanceof NotFoundError);
+  }
+
+  async reduce() { ... }
+}
+```
+
+`shouldRetry` also works with `unlimitedRetryCheckInternet` (see below), where it's the only
+way to stop an action that would otherwise retry forever, and with an `OptimisticCommand`
+with `retry`.
 
 ### CheckInternet
 

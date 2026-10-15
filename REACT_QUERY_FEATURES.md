@@ -29,12 +29,12 @@ background run.
 | [1. App focus and online signals in the store](#1-app-focus-and-online-signals-in-the-store) | Done        | High        |
 | [2. `useStoreEffect`: `onFocus` and `onOnline`](#2-usestoreeffect-onfocus-and-ononline)      | Done        | High        |
 | [3. Polling tied to mounted components](#3-polling-tied-to-mounted-components)               | Partly done | High        |
-| [4. `useKeepFresh`: keep an action's data up to date while mounted](#4-usekeepfresh-keep-an-actions-data-up-to-date-while-mounted) | | High |
-| [5. Invalidation](#5-invalidation)                                                           |             | Medium-high |
-| [6. Background runs vs. first load](#6-background-runs-vs-first-load)                        |             | Medium-high |
-| [7. Status per key](#7-status-per-key)                                                       |             | Medium      |
-| [8. Global "anything in progress"](#8-global-anything-in-progress)                           |             | Low         |
-| [9. Retry predicate](#9-retry-predicate)                                                     |             | Medium      |
+| [4. `useKeepFresh`: keep an action's data up to date while mounted](#4-usekeepfresh-keep-an-actions-data-up-to-date-while-mounted) | Rejected | |
+| [5. Invalidation](#5-invalidation)                                                           | Rejected    |             |
+| [6. Background runs vs. first load](#6-background-runs-vs-first-load)                        | Rejected    |             |
+| [7. Status per key](#7-status-per-key)                                                       | Done        | Medium      |
+| [8. Global "anything in progress"](#8-global-anything-in-progress)                           | Rejected    |             |
+| [9. Retry predicate: `shouldRetry`](#9-retry-predicate-shouldretry)                          | Done        | Medium      |
 | [10. Aborting actions from outside](#10-aborting-actions-from-outside)                       |             | Medium      |
 | [11. Paged (infinite) loading](#11-paged-infinite-loading)                                   |             | Medium      |
 | [12. Suspense and error boundaries](#12-suspense-and-error-boundaries)                       |             | Low         |
@@ -225,6 +225,11 @@ also possible, matching React Query; decide before release). Both use the signal
 
 ## 4. `useKeepFresh`: keep an action's data up to date while mounted
 
+**Status: rejected.** With `onMount`, `onFocus` and `onOnline` in `useStoreEffect` (section 2),
+this hook would be a shortcut for three lines, plus two things that were rejected: the
+reference-counted polling (section 3) and registering the component as "active" for the
+invalidation (section 5). Without those, it's a repetition of `useStoreEffect`.
+
 ### Why
 
 Sections 2 and 3 are building blocks. What `useQuery` really gives the user, in one line, is:
@@ -277,6 +282,15 @@ function User({ userId }) {
 
 ## 5. Invalidation
 
+**Status: rejected.** Invalidation exists in React Query because the library owns a cache, and
+the mutation doesn't know what's in it. In Kiss, the action that saves already knows what to
+reload, and does it right away: `OptimisticCommand` has `reloadFromServer()`, `OptimisticSync`
+has `onFinish` (where you can reload), and `OptimisticSyncWithPush` with `ServerPush` gets the
+changes pushed by the server, so there's nothing to reload. A plain action can also dispatch
+the load action itself (with a `force` flag, if the load action uses `fresh`). Adding a store
+level "mark stale and re-run the active ones" would be complex, and would need the "active
+components" registry of section 4, which was also rejected.
+
 ### Why
 
 After a mutation (add a todo), the lists that show todos must reload. Today the mutation
@@ -317,6 +331,13 @@ store.invalidateAll();        // Same as removing all fresh keys and re-running 
 
 ## 6. Background runs vs. first load
 
+**Status: rejected.** React Query needs `isPending` vs. `isFetching` because the data lives in
+its cache, and the component can't tell whether there is data yet. In Kiss the data lives in the
+app's state, so the component just looks at it: on the first run the state is still empty
+(`null`), and on the next runs it already has data. So `if (prices === null) return <Spinner/>`
+is the first-load spinner, and `useIsWaiting(LoadPrices)` with data present is the
+"refreshing" indicator. No new API is needed.
+
 ### Why
 
 `useIsWaiting(LoadPrices)` is `true` during **every** run, including each poll tick and each
@@ -349,6 +370,20 @@ on the **action run**, not on the data.
 
 ## 7. Status per key
 
+**Status: implemented**, with these differences from the proposal below:
+
+- The method is a getter named `statusKey` (not `statusKeyParams()`). There is no
+  `compute...Key()` here, since the key is never combined with anything: the action type is
+  always separate. The docs of `statusKey` say that the key must come from the action's own
+  fields and never change, and what is kept in memory.
+- The option is `{ statusKey }`, not `{ key }`: `useIsWaiting(LoadUser, { statusKey: userId })`.
+- The store keeps, per failure, only the action type, the `statusKey` and the error, not the
+  action object (this also applies to actions without a key, and was done in AsyncRedux too).
+- New `clearAllExceptions()`, called by `clearInternalActionProps()` (and so by `logOut()`,
+  `setShutDown(true)` and `dispose()`), so the failures of a user don't stay in memory after
+  the logout.
+- `useLastRun` was dropped (see the end of this section).
+
 ### Why
 
 `useIsWaiting(LoadUser)` is per class. A list of users where each row dispatches
@@ -380,12 +415,23 @@ clearExceptionFor(LoadUser, { key: userId });
   compared the same way. Default `undefined`, which keeps today's per-class behavior.
 - Without `key`, the hooks match any key (today's behavior). `store.isWaiting`, `isFailed`,
   `exceptionFor` and `clearExceptionFor` get the same option.
-- Possible later addition: `useLastRun(T, { key })` returning `{ finishedAt, attempts }`, for
-  "updated 2 minutes ago" and `failureCount` UIs. `action.attempts` already exists.
+- A `useLastRun(T, { key })` hook returning `{ finishedAt, attempts }` was considered and
+  dropped: actions leave `_actionsInProgress` when they finish, so the store would have to keep
+  a record of every action that ever ran, per key, for the whole life of the store. An action
+  that wants "updated 2 minutes ago" can simply write `updatedAt: Date.now()` into the state.
 
 ---
 
 ## 8. Global "anything in progress"
+
+**Status: rejected.** A hook that counts every action in progress is a bad idea. In React
+Query, `useIsFetching()` is useful because the library owns every request. In Kiss, actions
+are not only requests: a global count mixes the actions that load data with the ones that
+save, poll, sync, or just change the state. A top progress bar that reacts to all of them
+would blink for things the user doesn't care about. The right way is to list the actions the
+bar should show, with `useIsWaiting(LoadUser) || useIsWaiting(LoadPosts)`, which already
+exists. For the rare case that really needs the global count, `store.actionsInProgress()` can
+be read inside `useStoreEffect` or in a custom hook.
 
 ### Why
 
@@ -396,52 +442,66 @@ A top progress bar (like YouTube's) needs "is any action running", for which Kis
 
 `useIsFetching()` and `useIsMutating()` return counts, optionally filtered.
 
-### Proposed API
-
-```ts
-const count = useActionsInProgress();                        // Number of actions in progress.
-const count = useActionsInProgress({ background: false });    // Only foreground ones.
-```
-
-Subscribes with `store._subscribeStatus`, like `useIsWaiting`.
-
 ---
 
-## 9. Retry predicate
+## 9. Retry predicate: `shouldRetry`
+
+**Status: done.** `KissAction.shouldRetry(error, attempt)`, default `true` for every error.
+It's used by `retry`, `unlimitedRetryCheckInternet` and `OptimisticCommand` with `retry`.
+BDDs in `__tests__/bdd.ShouldRetry.test.ts`.
 
 ### Why
 
-`retry` retries on **any** error. A 404, a 401, a validation error (`UserException`) will fail
-again, and retrying wastes time and delays the error message.
+`retry` retries on **any** error. Some errors are permanent: a 404, a 401, a validation error
+from the server. Retrying them wastes time and delays the error message. The action should be
+able to say which errors are worth retrying.
 
 ### How React Query does it
 
 `retry: boolean | number | (failureCount, error) => boolean`, and
 `retryDelay: number | (attempt, error) => number`.
 
+### What Kiss already has
+
+The `retry` property already configures the delays: `initialDelay`, `multiplier`, `maxDelay`,
+`maxRetries` and `unlimitedRetries`. So React Query's `retryDelay` is already covered, except
+for a delay that depends on the error itself (for example, a "Retry-After" value sent by a
+rate-limited server). That case is rare, and not worth a new method. The only gap is the
+predicate.
+
 ### Proposed API
+
+An optional method in `KissAction`:
 
 ```ts
 class LoadUser extends Action {
   retry = { on: true, maxRetries: 3 };
 
   shouldRetry(error: unknown, attempt: number): boolean {
-    return !(error instanceof UserException) && !(error instanceof NotFoundError);
+    return !(error instanceof NotFoundError) && !(error instanceof UnauthorizedError);
   }
-
-  retryDelay(attempt: number, error: unknown): number {  // Optional. Default: the
-    return error instanceof RateLimited ? error.retryAfterMs : super.retryDelay(attempt, error);
-  }                                                        // existing exponential backoff.
 }
 ```
 
-- `shouldRetry` default: `true` for everything **except** `UserException` and
-  `AbortDispatchException`, since a user error is by definition not transient. Today the retry
-  loop (`_waitToRetry` in `src/Store.tsx`) retries every error, including `UserException`s, so
-  this default is a behavior change. It's acceptable while 2.0.0 is unpublished; otherwise keep
-  the default as `true` and document the override.
-- Also applies to `unlimitedRetryCheckInternet`, where a permanent error would otherwise
-  retry forever.
+- `attempt` is the number of the attempt that just failed, starting at `1`. It's the same
+  value `this.attempts` would have after this failure.
+- **Default: `true` for every error**, which is the current behavior, and the same as the
+  `Retry` mixin of Async Redux, whose `catch (error)` retries everything. This includes
+  `UserException`: a `UserException` thrown by the reducer may well be transient (for
+  example, "Could not reach the server, please try again"), and the action author is the one
+  who knows. If an action wants to give up on a `UserException`, it overrides `shouldRetry`.
+- `AbortDispatchException` is not an error, but a signal that the action was aborted on
+  purpose, so the retry loop keeps never retrying it, and `shouldRetry` is not even called.
+- When `shouldRetry` returns `false`, the action fails right away with that error, as if the
+  retries had run out.
+- It also applies to `unlimitedRetryCheckInternet`: a permanent error can then stop a loop
+  that would otherwise retry forever. It's not called for the "no internet" case, which keeps
+  waiting until there is internet.
+- If `shouldRetry` itself throws, the action fails with that error.
+- It's not called when the retries ran out, since the action fails anyway.
+- An `OptimisticCommand` with `retry` handles its own retry of `sendCommandToServer`, and
+  calls `shouldRetry` too, with the same default. When it returns `false`, the command rolls
+  back (if `shouldRollback` says so) and fails right away.
 
 ---
 

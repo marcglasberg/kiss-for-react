@@ -288,16 +288,18 @@ Bdd(feature)
   .then('Inside before and reduce, store.isWaiting says the action is in progress.')
   .and('Inside after, it says [Waiting in after]: an action that applied a new state is no longer in progress when after runs.')
   .and('The spinner never commits waiting: it renders only once.')
-  .and('The failed and exception components show [Failed].')
-  .example(val('Outcome', 'ok'), val('Waiting in after', false), val('Failed', false), val('Throws', false))
-  .example(val('Outcome', 'null'), val('Waiting in after', true), val('Failed', false), val('Throws', false))
-  .example(val('Outcome', 'user exception'), val('Waiting in after', true), val('Failed', true), val('Throws', false))
-  .example(val('Outcome', 'error'), val('Waiting in after', true), val('Failed', false), val('Throws', true))
+  .and('The failed component shows [Failed], and the exception component shows an exception: [Exception].')
+  .and('A plain Error counts as failed, but has no UserException to show.')
+  .example(val('Outcome', 'ok'), val('Waiting in after', false), val('Failed', false), val('Exception', false), val('Throws', false))
+  .example(val('Outcome', 'null'), val('Waiting in after', true), val('Failed', false), val('Exception', false), val('Throws', false))
+  .example(val('Outcome', 'user exception'), val('Waiting in after', true), val('Failed', true), val('Exception', true), val('Throws', false))
+  .example(val('Outcome', 'error'), val('Waiting in after', true), val('Failed', true), val('Exception', false), val('Throws', true))
   .run(async (ctx) => {
     // D04 (sync actions, with the imperative reads inside the action characterized separately)
     const outcome = ctx.example.val('Outcome') as 'ok' | 'null' | 'user exception' | 'error';
     const waitingInAfter = ctx.example.val('Waiting in after') as boolean;
     const isFailed = ctx.example.val('Failed') as boolean;
+    const hasException = ctx.example.val('Exception') as boolean;
     const throws = ctx.example.val('Throws') as boolean;
     const store = createStore();
     const s = spinner(Sync);
@@ -320,9 +322,9 @@ Bdd(feature)
     expect(s.stats.commits).toEqual([false]);
     expect(s.stats.renders).toBe(1);
     expect(f.last()).toBe(isFailed);
-    expect(e.last()).toBe(isFailed ? action.status.wrappedError : null);
+    expect(e.last()).toBe(hasException ? action.status.wrappedError : null);
     expect(thrown !== null).toBe(throws);
-    expect(m.text()).toBe(`idle${isFailed ? 'failed' : 'ok'}${isFailed ? 'Sync failed.' : 'none'}`);
+    expect(m.text()).toBe(`idle${isFailed ? 'failed' : 'ok'}${hasException ? 'Sync failed.' : 'none'}`);
   });
 
 Bdd(feature)
@@ -537,16 +539,18 @@ Bdd(feature)
   .scenario('The status hooks follow the error rules: what wrapError and the errorObserver do with the error decides what is shown.')
   .given('A store whose errorObserver [Observer], and a mounted component showing waiting, failed and exception for Load.')
   .when('A Load action fails with [Thrown].')
-  .then('The waiting ends; the failed component shows [Failed]; dispatchAndWait [Rejects].')
-  .example(val('Observer', 'keeps the error'), val('Thrown', 'a UserException'), val('Failed', true), val('Rejects', false))
-  .example(val('Observer', 'keeps the error'), val('Thrown', 'an Error'), val('Failed', false), val('Rejects', true))
-  .example(val('Observer', 'swallows the error'), val('Thrown', 'a UserException'), val('Failed', false), val('Rejects', false))
-  .example(val('Observer', 'turns it into a UserException'), val('Thrown', 'an Error'), val('Failed', true), val('Rejects', false))
+  .then('The waiting ends; the failed component shows [Failed]; the exception component shows [Error]; dispatchAndWait [Rejects].')
+  .and('A plain Error that is kept counts as failed, but there is no UserException to show.')
+  .example(val('Observer', 'keeps the error'), val('Thrown', 'a UserException'), val('Failed', true), val('Error', 'Failed to load.'), val('Rejects', false))
+  .example(val('Observer', 'keeps the error'), val('Thrown', 'an Error'), val('Failed', true), val('Error', '-'), val('Rejects', true))
+  .example(val('Observer', 'swallows the error'), val('Thrown', 'a UserException'), val('Failed', false), val('Error', '-'), val('Rejects', false))
+  .example(val('Observer', 'turns it into a UserException'), val('Thrown', 'an Error'), val('Failed', true), val('Error', 'wrapped'), val('Rejects', false))
   .run(async (ctx) => {
     // D12
     const observer = ctx.example.val('Observer') as string;
     const thrown = ctx.example.val('Thrown') as string;
     const isFailed = ctx.example.val('Failed') as boolean;
+    const errorShown = ctx.example.val('Error') as string;
     const rejects = ctx.example.val('Rejects') as boolean;
     const store = createStore({
       errorObserver: (error) => {
@@ -571,7 +575,7 @@ Bdd(feature)
       await promise;
     });
 
-    expect(t.last()).toBe(`count=0,waiting=false,failed=${isFailed},error=${isFailed ? (observer === 'turns it into a UserException' ? 'wrapped' : 'Failed to load.') : '-'}`);
+    expect(t.last()).toBe(`count=0,waiting=false,failed=${isFailed},error=${errorShown}`);
     expect(rejected).toBe(rejects);
     expect(t.stats.commits[1]).toBe('count=0,waiting=true,failed=false,error=-');
   });
@@ -657,14 +661,15 @@ Bdd(feature)
   });
 
 Bdd(feature)
-  .scenario('Aborted, rejected and throwing actions leave no spinner on, and no failure unless a UserException was recorded.')
+  .scenario('Aborted and rejected actions leave no spinner on and no failure; a throwing action leaves no spinner on, but is failed.')
   .given('Mounted spinner, failed and exception components for the action type.')
   .when('The action [Case].')
   .then('The spinner ends idle, the failed component shows [Failed], and nothing is left pending.')
+  .and('The exception component shows nothing, since no UserException was recorded.')
   .example(val('Case', 'is aborted before dispatch, by abortDispatch'), val('Failed', false))
   .example(val('Case', 'aborts itself with an AbortDispatchException'), val('Failed', false))
   .example(val('Case', 'is async but dispatched with dispatchSync'), val('Failed', false))
-  .example(val('Case', 'throws a plain Error from its reducer'), val('Failed', false))
+  .example(val('Case', 'throws a plain Error from its reducer'), val('Failed', true))
   .run(async (ctx) => {
     // D16
     const testCase = ctx.example.val('Case') as string;

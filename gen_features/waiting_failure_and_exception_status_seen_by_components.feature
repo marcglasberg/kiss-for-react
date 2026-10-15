@@ -31,13 +31,14 @@ Feature: Waiting, failure and exception status, seen by components
     Then Inside before and reduce, store.isWaiting says the action is in progress.
     And Inside after, it says [Waiting in after]: an action that applied a new state is no longer in progress when after runs.
     And The spinner never commits waiting: it renders only once.
-    And The failed and exception components show [Failed].
+    And The failed component shows [Failed], and the exception component shows an exception: [Exception].
+    And A plain Error counts as failed, but has no UserException to show.
     Examples: 
-      | Outcome        | Waiting in after | Failed | Throws |
-      | ok             | false            | false  | false  |
-      | null           | true             | false  | false  |
-      | user exception | true             | true   | false  |
-      | error          | true             | false  | true   |
+      | Outcome        | Waiting in after | Failed | Exception | Throws |
+      | ok             | false            | false  | false     | false  |
+      | null           | true             | false  | false     | false  |
+      | user exception | true             | true   | true      | false  |
+      | error          | true             | true   | false     | true   |
 
   Scenario: A spinner stays on until both of two concurrent matching actions finish, without extra renders.
     Given A mounted spinner for Load.
@@ -90,13 +91,14 @@ Feature: Waiting, failure and exception status, seen by components
   Scenario Outline: The status hooks follow the error rules: what wrapError and the errorObserver do with the error decides what is shown.
     Given A store whose errorObserver [Observer], and a mounted component showing waiting, failed and exception for Load.
     When A Load action fails with [Thrown].
-    Then The waiting ends; the failed component shows [Failed]; dispatchAndWait [Rejects].
+    Then The waiting ends; the failed component shows [Failed]; the exception component shows [Error]; dispatchAndWait [Rejects].
+    And A plain Error that is kept counts as failed, but there is no UserException to show.
     Examples: 
-      | Observer                      | Thrown          | Failed | Rejects |
-      | keeps the error               | a UserException | true   | false   |
-      | keeps the error               | an Error        | false  | true    |
-      | swallows the error            | a UserException | false  | false   |
-      | turns it into a UserException | an Error        | true   | false   |
+      | Observer                      | Thrown          | Failed | Error           | Rejects |
+      | keeps the error               | a UserException | true   | Failed to load. | false   |
+      | keeps the error               | an Error        | true   | -               | true    |
+      | swallows the error            | a UserException | false  | -               | false   |
+      | turns it into a UserException | an Error        | true   | wrapped         | false   |
 
   Scenario: A status component mounted while an action runs, or after it failed, shows the right status from its first render.
     Given No status component is mounted when a Load action starts.
@@ -114,16 +116,17 @@ Feature: Waiting, failure and exception status, seen by components
     When An Other action starts, fails, and its error is cleared.
     Then None of the Load components renders again.
 
-  Scenario Outline: Aborted, rejected and throwing actions leave no spinner on, and no failure unless a UserException was recorded.
+  Scenario Outline: Aborted and rejected actions leave no spinner on and no failure; a throwing action leaves no spinner on, but is failed.
     Given Mounted spinner, failed and exception components for the action type.
     When The action [Case].
     Then The spinner ends idle, the failed component shows [Failed], and nothing is left pending.
+    And The exception component shows nothing, since no UserException was recorded.
     Examples: 
       | Case                                         | Failed |
       | is aborted before dispatch, by abortDispatch | false  |
       | aborts itself with an AbortDispatchException | false  |
       | is async but dispatched with dispatchSync    | false  |
-      | throws a plain Error from its reducer        | false  |
+      | throws a plain Error from its reducer        | true   |
 
   Scenario: Status changes do not render a component that only uses the state.
     Given A mounted component showing the whole state, and a mounted spinner for Load.

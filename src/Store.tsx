@@ -13,6 +13,7 @@ import {
   _IgnoreOldEntry,
   _isSameNonReentrantKey,
   _OptimisticSyncRevision,
+  StatusOptions,
 } from './KissAction';
 import { ProcessPersistence } from './ProcessPersistence';
 import { AbortDispatchException, isKissAbort, kissAbort, StoreException, TimeoutException } from './StoreException';
@@ -24,6 +25,9 @@ import { capTimeoutMillis, describeValue, isPlainObject, MAX_TIMEOUT_MILLIS } fr
 // came due waits for the app to be focused or online again (see `pollOnlyWhenFocused` and
 // `pollOnlyWhenOnline`). In that last case, `cancelWait` stops listening for them, and drops
 // the tick.
+/** One failure kept for `isFailed` and `exceptionFor`: the action's `statusKey` and its error. */
+type Failure = { statusKey: unknown, error: unknown };
+
 type PollingCycle = {
   key: any,
   timer: ReturnType<typeof setTimeout> | null,
@@ -1095,6 +1099,9 @@ export class Store<St> {
    *   The server revisions you saved in the state are kept, and still used.
    * - Forgets the `ignoreOld` keys. The actions dispatched from now on don't make the ones
    *   dispatched before old.
+   * - Clears the failures of all actions (see `clearAllExceptions()`), so that `isFailed` is
+   *   `false` and `exceptionFor` is `null` for all action types. The new user doesn't see the
+   *   errors of the previous one.
    *
    * Note:
    * - Actions that are already running keep running, and still change the state when they
@@ -1125,6 +1132,7 @@ export class Store<St> {
     this._ignoreOldEntries = [];
     this._clearCount++;
     this._stopAllRetries();
+    this.clearAllExceptions();
   }
 
   /**
@@ -1190,9 +1198,12 @@ export class Store<St> {
   private readonly _nonReentrantActionsRunning: Set<KissAction<St>>;
 
   /**
-   * The actions that have failed recently.
-   * When an action fails by throwing an `UserException`, it's added to this map
-   * (indexed by its action type), and then removed when it's dispatched.
+   * The failures of the actions that failed recently.
+   * When an action fails with any error (that was not swallowed, and is not an
+   * `AbortDispatchException`), its error is added here, indexed by the action type, together
+   * with the action's `statusKey`. Only the type, the key and the error are kept, not the action.
+   * A failure is removed when an action of the same type and `statusKey` is dispatched again,
+   * by `clearExceptionFor`, or by `clearAllExceptions` (which `clearInternalActionProps` calls).
    *
    * Use `isFailed`, `exceptionFor` and `clearExceptionFor` to know if you should display
    * some error message due to an action failure.
@@ -1201,7 +1212,7 @@ export class Store<St> {
    * as a message in the UI. If you don't want to show the dialog you can use the `noDialog`
    * getter in the error message: `throw new UserException('Invalid input').noDialog`.
    */
-  private readonly _failedActions: Map<new (...args: any[]) => KissAction<St>, KissAction<St>>;
+  private readonly _failedActions: Map<new (...args: any[]) => KissAction<St>, Failure[]>;
 
   /**
    * Helps implement the waitCondition method.
@@ -1466,7 +1477,7 @@ export class Store<St> {
     this.userExceptionsQueue = [];
     this._actionsInProgress = new Set();
     this._nonReentrantActionsRunning = new Set();
-    this._failedActions = new Map<new (...args: any[]) => KissAction<St>, KissAction<St>>();
+    this._failedActions = new Map<new (...args: any[]) => KissAction<St>, Failure[]>();
     Store.log = (logger === null) ? Store._noLogger : (logger || this._defaultLogger);
     this._logStateChanges = logStateChanges ?? true;
 
@@ -2174,9 +2185,9 @@ export class Store<St> {
 
   _calculateIsWaitingIsFailed(action: KissAction<St>) {
 
-    // Dispatch is starting, so we remove the action from the list of failed actions.
+    // Dispatch is starting, so we remove the failure of this action type and `statusKey`.
     // Otherwise, checking it later would show a stale error.
-    this._failedActions.delete(action.constructor as new (...args: any[]) => KissAction<St>);
+    this._removeFailure(action.constructor as new (...args: any[]) => KissAction<St>, action.statusKey);
 
     // Add the action to the list of actions in progress.
     // Note: We do this BEFORE notifying the UI, so that a single render sees both changes.
@@ -2339,8 +2350,9 @@ export class Store<St> {
 
       action._changeStatus({wrappedError: error});
 
-      // Memorizes the action that failed. We'll remove it when it's dispatched again.
-      this._failedActions.set(action.constructor as new (...args: any[]) => KissAction<St>, action);
+      // Memorizes the failure (type, `statusKey` and error). It's removed when an action of the
+      // same type and key is dispatched again.
+      this._addFailure(action.constructor as new (...args: any[]) => KissAction<St>, action.statusKey, error);
 
       // Memorizes errors of type `UserException` (in the error queue).
       // These errors are usually shown to the user in a modal dialog, and are not thrown.
@@ -2976,6 +2988,8 @@ export class Store<St> {
       if (store._wereInternalActionPropsCleared(action)) throw Store._clearedRetryError();
       retry.attempts++;
       if (!retry.unlimitedRetries && (retry.maxRetries >= 0) && (retry.attempts > retry.maxRetries)) throw error;
+      // The action can give up on some errors (`shouldRetry`). Not when there is no internet.
+      if ((error !== null) && !action._shouldRetry(error, retry.attempts)) throw error;
 
       await store._waitRetryDelay(action, action._nextRetryDelay(maxDelay));
     }
@@ -3400,10 +3414,14 @@ export class Store<St> {
    * store.dispatch(new MyAction());
    * if (store.isWaiting(MyAction)) { ... } // Show a spinner
    * ```
+   *
+   * Pass `{ statusKey }` to consider only the actions with that `statusKey` (see
+   * `KissAction.statusKey`): `store.isWaiting(LoadUser, { statusKey: userId })`.
    */
-  isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T): boolean {
+  isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T, options?: StatusOptions): boolean {
+    const statusKey = options?.statusKey;
     for (const action of this._actionsInProgress) {
-      if (action instanceof type) {
+      if (action instanceof type && (statusKey === undefined || _isSameNonReentrantKey(action.statusKey, statusKey))) {
         return true;
       }
     }
@@ -3411,23 +3429,46 @@ export class Store<St> {
   }
 
   /**
-   * Returns true if the given action `type` failed with an `UserException`.
+   * Returns true if the given action `type` failed, with any error, not only with a
+   * `UserException`. Use `exceptionFor` to get the error, if it was a `UserException`.
+   * An error swallowed by `wrapError` or the `errorObserver` (they returned `null`), and
+   * an `AbortDispatchException`, don't count as failures.
    * Note: This method uses the EXACT action type. Subtypes are not considered.
+   *
+   * Pass `{ statusKey }` to consider only the failures with that `statusKey` (see
+   * `KissAction.statusKey`): `store.isFailed(LoadUser, { statusKey: userId })`.
    */
-  isFailed<T extends KissAction<any>>(type: { new(...args: any[]): T }): boolean {
-    return this.exceptionFor(type) !== null;
+  isFailed<T extends KissAction<any>>(type: { new(...args: any[]): T }, options?: StatusOptions): boolean {
+    return this._findFailure(type, options) !== null;
   }
 
   /**
-   * Returns the `UserException` of the `type` that failed.
+   * Returns the `UserException` of the `type` that failed. Returns `null` if it didn't fail,
+   * or if it failed with an error that is not a `UserException` (in that case, `isFailed` is
+   * still true).
    * Note: This method uses the EXACT type in `type`. Subtypes are not considered.
+   *
+   * Pass `{ statusKey }` to get the exception of the failure with that `statusKey` (see
+   * `KissAction.statusKey`): `store.exceptionFor(LoadUser, { statusKey: userId })`. Without it,
+   * if actions with different keys failed, you get the `UserException` of the most recent
+   * failure.
    */
   exceptionFor<T extends KissAction<St>>(type: {
     new(...args: any[]): T
-  }): (UserException | null) {
-    const action = this._failedActions.get(type);
-    const error = action?.status.wrappedError;
-    return (error instanceof UserException) ? error : null;
+  }, options?: StatusOptions): (UserException | null) {
+    const failures = this._failedActions.get(type);
+    if (failures === undefined) return null;
+    const statusKey = options?.statusKey;
+
+    // The most recent failure is the last one. Without a key, we return the most recent
+    // UserException, skipping the failures with other kinds of errors.
+    for (let i = failures.length - 1; i >= 0; i--) {
+      const failure = failures[i];
+      if (statusKey !== undefined && !_isSameNonReentrantKey(failure.statusKey, statusKey)) continue;
+      if (failure.error instanceof UserException) return failure.error;
+      if (statusKey !== undefined) return null;
+    }
+    return null;
   }
 
   /**
@@ -3442,10 +3483,63 @@ export class Store<St> {
    * ```ts
    * store.clearExceptionFor(MyAction);
    * ```
+   *
+   * Pass `{ statusKey }` to clear only the failure with that `statusKey` (see
+   * `KissAction.statusKey`): `store.clearExceptionFor(LoadUser, { statusKey: userId })`.
+   * Without it, all the failures of the type are cleared, whatever their keys.
    */
-  clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T }): void {
-    const result = this._failedActions.delete(type);
-    if (result) this._statusListeners.notify();
+  clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T }, options?: StatusOptions): void {
+    const statusKey = options?.statusKey;
+    const removed = (statusKey === undefined)
+      ? this._failedActions.delete(type)
+      : this._removeFailure(type, statusKey);
+    if (removed) this._statusListeners.notify();
+  }
+
+  /**
+   * Clears the failures of all action types, so that `isFailed` is `false` and `exceptionFor`
+   * is `null` for all of them. The components that use them are updated.
+   *
+   * You rarely need to call this yourself, since `clearInternalActionProps()` already calls it,
+   * and so do `logOut()` and the shutdown of the store (`setShutDown(true)` and `dispose()`).
+   * The failures kept for actions with a `statusKey` (one per key that failed) are also
+   * released here. See `KissAction.statusKey`.
+   */
+  clearAllExceptions(): void {
+    if (this._failedActions.size === 0) return;
+    this._failedActions.clear();
+    this._statusListeners.notify();
+  }
+
+  /**
+   * Returns the failure of the given `type` that matches `options.statusKey`, or the most
+   * recent failure of the type when there is no key. Returns `null` if there is none.
+   */
+  private _findFailure(type: new (...args: any[]) => KissAction<any>, options?: StatusOptions): Failure | null {
+    const failures = this._failedActions.get(type);
+    if (failures === undefined) return null;
+    const statusKey = options?.statusKey;
+    if (statusKey === undefined) return failures[failures.length - 1] ?? null;
+    return failures.find(failure => _isSameNonReentrantKey(failure.statusKey, statusKey)) ?? null;
+  }
+
+  /** Records a failure, replacing the previous failure of the same type and `statusKey`, if any. */
+  private _addFailure(type: new (...args: any[]) => KissAction<St>, statusKey: unknown, error: unknown): void {
+    this._removeFailure(type, statusKey);
+    const failures = this._failedActions.get(type);
+    if (failures === undefined) this._failedActions.set(type, [{ statusKey, error }]);
+    else failures.push({ statusKey, error });
+  }
+
+  /** Removes the failure of the given type and `statusKey`. Returns true if there was one. */
+  private _removeFailure(type: new (...args: any[]) => KissAction<St>, statusKey: unknown): boolean {
+    const failures = this._failedActions.get(type);
+    if (failures === undefined) return false;
+    const index = failures.findIndex(failure => _isSameNonReentrantKey(failure.statusKey, statusKey));
+    if (index === -1) return false;
+    failures.splice(index, 1);
+    if (failures.length === 0) this._failedActions.delete(type);
+    return true;
   }
 
   /**

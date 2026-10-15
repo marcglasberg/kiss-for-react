@@ -17,7 +17,7 @@ const LIFECYCLE_METHODS = new Set([
   'hasInternet', 'nonReentrantKeyParams', 'computeNonReentrantKey', 'debounceLockBuilder',
   'ignoreOldKeyParams', 'computeIgnoreOldKey', 'throttleLockBuilder', 'freshKeyParams',
   'computeFreshKey', 'sequentialKeyParams', 'discardQueueOnError', 'createPollingAction',
-  'pollingKeyParams', 'computePollingKey',
+  'pollingKeyParams', 'computePollingKey', 'shouldRetry',
   // OptimisticCommand.
   'optimisticValue', 'applyValueToState', 'getValueFromState', 'sendCommandToServer',
   'applyServerResponseToState', 'reloadFromServer', 'rollbackState', 'shouldRollback',

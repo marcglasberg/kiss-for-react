@@ -5,7 +5,7 @@ import { UserException } from './UserException';
 import { StoreException } from './StoreException';
 import { Store } from './Store';
 import { StoreContext, StoreContextType } from './StoreProvider';
-import { KissAction, ActionStatus } from './KissAction';
+import { KissAction, ActionStatus, StatusOptions } from './KissAction';
 import { Evt, EvtState } from './Evt';
 
 // How the hooks connect to the store
@@ -744,10 +744,14 @@ export function useDispatchSync(): (action: KissAction<any>) => void {
  * const isWaiting = useIsWaiting(MyAction);
  * if (isWaiting) { ... } // Show a spinner
  * ```
+ *
+ * Pass `{ statusKey }` to consider only the actions with that `statusKey` (see
+ * `KissAction.statusKey`): `useIsWaiting(LoadUser, { statusKey: userId })`.
  */
-export function useIsWaiting(type: abstract new (...args: any[]) => KissAction<any>): boolean {
+export function useIsWaiting(type: abstract new (...args: any[]) => KissAction<any>, options?: StatusOptions): boolean {
   const store = useStoreFromContext<any>();
-  const getIsWaiting = useCallback(() => store.isWaiting(type), [store, type]);
+  const statusKey = options?.statusKey;
+  const getIsWaiting = useCallback(() => store.isWaiting(type, { statusKey }), [store, type, statusKey]);
   return useSyncExternalStore(store._subscribeStatus, getIsWaiting, _returnFalse);
 }
 
@@ -846,26 +850,41 @@ export function useConfiguration<C = unknown>(): C {
 }
 
 /**
- * Returns true if the given action `type` failed with an `UserException`.
+ * Returns true if the given action `type` failed, with any error, not only with a
+ * `UserException`. Use `exceptionFor` to get the error, if it was a `UserException`.
+ * An error swallowed by `wrapError` or the `errorObserver` (they returned `null`), and
+ * an `AbortDispatchException`, don't count as failures.
  * Note: This method uses the EXACT action type. Subtypes are not considered.
+ *
+ * Pass `{ statusKey }` to consider only the failures with that `statusKey` (see
+ * `KissAction.statusKey`): `useIsFailed(LoadUser, { statusKey: userId })`.
  */
-export function useIsFailed(type: { new(...args: any[]): KissAction<any> }): boolean {
+export function useIsFailed(type: { new(...args: any[]): KissAction<any> }, options?: StatusOptions): boolean {
   const store = useStoreFromContext<any>();
-  const getIsFailed = useCallback(() => store.isFailed(type), [store, type]);
+  const statusKey = options?.statusKey;
+  const getIsFailed = useCallback(() => store.isFailed(type, { statusKey }), [store, type, statusKey]);
   return useSyncExternalStore(store._subscribeStatus, getIsFailed, _returnFalse);
 }
 
 /**
- * Returns the `UserException` of the `type` that failed.
+ * Returns the `UserException` of the `type` that failed. Returns `null` if it didn't fail,
+ * or if it failed with an error that is not a `UserException` (in that case, `isFailed` is
+ * still true).
  * Note: This method uses the EXACT type in `type`. Subtypes are not considered.
  *
  * The exception is the object the action threw (or the one `wrapError` or the `errorObserver`
  * returned). It's returned as is: don't change it after throwing it, since React compares it
  * by identity to know if the component must rebuild.
+ *
+ * Pass `{ statusKey }` to get the exception of the failure with that `statusKey` (see
+ * `KissAction.statusKey`): `useExceptionFor(LoadUser, { statusKey: userId })`. Without it,
+ * if actions with different keys failed, you get the `UserException` of the most recent
+ * failure.
  */
-export function useExceptionFor(type: { new(...args: any[]): KissAction<any> }): UserException | null {
+export function useExceptionFor(type: { new(...args: any[]): KissAction<any> }, options?: StatusOptions): UserException | null {
   const store = useStoreFromContext<any>();
-  const getExceptionFor = useCallback(() => store.exceptionFor(type), [store, type]);
+  const statusKey = options?.statusKey;
+  const getExceptionFor = useCallback(() => store.exceptionFor(type, { statusKey }), [store, type, statusKey]);
   return useSyncExternalStore(store._subscribeStatus, getExceptionFor, _returnNull);
 }
 
@@ -883,11 +902,15 @@ export function useExceptionFor(type: { new(...args: any[]): KissAction<any> }):
  * clearExceptionFor(MyAction);
  * clearExceptionFor(AnotherAction);
  * ```
+ *
+ * Pass `{ statusKey }` to clear only the failure with that `statusKey` (see
+ * `KissAction.statusKey`): `clearExceptionFor(LoadUser, { statusKey: userId })`. Without it,
+ * all the failures of the type are cleared, whatever their keys.
  */
-export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction<any> }) => void {
+export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction<any> }, options?: StatusOptions) => void {
   const store = useStoreFromContext<any>();
-  return useMemo(() => (type: { new(...args: any[]): KissAction<any> }) => {
-    store.clearExceptionFor(type);
+  return useMemo(() => (type: { new(...args: any[]): KissAction<any> }, options?: StatusOptions) => {
+    store.clearExceptionFor(type, options);
   }, [store]);
 }
 
