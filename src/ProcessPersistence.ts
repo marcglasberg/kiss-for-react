@@ -306,6 +306,7 @@ export class ProcessPersistence<St> {
    * While a logOut is running, the persistor doesn't start a new persistence process
    * (except to persist the initial-state). This is kept apart from `pause`/`resume`, so that
    * a persistor paused by the app, before or during logOut, stays paused after it.
+   * @internal
    */
   _startLogOut(): void {
     // Logging out while the persisted state is still being read is a developer error:
@@ -324,6 +325,7 @@ export class ProcessPersistence<St> {
    * If the state is currently being persisted, we can't delete it right now. Wait until the
    * current persistence finishes. Since a logOut is running, no new persistence process will
    * start after that.
+   * @internal
    */
   async _waitWhilePersisting(): Promise<void> {
     while (this.isPersisting) await this._waitForPersisting();
@@ -333,6 +335,7 @@ export class ProcessPersistence<St> {
    * For Kiss internal use only. Called by the store during `logOut`, to delete the persisted
    * state. If it fails, the error is reported (only observed, since logOut throws it), and
    * returned. Returns `null` if it succeeded.
+   * @internal
    */
   async _deleteLogOutState(): Promise<{ error: any } | null> {
     // Another logOut that runs at the same time may be persisting its initial-state.
@@ -351,6 +354,7 @@ export class ProcessPersistence<St> {
    * Note this is done even if the persistor is paused. If it fails, the error (after
    * `Persistor.wrapError`) is reported (only observed, since logOut throws it), and returned.
    * Returns `null` if it succeeded, or if `wrapError` swallowed the error.
+   * @internal
    */
   async _persistLogOutState(initialState: St): Promise<{ error: any } | null> {
     // Another logOut that runs at the same time may be persisting its initial-state. If both
@@ -364,6 +368,7 @@ export class ProcessPersistence<St> {
    * For Kiss internal use only. Called by the store when `logOut` finishes (even if it failed).
    * If no other logOut is running, and the persistor is not paused, persistence resumes: if the
    * state changed after the initial-state was persisted, this persists the new state.
+   * @internal
    */
   _endLogOut(): void {
     this._logOutsRunning--;

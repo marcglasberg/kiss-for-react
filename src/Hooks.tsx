@@ -25,7 +25,8 @@ import { Evt, EvtState } from './Evt';
 //
 // - `useIsWaiting`, `useIsFailed` and `useExceptionFor` read a boolean or an exception from the
 //   store, and subscribe to the status changes of the actions. `useIsStoreReady` reads a boolean
-//   and subscribes to the readiness.
+//   and subscribes to the readiness. `useSuspense` reads, with the same subscription, a stable
+//   promise (while the action runs) or the failure, and throws it.
 //
 // What this means for your selectors: they must be pure, and must not depend on how many times
 // they are called. React may call them more than once per render, and may throw a render away.
@@ -241,6 +242,7 @@ export function useAllState<St>(): St {
  * - To get the state: `useSelect`, `useObject` or `useAllState`
  * - To know if actions are running: `useIsWaiting`
  * - To deal with exceptions: `useIsFailed`, `useExceptionFor` and `useClearExceptionFor`
+ * - To use `<Suspense>` and error boundaries instead: `useSuspense`
  *
  * See also:
  * - `useDispatch()` - Hook equivalent to `useStore().dispatch`
@@ -915,6 +917,80 @@ export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction
 }
 
 /**
+ * Options for `useSuspense`.
+ *
+ * - `statusKey`: Only consider the actions whose `statusKey` is equal to this one. Leave it
+ *   out (or pass `undefined`) to consider all actions of the type. See `KissAction.statusKey`.
+ * - `throwErrors`: When `true` (the default), if the action failed, the error is thrown to the
+ *   nearest error boundary. Pass `false` to not throw, and use `useIsFailed` or
+ *   `useExceptionFor` instead.
+ */
+export type SuspenseOptions = StatusOptions & {
+  throwErrors?: boolean;
+};
+
+/**
+ * Suspends the component while an action of the given `type` is in progress, and throws the
+ * error to the nearest error boundary if the action failed. It's the alternative to
+ * `useIsWaiting` and `useIsFailed` for apps that prefer React's `<Suspense>` and error
+ * boundaries, like TanStack Query's `useSuspenseQuery`:
+ *
+ * ```tsx
+ * function UserName({ userId }: { userId: string }) {
+ *   useSuspense(LoadUser, { statusKey: userId });
+ *   const user = useSelect((state: State) => state.users[userId]);
+ *   return <p>{user.name}</p>;
+ * }
+ *
+ * function UserCard({ userId }: { userId: string }) {
+ *   return (
+ *     <ErrorBoundary fallback={<p>Loading failed.</p>}>
+ *       <Suspense fallback={<Spinner />}>
+ *         <UserName userId={userId} />
+ *       </Suspense>
+ *     </ErrorBoundary>
+ *   );
+ * }
+ * ```
+ *
+ * - While an action of the type (or of a subclass, like `useIsWaiting`) is in progress, the
+ *   hook throws a promise. React stops the render there (the code after the hook doesn't run),
+ *   shows the `fallback` of the nearest `<Suspense>` above the component, and renders the
+ *   component again when the action finishes. The promise is the same object on every render
+ *   while the action runs, and resolves when it finishes.
+ * - Otherwise, if the last action of the exact type failed (like `useIsFailed`: with any
+ *   error, not only a `UserException`), the hook throws that error. The nearest error boundary
+ *   above the component catches it. The failure stays recorded in the store, like with
+ *   `useIsFailed`: dispatching the action again clears it (and makes the component suspend),
+ *   and so does `clearExceptionFor`. So a "retry" button in the boundary should dispatch the
+ *   action again, and then reset the boundary. Pass `{ throwErrors: false }` to not throw, and
+ *   use `useIsFailed` or `useExceptionFor` instead.
+ * - Otherwise, the hook returns, and the component renders normally.
+ *
+ * Pass `{ statusKey }` to consider only the actions with that `statusKey` (see
+ * `KissAction.statusKey`): `useSuspense(LoadUser, { statusKey: userId })`. Without it, the
+ * component suspends while any action of the type runs, and throws its most recent failure.
+ *
+ * On the server and while hydrating, the hook never suspends or throws, like `useIsWaiting`
+ * and `useIsFailed` are `false` there (see `StoreProviderProps.serverState`). After hydration,
+ * it follows the live store.
+ *
+ * Note: a component that suspends on its first render is thrown away and rendered again from
+ * the start, so its local state (`useState`, `useRef`) is lost. A component that already
+ * rendered keeps its state while suspended. This is how React's Suspense works.
+ */
+export function useSuspense(type: abstract new (...args: any[]) => KissAction<any>, options?: SuspenseOptions): void {
+  const store = useStoreFromContext<any>();
+  const statusKey = options?.statusKey;
+  const throwErrors = options?.throwErrors ?? true;
+  const getValue = useCallback(() => store._suspenseValue(type, statusKey, throwErrors), [store, type, statusKey, throwErrors]);
+  const value = useSyncExternalStore(store._subscribeStatus, getValue, _returnNull);
+  if (value === null) return;
+  if (value instanceof Promise) throw value;
+  throw value.error;
+}
+
+/**
  * Handles an event (`Evt` or `EvtState`) from the state, by calling the `callback` with its
  * value, once per event:
  *
@@ -1049,6 +1125,23 @@ class StoreDispatchers<St> {
     this.waitActionType = this.waitActionType.bind(this);
     this.waitAllActionTypes = this.waitAllActionTypes.bind(this);
     this.waitAnyActionTypeFinishes = this.waitAnyActionTypeFinishes.bind(this);
+    this.abort = this.abort.bind(this);
+  }
+
+  /**
+   * Aborts all the actions of the given `type` (or of a subclass) that are in progress. Each
+   * one finishes silently: its `abortSignal` is aborted, its result is ignored, and so are its
+   * errors. See `Store.abort`.
+   *
+   * ```tsx
+   * const { abort } = useStore();
+   * <button onClick={() => abort(UploadFile)}>Cancel</button>
+   * ```
+   *
+   * Pass `{ statusKey }` to abort only the actions with that `statusKey`.
+   */
+  abort<T extends KissAction<St>>(type: abstract new (...args: any[]) => T, options?: StatusOptions): void {
+    this.store.abort(type, options);
   }
 
   /**

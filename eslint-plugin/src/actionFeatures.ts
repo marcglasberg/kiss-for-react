@@ -5,7 +5,7 @@ import { classInstanceType, findMethod, isAsyncMethod, isThenable, kissImportNam
 
 // Helpers for the rules about action features: `nonReentrant`, `retry`, `checkInternet`,
 // `unlimitedRetryCheckInternet`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`,
-// `ServerPush`, and the base action.
+// `ServerPush`, `LoadPages`, and the base action.
 
 type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 
@@ -15,21 +15,22 @@ export type ClassNode = TSESTree.ClassDeclaration | TSESTree.ClassExpression;
 const SYMBOL_FLAGS_ALIAS = 2097152; // ts.SymbolFlags.Alias
 
 /** Kiss's own classes. Their members are the defaults, not overrides. */
-const KISS_CLASSES = ['KissAction', 'OptimisticCommand', 'OptimisticSync', 'OptimisticSyncWithPush', 'ServerPush'];
+const KISS_CLASSES = ['KissAction', 'OptimisticCommand', 'OptimisticSync', 'OptimisticSyncWithPush', 'ServerPush', 'LoadPages'];
 
 /** Kiss's own action classes that already declare `reduce`. */
-export const KISS_CLASSES_WITH_REDUCE = ['OptimisticCommand', 'OptimisticSync', 'OptimisticSyncWithPush', 'ServerPush'];
+export const KISS_CLASSES_WITH_REDUCE = ['OptimisticCommand', 'OptimisticSync', 'OptimisticSyncWithPush', 'ServerPush', 'LoadPages'];
 
 /** Kiss's own action classes, that the actions of the app extend. */
-export type KissClassName = 'KissAction' | 'OptimisticCommand' | 'OptimisticSync' | 'OptimisticSyncWithPush' | 'ServerPush';
+export type KissClassName = 'KissAction' | 'OptimisticCommand' | 'OptimisticSync' | 'OptimisticSyncWithPush' | 'ServerPush' | 'LoadPages';
 
 // ---------------------------------------------------------------------------------------------
 // The class and its superclasses, without type information.
 
 /**
  * The class, and its superclasses declared in this file, in order. `end` is the Kiss class the
- * chain reaches (`KissAction`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`
- * or `ServerPush`), or `null` if it leaves the file (or the last class doesn't extend anything).
+ * chain reaches (`KissAction`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`,
+ * `ServerPush` or `LoadPages`), or `null` if it leaves the file (or the last class doesn't extend
+ * anything).
  */
 export interface ClassChain {
   classes: ClassNode[];

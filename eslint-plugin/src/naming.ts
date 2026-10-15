@@ -13,8 +13,8 @@ type ClassNode = TSESTree.ClassDeclaration | TSESTree.ClassExpression;
  *
  * With type information, it must extend `KissAction`, directly or not. Without it, it must
  * extend some class, and declare `reduce` (or inherit it from a class declared in the same
- * file), or extend Kiss's `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` or
- * `ServerPush`, which already declare `reduce`.
+ * file), or extend Kiss's `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`,
+ * `ServerPush` or `LoadPages`, which already declare `reduce`.
  */
 export function isConcreteActionClass(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
   if (classNode.type === AST_NODE_TYPES.ClassDeclaration && (classNode.abstract || classNode.declare)) return false;
@@ -31,7 +31,7 @@ function hasReduceSyntactically(classNode: ClassNode, context: Context, seen: Se
   const superClass = classNode.superClass;
   const kissName = kissImportName(superClass, context);
   if (kissName === 'OptimisticCommand' || kissName === 'OptimisticSync' ||
-    kissName === 'OptimisticSyncWithPush' || kissName === 'ServerPush') return true;
+    kissName === 'OptimisticSyncWithPush' || kissName === 'ServerPush' || kissName === 'LoadPages') return true;
   if (superClass.type !== AST_NODE_TYPES.Identifier) return false;
   // A superclass declared in the same file, which declares `reduce`.
   const variable = findVariableInScopes(context.sourceCode.getScope(classNode), superClass.name);

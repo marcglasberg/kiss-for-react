@@ -69,7 +69,7 @@ class LoadText extends KissAction<State> {
 
   async reduce(): Promise<((state: State) => State) | null> {
     await this.gate.promise;
-    this.trace.push(`${this.text} isOld:${this.isOld}`);
+    this.trace.push(`${this.text} isAborted:${this.isAborted}`);
     return (state: State) => new State(this.text, state.cache);
   }
 }
@@ -117,7 +117,7 @@ Bdd(feature)
     expect(statusA.hasFinishedMethodAfter).toBe(true);
     expect(statusA.originalError).toBeInstanceOf(AbortDispatchException);
     expect(statusA.wrappedError).toBeNull();
-    expect(actionA.isOld).toBe(true);
+    expect(actionA.isAborted).toBe(true);
   });
 
 Bdd(feature)
@@ -145,7 +145,7 @@ Bdd(feature)
 
     expect(store.state.text).toBe('A');
     expect(statusA.isCompletedOk).toBe(true);
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
   });
 
 Bdd(feature)
@@ -255,7 +255,7 @@ Bdd(feature)
     gateA.open();
     await promiseA;
     expect(store.state.text).toBe('Initial');
-    expect(actionA.isOld).toBe(true);
+    expect(actionA.isAborted).toBe(true);
   });
 
 Bdd(feature)
@@ -293,7 +293,7 @@ Bdd(feature)
     const statusB = await promiseB;
     expect(statusB.isCompletedFailed).toBe(true);
     expect(statusB.isDispatchAborted).toBe(false);
-    expect(actionB.isOld).toBe(false);
+    expect(actionB.isAborted).toBe(false);
     expect(store.isFailed(LoadOrFail)).toBe(true);
     expect(shown).toEqual(['Failed B']);
 
@@ -357,7 +357,7 @@ Bdd(feature)
 
     store.dispatchSync(new SetText('B'));
     expect(store.state.text).toBe('B');
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
     expect(actionA.status.isCompletedOk).toBe(true);
   });
 
@@ -391,14 +391,14 @@ Bdd(feature)
   });
 
 // ---------------------------------------------------------------------------------------------
-// isOld.
+// isAborted.
 
 Bdd(feature)
   .scenario('An action becomes old as soon as a newer action is dispatched.')
   .given('An action with ignoreOld, dispatched with "A", which is still running.')
   .when('The action is dispatched with "B".')
   .then('"A" is old right away, and "B" is not.')
-  .and('Both can check it with isOld, after their requests finish.')
+  .and('Both can check it with isAborted, after their requests finish.')
   .run(async (_) => {
     const trace: string[] = [];
     const store = newStore();
@@ -406,25 +406,25 @@ Bdd(feature)
 
     const actionA = new LoadText('A', gateA, trace);
     const actionB = new LoadText('B', gateB, trace);
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
 
     const promiseA = store.dispatchAndWait(actionA);
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
 
     const promiseB = store.dispatchAndWait(actionB);
-    expect(actionA.isOld).toBe(true);
-    expect(actionB.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(true);
+    expect(actionB.isAborted).toBe(false);
 
     gateB.open();
     await promiseB;
     gateA.open();
     await promiseA;
 
-    expect(trace).toEqual(['B isOld:false', 'A isOld:true']);
+    expect(trace).toEqual(['B isAborted:false', 'A isAborted:true']);
   });
 
 Bdd(feature)
-  .scenario('isOld keeps the value it had when the action finished.')
+  .scenario('isAborted keeps the value it had when the action finished.')
   .given('An action with ignoreOld, dispatched with "A", "B" and "C".')
   .and('"B" finished before "C" was dispatched, while "A" was still running.')
   .then('"B" is not old, even after "C" is dispatched, and its abortSignal is not aborted.')
@@ -437,11 +437,11 @@ Bdd(feature)
     const actionB = new LoadText('B', openGate());
     const promiseA = store.dispatchAndWait(actionA);
     await store.dispatchAndWait(actionB);
-    expect(actionB.isOld).toBe(false);
+    expect(actionB.isAborted).toBe(false);
 
     // "A" is still running, so the key is still kept by the store.
     const promiseC = store.dispatchAndWait(new LoadText('C', gateC));
-    expect(actionB.isOld).toBe(false);
+    expect(actionB.isAborted).toBe(false);
     expect(actionB.abortSignal.aborted).toBe(false);
 
     gateA.open();
@@ -450,12 +450,12 @@ Bdd(feature)
     await promiseC;
 
     store.clearInternalActionProps();
-    expect(actionA.isOld).toBe(true);
-    expect(actionB.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(true);
+    expect(actionB.isAborted).toBe(false);
   });
 
 Bdd(feature)
-  .scenario('isOld is always false for an action without ignoreOld.')
+  .scenario('isAborted is always false for an action without ignoreOld.')
   .given('An action WITHOUT ignoreOld, dispatched with "A", which is still running.')
   .when('The action is dispatched with "B".')
   .then('"A" is not old.')
@@ -469,24 +469,24 @@ Bdd(feature)
     const actionA = new LoadTextAllowOld('A', gateA);
     const promiseA = store.dispatchAndWait(actionA);
     await store.dispatchAndWait(new LoadTextAllowOld('B', openGate()));
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
 
     gateA.open();
     await promiseA;
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
   });
 
 Bdd(feature)
   .scenario('Only the state returned by the reducer of an old action is ignored. Its other effects still happen.')
   .given('An action with ignoreOld, whose reducer dispatches another action after its request finishes.')
-  .and('The reducer {Checks isOld} before dispatching it.')
+  .and('The reducer {Checks isAborted} before dispatching it.')
   .when('The action is dispatched with "A", and then with "B".')
   .and('The request for "B" finishes first, and then the request for "A".')
   .then('The other action is dispatched {Dispatched}.')
-  .example(val('Checks isOld', 'checks isOld'), val('Dispatched', 'only by "B"'))
-  .example(val('Checks isOld', 'does not check isOld'), val('Dispatched', 'by "B" and by "A"'))
+  .example(val('Checks isAborted', 'checks isAborted'), val('Dispatched', 'only by "B"'))
+  .example(val('Checks isAborted', 'does not check isAborted'), val('Dispatched', 'by "B" and by "A"'))
   .run(async (ctx) => {
-    const checks = ctx.example.val('Checks isOld') === 'checks isOld';
+    const checks = ctx.example.val('Checks isAborted') === 'checks isAborted';
     const logged: string[] = [];
 
     class Log extends KissAction<State> {
@@ -501,7 +501,7 @@ Bdd(feature)
     class LoadAndLog extends LoadText {
       async reduce() {
         await this.gate.promise;
-        if (!checks || !this.isOld) this.dispatch(new Log(this.text));
+        if (!checks || !this.isAborted) this.dispatch(new Log(this.text));
         return (state: State) => new State(this.text, state.cache);
       }
     }
@@ -622,7 +622,7 @@ Bdd(feature)
     const action = new LoadText('A', new Gate());
     expect(action.abortSignal).toBe(action.abortSignal);
     expect(action.abortSignal.aborted).toBe(false);
-    expect(action.isOld).toBe(false);
+    expect(action.isAborted).toBe(false);
   });
 
 // ---------------------------------------------------------------------------------------------
@@ -810,7 +810,7 @@ Bdd(feature)
     const action1 = new LoadItem('1', 'one', gate1);
     const promise1 = store.dispatchAndWait(action1);
     const promise2 = store.dispatchAndWait(new LoadItem('2', 'two', gate2));
-    expect(action1.isOld).toBe(false);
+    expect(action1.isAborted).toBe(false);
 
     gate2.open();
     await promise2;
@@ -854,7 +854,7 @@ Bdd(feature)
     await store.dispatchAndWait(second);
     await promise;
 
-    expect(first.isOld).toBe(ctx.example.val('Result') === 'becomes old');
+    expect(first.isAborted).toBe(ctx.example.val('Result') === 'becomes old');
   });
 
 Bdd(feature)
@@ -902,7 +902,7 @@ Bdd(feature)
     const actionA = new LoadText1('A', gateA);
     const promiseA = store.dispatchAndWait(actionA);
     const promiseB = store.dispatchAndWait(new LoadText2('B', gateB));
-    expect(actionA.isOld).toBe(true);
+    expect(actionA.isAborted).toBe(true);
 
     gateB.open();
     await promiseB;
@@ -944,7 +944,7 @@ Bdd(feature)
     const promiseA = store.dispatchAndWait(actionA);
     const statusB = await store.dispatchAndWait(new LoadAborted('B', openGate()));
     expect(statusB.isDispatchAborted).toBe(true);
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
     expect(actionA.abortSignal.aborted).toBe(false);
 
     gateA.open();
@@ -977,7 +977,7 @@ Bdd(feature)
     internet = false;
     const statusB = await store.dispatchAndWait(new LoadOnline('B', openGate()));
     expect(statusB.isDispatchAborted).toBe(true);
-    expect(actionA.isOld).toBe(true);
+    expect(actionA.isAborted).toBe(true);
 
     gateA.open();
     await promiseA;
@@ -1027,13 +1027,13 @@ Bdd(feature)
       const promiseA = store.dispatchAndWait(actionA);
       await store.dispatchAndWait(new LoadPolled('B', openGate(), pollValues[ctx.example.val('Poll')]));
 
-      const isOld = ctx.example.val('Result') === 'is old';
-      expect(actionA.isOld).toBe(isOld);
-      expect(actionA.abortSignal.aborted).toBe(isOld);
+      const isAborted = ctx.example.val('Result') === 'is old';
+      expect(actionA.isAborted).toBe(isAborted);
+      expect(actionA.abortSignal.aborted).toBe(isAborted);
 
       gateA.open();
       await promiseA;
-      expect(store.state.text).toBe(isOld ? 'B' : 'A');
+      expect(store.state.text).toBe(isAborted ? 'B' : 'A');
     } finally {
       store.setShutDown(true);
     }
@@ -1090,7 +1090,7 @@ Bdd(feature)
     const promiseB = store.dispatchAndWait(new SearchText('B', openGate(), trace));
 
     const statusA = await promiseA;
-    expect(actionA.isOld).toBe(true);
+    expect(actionA.isAborted).toBe(true);
     expect(statusA.isDispatchAborted).toBe(true);
     expect(statusA.hasFinishedMethodReduce).toBe(false);
 
@@ -1375,12 +1375,12 @@ Bdd(feature)
 
     const actionB = new LoadText('B', gateB);
     const promiseB = store.dispatchAndWait(actionB);
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
 
     await store.dispatchAndWait(new LoadText('C', openGate()));
-    expect(actionB.isOld).toBe(true);
+    expect(actionB.isAborted).toBe(true);
     expect(actionB.abortSignal.aborted).toBe(true);
-    expect(actionA.isOld).toBe(false);
+    expect(actionA.isAborted).toBe(false);
     expect(actionA.abortSignal.aborted).toBe(false);
     expect(store.state.text).toBe('C');
 
@@ -1390,41 +1390,6 @@ Bdd(feature)
     await promiseA;
 
     expect(store.state.text).toBe('A');
-    expect((store as any)._ignoreOldEntries.length).toBe(0);
-  });
-
-Bdd(feature)
-  .scenario('The store forgets the keys when their actions finish, in any way.')
-  .given('An action with ignoreOld.')
-  .when('The action is dispatched a few times, and they finish {How}.')
-  .then('The store does not keep any information for its key.')
-  .example(val('How', 'successfully'))
-  .example(val('How', 'with errors'))
-  .run(async (ctx) => {
-    const fail = ctx.example.val('How') === 'with errors';
-
-    class LoadMaybeFail extends LoadText {
-      async reduce() {
-        await this.gate.promise;
-        if (fail) throw new Error('Failed');
-        return (state: State) => new State(this.text, state.cache);
-      }
-    }
-
-    const store = newStore();
-    const gateA = new Gate(), gateB = new Gate();
-
-    const promiseA = store.dispatchAndWait(new LoadMaybeFail('A', gateA));
-    const promiseB = store.dispatchAndWait(new LoadMaybeFail('B', gateB));
-    expect((store as any)._ignoreOldEntries.length).toBe(1);
-
-    gateB.open();
-    await promiseB.catch(() => {});
-    expect((store as any)._ignoreOldEntries.length).toBe(1);
-
-    gateA.open();
-    await promiseA;
-    expect((store as any)._ignoreOldEntries.length).toBe(0);
   });
 
 Bdd(feature)

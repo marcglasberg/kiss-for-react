@@ -202,10 +202,10 @@ Bdd(feature)
     class LoadFresh extends KissAction<State> {
       fresh = 5000;
 
-      constructor(readonly abort: boolean) { super(); }
+      constructor(readonly mustAbort: boolean) { super(); }
 
       before() {
-        if (this.abort) throw new AbortDispatchException();
+        if (this.mustAbort) throw new AbortDispatchException();
       }
 
       async reduce() {

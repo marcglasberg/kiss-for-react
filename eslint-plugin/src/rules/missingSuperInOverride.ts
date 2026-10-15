@@ -1,8 +1,9 @@
-import { TSESLint, TSESTree } from '@typescript-eslint/utils';
+import { AST_NODE_TYPES, TSESLint, TSESTree } from '@typescript-eslint/utils';
 import {
   callsSuper,
   ClassNode,
   declaresCheckInternet,
+  extendsLoadPages,
   extendsOptimisticCommand,
   extendsOptimisticSync,
   extendsOptimisticSyncWithPush,
@@ -12,7 +13,7 @@ import {
   readsThisMember,
   setsCheckInternet,
 } from '../actionMethods.js';
-import { createRule, findMethod, getTypeInfo } from '../utils.js';
+import { createRule, findMethod, getTypeInfo, memberName } from '../utils.js';
 
 type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 
@@ -31,9 +32,17 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  *   }
  *   ```
  *
- * - `reduce()` in a subclass of `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`
- *   or `ServerPush`, which must not be overridden. The optimistic update (or, in a `ServerPush`,
- *   the revision checks) stops working.
+ * - `reduce()` in a subclass of `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`,
+ *   `ServerPush` or `LoadPages`, which must not be overridden. The optimistic update (or, in a
+ *   `ServerPush`, the revision checks, or, in a `LoadPages`, the loading of the pages) stops
+ *   working.
+ *
+ * - In a subclass of `LoadPages`: `abortDispatch()` without `super.abortDispatch()` (a `'next'`
+ *   or `'previous'` then runs while another load of the list is running, or when there is no
+ *   page in that direction), the `ignoreFresh` or `ignoreThrottle` getter without
+ *   `super.ignoreFresh` or `super.ignoreThrottle` (a `'next'` or `'previous'` is then aborted
+ *   while the list is fresh or throttled), and the `statusKey` getter, which is
+ *   `pagesKeyParams()` and must not be overridden.
  *
  * A `before` that reads `this.checkInternet` is assumed to check the internet by itself.
  *
@@ -46,7 +55,7 @@ export default createRule({
     type: 'problem',
     docs: {
       description: 'Disallow overrides that turn off `checkInternet`, `OptimisticCommand`, `OptimisticSync`, ' +
-        '`OptimisticSyncWithPush` or `ServerPush`, because they don\'t call `super`.',
+        '`OptimisticSyncWithPush`, `ServerPush` or `LoadPages`, because they don\'t call `super`.',
     },
     hasSuggestions: true,
     schema: [],
@@ -74,6 +83,20 @@ export default createRule({
         'Don\'t override `reduce` in a `ServerPush`. Its `reduce` ignores the stale pushes, and records ' +
         'the server revisions, so overriding it turns that off. Implement `associatedAction`, ' +
         '`pushMetadata`, `applyServerPushToState` and `getServerRevisionFromState` instead.',
+      loadPagesReduce:
+        'Don\'t override `reduce` in a `LoadPages`. Its `reduce` loads the pages and puts them in the ' +
+        'state, so overriding it turns that off. Implement `getPagesFromState`, `applyPagesToState`, ' +
+        '`initialPageParam`, `loadPage` and `nextPageParam` instead.',
+      loadPagesAbortDispatch:
+        'This `abortDispatch` doesn\'t call `super.abortDispatch()`, so the `LoadPages` no longer aborts a ' +
+        '`\'next\'` or `\'previous\'` while another load of the list is running, or when there is no page ' +
+        'in that direction. Return `super.abortDispatch() || ...`.',
+      loadPagesIgnoreFresh:
+        'This `{{name}}` doesn\'t read `super.{{name}}`, so a `\'next\'` or `\'previous\'` of this ' +
+        '`LoadPages` is aborted while the list is {{period}}. Return `... || super.{{name}}`.',
+      loadPagesStatusKey:
+        'Don\'t override `statusKey` in a `LoadPages`. It\'s `pagesKeyParams()`, which the `LoadPages` ' +
+        'uses to find the other loads of the same list. Override `pagesKeyParams()` instead.',
       addSuper: 'Call `await super.before()` first.',
     },
   },
@@ -85,8 +108,28 @@ export default createRule({
       const before = findMethod(classNode, 'before');
       const reduce = findMethod(classNode, 'reduce');
       const checkInternet = declaresCheckInternet(classNode);
-      if (!before && !reduce && !checkInternet) return;
+      const abortDispatch = findMethod(classNode, 'abortDispatch');
+      const ignoreFresh = findGetter(classNode, 'ignoreFresh');
+      const ignoreThrottle = findGetter(classNode, 'ignoreThrottle');
+      const statusKey = findGetter(classNode, 'statusKey');
+      if (!before && !reduce && !checkInternet && !abortDispatch && !ignoreFresh && !ignoreThrottle && !statusKey) return;
       if (!isActionClass(classNode, context, typeInfo)) return;
+
+      // The overrides of a `LoadPages`.
+      if ((abortDispatch || ignoreFresh || ignoreThrottle || statusKey) && extendsLoadPages(classNode, context, typeInfo)) {
+        if (abortDispatch && !callsSuper(abortDispatch, 'abortDispatch')) {
+          context.report({node: abortDispatch.key, messageId: 'loadPagesAbortDispatch'});
+        }
+        for (const [getter, name, period] of [[ignoreFresh, 'ignoreFresh', 'fresh'], [ignoreThrottle, 'ignoreThrottle', 'throttled']] as const) {
+          if (getter && !callsSuper(getter, name)) {
+            context.report({node: getter.key, messageId: 'loadPagesIgnoreFresh', data: {name, period}});
+          }
+        }
+        if (statusKey) {
+          context.report({node: statusKey.key, messageId: 'loadPagesStatusKey'});
+        }
+      }
+      if (!before && !reduce && !checkInternet) return;
 
       // `before` without `super.before()`.
       if (before?.value.body && setsCheckInternet(classNode, context, typeInfo) &&
@@ -125,6 +168,11 @@ export default createRule({
       else if (reduce && extendsServerPush(classNode, context, typeInfo)) {
         context.report({node: reduce.key, messageId: 'serverPushReduce'});
       }
+
+      // `reduce` in a `LoadPages`.
+      else if (reduce && extendsLoadPages(classNode, context, typeInfo)) {
+        context.report({node: reduce.key, messageId: 'loadPagesReduce'});
+      }
     };
 
     return {
@@ -133,6 +181,15 @@ export default createRule({
     };
   },
 });
+
+/** The non-static getter with the given name, declared in the class itself. */
+function findGetter(classNode: ClassNode, name: string): TSESTree.MethodDefinition | null {
+  for (const member of classNode.body.body) {
+    if (member.type === AST_NODE_TYPES.MethodDefinition && !member.static && member.kind === 'get' &&
+      memberName(member) === name) return member;
+  }
+  return null;
+}
 
 /**
  * Adds `await super.before();` as the first statement of `before`, and makes it async if it's

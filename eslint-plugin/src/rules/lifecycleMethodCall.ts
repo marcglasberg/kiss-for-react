@@ -8,8 +8,8 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 
 /**
  * The lifecycle methods of the actions, which Kiss calls when the action is dispatched. They are
- * `protected` in `KissAction`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`
- * and `ServerPush`.
+ * `protected` in `KissAction`, `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`,
+ * `ServerPush` and `LoadPages`.
  */
 const LIFECYCLE_METHODS = new Set([
   // KissAction.
@@ -28,6 +28,9 @@ const LIFECYCLE_METHODS = new Set([
   'getServerRevisionFromState',
   // ServerPush.
   'associatedAction', 'pushMetadata', 'applyServerPushToState',
+  // LoadPages.
+  'getPagesFromState', 'applyPagesToState', 'initialPageParam', 'loadPage', 'nextPageParam',
+  'previousPageParam', 'pagesKeyParams',
 ]);
 
 /**

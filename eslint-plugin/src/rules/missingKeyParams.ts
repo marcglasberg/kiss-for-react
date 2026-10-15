@@ -20,18 +20,25 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 /** Properties of Kiss actions that configure the action. They are not the action's own data. */
 const KISS_PROPERTIES = ['retry', 'checkInternet', 'nonReentrant', 'debounce', 'throttle',
   'removeThrottleLockOnError', 'fresh', 'sequential', 'poll', 'pollInterval', 'pollWaitsForRun',
-  'unlimitedRetryCheckInternet', 'maxFollowUpRequests', 'ignoreOld'];
+  'unlimitedRetryCheckInternet', 'maxFollowUpRequests', 'ignoreOld', 'maxPages', 'which'];
 
 /**
- * The kind of key the action uses: the non-reentrant key, or the `OptimisticSync` key (also used
- * by `OptimisticSyncWithPush`).
+ * The kind of key the action uses: the non-reentrant key, the `OptimisticSync` key (also used
+ * by `OptimisticSyncWithPush`), or the pages key of a `LoadPages`.
  */
-type KeyKind = 'nonReentrant' | 'optimisticSync';
+type KeyKind = 'nonReentrant' | 'optimisticSync' | 'loadPages';
 
 /** The methods that compute each kind of key. The first one is the one the suggestion overrides. */
-const KEY_METHODS: Record<KeyKind, [string, string]> = {
+const KEY_METHODS: Record<KeyKind, string[]> = {
   nonReentrant: ['nonReentrantKeyParams', 'computeNonReentrantKey'],
   optimisticSync: ['optimisticSyncKeyParams', 'computeOptimisticSyncKey'],
+  loadPages: ['pagesKeyParams'],
+};
+
+const MESSAGE_IDS: Record<KeyKind, 'missingKeyParams' | 'missingOptimisticSyncKeyParams' | 'missingPagesKeyParams'> = {
+  nonReentrant: 'missingKeyParams',
+  optimisticSync: 'missingOptimisticSyncKeyParams',
+  loadPages: 'missingPagesKeyParams',
 };
 
 /**
@@ -43,6 +50,8 @@ const KEY_METHODS: Record<KeyKind, [string, string]> = {
  *
  * - A subclass of `OptimisticSync` or `OptimisticSyncWithPush` that doesn't override
  *   `optimisticSyncKeyParams` or `computeOptimisticSyncKey`.
+ *
+ * - A subclass of `LoadPages` that doesn't override `pagesKeyParams`.
  *
  * ```ts
  * class SaveTodo extends OptimisticCommand<State> {  // Warning
@@ -57,24 +66,31 @@ const KEY_METHODS: Record<KeyKind, [string, string]> = {
  * class ToggleLike extends OptimisticSync<State, boolean> {  // Warning
  *   constructor(readonly itemId: string) { super(); }
  * }
+ *
+ * class LoadComments extends LoadPages<State, Comment[], number> {  // Warning
+ *   constructor(readonly postId: string) { super(); }
+ * }
  * ```
  *
  * By default, the key doesn't depend on the fields, so all instances share it. For example,
  * `SaveTodo('A')` then blocks `SaveTodo('B')`. And while `ToggleLike('A')` has a request in
  * flight, `ToggleLike('B')` changes the state but doesn't send its own request. The follow-up
- * request of `ToggleLike('A')` only checks item A, so item B is never sent to the server. This
- * rule is opt-in, since sharing the key is often intended.
+ * request of `ToggleLike('A')` only checks item A, so item B is never sent to the server. And
+ * while `LoadComments('A')` loads, a `'next'` of `LoadComments('B')` is aborted, and a `'first'`
+ * or `'refresh'` of `LoadComments('B')` aborts the load of `'A'`. This rule is opt-in, since
+ * sharing the key is often intended.
  *
- * Suggestion: override `nonReentrantKeyParams()` (or `optimisticSyncKeyParams()`), returning
- * the fields.
+ * Suggestion: override `nonReentrantKeyParams()` (or `optimisticSyncKeyParams()`, or
+ * `pagesKeyParams()`), returning the fields.
  */
 export default createRule({
   name: 'missing-key-params',
   meta: {
     type: 'suggestion',
     docs: {
-      description: 'Recommend `nonReentrantKeyParams` in non-reentrant actions with fields, and ' +
-        '`optimisticSyncKeyParams` in `OptimisticSync` and `OptimisticSyncWithPush` actions with fields.',
+      description: 'Recommend `nonReentrantKeyParams` in non-reentrant actions with fields, ' +
+        '`optimisticSyncKeyParams` in `OptimisticSync` and `OptimisticSyncWithPush` actions with fields, and ' +
+        '`pagesKeyParams` in `LoadPages` actions with fields.',
     },
     hasSuggestions: true,
     schema: [],
@@ -88,6 +104,11 @@ export default createRule({
         '`{{action}}` has a request in flight, any other `{{action}}` changes the state without sending ' +
         'its own request, even with different fields, and its value may never be sent to the server. ' +
         'To give each one its own key, override `optimisticSyncKeyParams()`.',
+      missingPagesKeyParams:
+        '`{{action}}` has fields, but its pages key doesn\'t depend on them. So, all `{{action}}` load the ' +
+        'same list: while one runs, a `\'next\'` of any other `{{action}}` is aborted, and a `\'first\'` or ' +
+        '`\'refresh\'` of any other `{{action}}` aborts it, even with different fields. To give each list ' +
+        'its own key, override `pagesKeyParams()`.',
       addKeyParams: 'Override `{{method}}()`, returning {{fields}}.',
     },
   },
@@ -112,7 +133,7 @@ export default createRule({
 
       context.report({
         node: classNode.id ?? classNode.superClass,
-        messageId: kind === 'nonReentrant' ? 'missingKeyParams' : 'missingOptimisticSyncKeyParams',
+        messageId: MESSAGE_IDS[kind],
         data: {action: name},
         suggest: [{
           messageId: 'addKeyParams',
@@ -135,7 +156,7 @@ export default createRule({
  * or if the action doesn't use a key, `null`.
  *
  * The action uses the `OptimisticSync` key if it extends `OptimisticSync` or
- * `OptimisticSyncWithPush`. It uses the
+ * `OptimisticSyncWithPush`. It uses the pages key if it extends `LoadPages`. It uses the
  * non-reentrant key if it extends `OptimisticCommand`, or it or a superclass sets
  * `nonReentrant = true` or turns on `unlimitedRetryCheckInternet`.
  */
@@ -147,6 +168,7 @@ function keyKindWithoutKey(classNode: ClassNode, context: Context, typeInfo: Typ
     const type = instanceTypeOfClass(classNode, typeInfo);
     kind = (extendsClassNamed(type, 'OptimisticSync', typeInfo.checker) ||
       extendsClassNamed(type, 'OptimisticSyncWithPush', typeInfo.checker)) ? 'optimisticSync'
+      : extendsClassNamed(type, 'LoadPages', typeInfo.checker) ? 'loadPages'
       : (extendsClassNamed(type, 'OptimisticCommand', typeInfo.checker) ||
         (extendsClassNamed(type, 'KissAction', typeInfo.checker) &&
           (initializerTextOf(type, 'nonReentrant')?.trim() === 'true' ||
@@ -156,6 +178,7 @@ function keyKindWithoutKey(classNode: ClassNode, context: Context, typeInfo: Typ
     const chain = classChain(classNode, context);
     const property = findPropertyInChain(chain, 'nonReentrant');
     kind = (chain.end === 'OptimisticSync' || chain.end === 'OptimisticSyncWithPush') ? 'optimisticSync'
+      : chain.end === 'LoadPages' ? 'loadPages'
       : (chain.end === 'OptimisticCommand' || (chain.end === 'KissAction' &&
         ((!!property && isTrue(property)) || unlimitedRetryCheckInternetOfClass(classNode, context, null)))) ? 'nonReentrant' : null;
     declares = (name) => !!findMemberInChain(chain, name);

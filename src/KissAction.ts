@@ -987,6 +987,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * The non-reentrant key of this action, saved by the store when the action is dispatched
    * (or, with `debounce`, when its debounce period ends).
+   * @internal
    */
   _nonReentrantKey: any = undefined;
 
@@ -994,6 +995,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * How many times `store.clearInternalActionProps()` had been called when this action was
    * dispatched. If it's called again later, the action stops retrying.
+   * @internal
    */
   _clearCountAtDispatch: number = 0;
 
@@ -1001,6 +1003,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * How many times `store.logOut()` had been called when this action was dispatched. If it's
    * called again later, the result of this action is discarded when it finishes.
+   * @internal
    */
   _logOutCountAtDispatch: number = 0;
 
@@ -1009,6 +1012,7 @@ export abstract class KissAction<St> {
    * When this action is dispatched by another action (with `this.dispatch` and similar), it's
    * the `_logOutCountAtDispatch` of that other action. If `store.logOut()` was called after
    * that other action was dispatched, the store doesn't accept this action. Otherwise, `null`.
+   * @internal
    */
   _parentLogOutCount: number | null = null;
 
@@ -1021,6 +1025,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * True if the action was dispatched with `dispatchSync`, which threw because the action is
    * ASYNC. Its async work was already running, and its result is ignored, so it stops retrying.
+   * @internal
    */
   _isDiscardedByDispatchSync: boolean = false;
 
@@ -1160,6 +1165,7 @@ export abstract class KissAction<St> {
   /**
    * For Kiss internal use only.
    * The debounce wait time in milliseconds, or `null` if the action doesn't debounce.
+   * @internal
    */
   get _debounceMillis(): number | null {
     if (this.debounce === true) return 333;
@@ -1200,14 +1206,14 @@ export abstract class KissAction<St> {
    * - The actions are numbered in the order they are dispatched. When an action is dispatched,
    *   all the actions with the same key that are still running become old.
    *
-   * - The `abortSignal` of the old actions is aborted. Pass it to `fetch` (or to any other API
-   *   that accepts an `AbortSignal`, like axios), so that their requests are cancelled. You may
-   *   also check `isOld` yourself, after some `await`.
+   * - The old actions are aborted (see `isAborted`): their `abortSignal` is aborted. Pass it
+   *   to `fetch` (or to any other API that accepts an `AbortSignal`, like axios), so that their
+   *   requests are cancelled. You may also check `isAborted` yourself, after some `await`.
    *
-   * - An old action is aborted silently when it finishes: its result is ignored (it doesn't
-   *   change the state), and so are its errors (no error dialog, it doesn't count as failed,
-   *   and it isn't retried). This includes the `AbortError` thrown by `fetch` when its signal
-   *   is aborted. Its status has `isDispatchAborted: true`, and `dispatchAndWait` resolves.
+   * - An old action finishes silently: its result is ignored (it doesn't change the state),
+   *   and so are its errors (no error dialog, it doesn't count as failed, and it isn't
+   *   retried). This includes the error `fetch` rejects with when its signal is aborted. Its
+   *   status has `isDispatchAborted: true`, and `dispatchAndWait` resolves.
    *
    * - The newest action is never old, even if it fails. In that case the state is not changed,
    *   and the error is processed as usual.
@@ -1217,12 +1223,12 @@ export abstract class KissAction<St> {
    *   `Poll.start` while polling is already active, since they don't run the reducer.
    *
    * - Only the state returned by the reducer is ignored. Anything else the reducer did still
-   *   happened, like dispatching other actions. To avoid that, check `isOld`:
+   *   happened, like dispatching other actions. To avoid that, check `isAborted`:
    *
    *   ```ts
    *   async reduce() {
    *     let items = await loadItems(this.tab);
-   *     if (!this.isOld) this.dispatch(new LoadItemImages(items));
+   *     if (!this.isAborted) this.dispatch(new LoadItemImages(items));
    *     return (state: State) => state.copy({ items });
    *   }
    *   ```
@@ -1345,33 +1351,58 @@ export abstract class KissAction<St> {
   }
 
   /**
-   * Returns `true` if this action uses `ignoreOld`, and an action with the same key was
-   * dispatched after it. In this case, this action's result and errors will be ignored, and
-   * its `abortSignal` is aborted.
+   * Returns `true` if this action was aborted, which means its `abortSignal` is aborted, and
+   * its result and errors will be ignored. An action is aborted:
    *
-   * You can check it inside `reduce`, after some `await`, to avoid doing things that only make
-   * sense for the newest action, like dispatching other actions:
+   * - By `ignoreOld`, when an action with the same key is dispatched after it.
+   * - By `store.abort(ActionType)`, which aborts all the actions of the type in progress.
+   * - By its own `abort()` method.
+   *
+   * You can check it inside `reduce`, after some `await`, to avoid doing things that don't
+   * make sense anymore, like dispatching other actions:
    *
    * ```ts
    * async reduce() {
    *   let items = await loadItems(this.tab);
-   *   if (!this.isOld) this.dispatch(new LoadItemImages(items));
+   *   if (!this.isAborted) this.dispatch(new LoadItemImages(items));
    *   return (state: State) => state.copy({ items });
    * }
    * ```
    *
-   * After the action finishes, it keeps the value it had at that moment. It's always `false`
-   * for actions that don't use `ignoreOld`, and for actions that were not dispatched yet.
+   * Once aborted, it stays aborted. It's `false` for actions that were not aborted, including
+   * the ones that were not dispatched yet.
    */
-  get isOld(): boolean {
-    const entry = this._ignoreOldEntry;
-    return entry !== null && entry.newestOrder > this._ignoreOldOrder;
+  get isAborted(): boolean {
+    return this._abortController?.signal.aborted ?? false;
   }
 
   /**
-   * An `AbortSignal` that is aborted when this action becomes old (see `ignoreOld`). Pass it to
-   * `fetch`, or to any other API that accepts an `AbortSignal`, so that the request is
-   * cancelled when an action with the same key is dispatched after this one:
+   * Aborts this action: its `abortSignal` is aborted, `isAborted` becomes `true`, and the
+   * action finishes silently: its result is ignored (it doesn't change the state), and so are
+   * its errors (no error dialog, it doesn't count as failed, and it isn't retried). Its status
+   * has `isDispatchAborted: true`, and `dispatchAndWait` resolves.
+   *
+   * - If the request uses the `abortSignal`, it's cancelled right away. Otherwise, the action
+   *   is still in progress (`isWaiting` is `true`) until the request finishes, and only then
+   *   its result is ignored.
+   * - An action aborted before it's dispatched doesn't run at all: `before`, `reduce` and
+   *   `after` are not called.
+   * - Aborting an action that already finished has no effect.
+   *
+   * To abort all the actions of a type in progress, use `store.abort(ActionType)`. For
+   * example, in `useStoreEffect`, with `onUnmount: (store) => store.abort(LoadUser)`.
+   */
+  abort(): void {
+    if (this.status.isCompleted) return;
+    this._abort('The action was aborted by abort().');
+  }
+
+  /**
+   * An `AbortSignal` that is aborted when this action is aborted (see `isAborted`): by
+   * `ignoreOld`, when an action with the same key is dispatched after this one; by
+   * `store.abort(ActionType)`; or by its own `abort()` method. Pass it to `fetch`, or to any
+   * other API that accepts an `AbortSignal`, so that the request is cancelled as soon as the
+   * action is aborted:
    *
    * ```ts
    * class LoadTab extends KissAction<State> {
@@ -1386,8 +1417,8 @@ export abstract class KissAction<St> {
    * }
    * ```
    *
-   * When the signal is aborted, `fetch` throws an `AbortError`. You don't need to catch it:
-   * the errors of an old action are ignored, and the action is aborted silently.
+   * When the signal is aborted, `fetch` rejects with an `AbortError`. You don't need to catch
+   * it: the errors of an aborted action are ignored, and the action finishes silently.
    *
    * For work that doesn't accept a signal, you can check it yourself, between the steps:
    *
@@ -1397,7 +1428,7 @@ export abstract class KissAction<St> {
    * let posts = await loadPosts(user);
    * ```
    *
-   * For actions that don't use `ignoreOld`, the signal is never aborted.
+   * The signal of an action that is never aborted is never aborted either.
    */
   get abortSignal(): AbortSignal {
     this._abortController ??= new AbortController();
@@ -1406,23 +1437,24 @@ export abstract class KissAction<St> {
 
   /**
    * For Kiss internal use only.
-   * The controller of `abortSignal`. Created by the store when an `ignoreOld` action starts
-   * running, or by `abortSignal` when it's first used.
+   * The controller of `abortSignal`. Created by `abortSignal` when it's first used, or by
+   * `_abort()`.
+   * @internal
    */
   _abortController: AbortController | null = null;
 
   /**
    * For Kiss internal use only.
-   * The information the store keeps for the `ignoreOld` key of this action, set when the
-   * action starts running. It's `null` if the action doesn't use `ignoreOld`.
+   * Aborts the action: its `abortSignal` is aborted, and `isAborted` becomes `true`. The
+   * signal's reason is an `AbortError` (a `DOMException`, as when `fetch` is aborted) with the
+   * given `reason` as its message. The store uses it in the `AbortDispatchException` that
+   * finishes the action silently (see `Store._abortError`).
+   * @internal
    */
-  _ignoreOldEntry: _IgnoreOldEntry | null = null;
-
-  /**
-   * For Kiss internal use only.
-   * The order in which this `ignoreOld` action was dispatched, compared to the others.
-   */
-  _ignoreOldOrder: number = 0;
+  _abort(reason: string): void {
+    this._abortController ??= new AbortController();
+    this._abortController.abort(new DOMException(reason, 'AbortError'));
+  }
 
   /**
    * Set `throttle` to make sure the action will be dispatched at most once in the specified
@@ -1640,6 +1672,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * The throttle period in milliseconds, or `null` if the action doesn't throttle, or if its
    * `throttle` value is invalid (in which case the dispatch throws).
+   * @internal
    */
   get _throttleMillis(): number | null {
     const throttle: any = this.throttle;
@@ -2034,6 +2067,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * The fresh period in milliseconds, or `null` if the action doesn't use `fresh`, or if its
    * `fresh` value is invalid (in which case the dispatch throws).
+   * @internal
    */
   get _freshMillis(): number | null {
     const fresh: any = this.fresh;
@@ -2294,12 +2328,14 @@ export abstract class KissAction<St> {
   /**
    * For Kiss internal use only.
    * Set by the store while this sequential action waits for its turn in the queue.
+   * @internal
    */
   _isWaitingInSequentialQueue: boolean = false;
 
   /**
    * For Kiss internal use only.
    * Set by the store when this sequential action is discarded from its queue.
+   * @internal
    */
   _wasDiscardedFromSequentialQueue: boolean = false;
 
@@ -2766,6 +2802,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * The delay between polling ticks in milliseconds, or `null` if the `pollInterval` value is
    * invalid (in which case the dispatch throws).
+   * @internal
    */
   get _pollIntervalMillis(): number | null {
     const pollInterval: any = this.pollInterval;
@@ -2870,6 +2907,7 @@ export abstract class KissAction<St> {
    */
   declare retry?: Retry;
 
+  /** @internal */
   _retry: RetryOptions = {
     on: false,
     attempts: 0,
@@ -2928,6 +2966,7 @@ export abstract class KissAction<St> {
   /**
    * For Kiss internal use only.
    * Calls the (protected) `shouldRetry()` method.
+   * @internal
    */
   _shouldRetry(error: unknown, attempt: number): boolean {
     return this.shouldRetry(error, attempt);
@@ -2938,6 +2977,7 @@ export abstract class KissAction<St> {
    * Start with the `initialDelay`, and then increase it by `multiplier` each time this is called.
    * If the delay exceeds the given `maxDelay` (by default, the retry `maxDelay`), it will be set
    * to `maxDelay`.
+   * @internal
    */
   _nextRetryDelay(maxDelay: number = this._retry.maxDelay): number {
     const retry = this._retry;
@@ -3046,6 +3086,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * True if `unlimitedRetryCheckInternet` is turned on. Note this doesn't validate it, which
    * only happens when the action is dispatched.
+   * @internal
    */
   get _isUnlimitedRetryCheckInternet(): boolean {
     const value: any = this.unlimitedRetryCheckInternet;
@@ -3056,6 +3097,7 @@ export abstract class KissAction<St> {
    * For Kiss internal use only.
    * The maximum delay between retries when there is no internet, for actions that use
    * `unlimitedRetryCheckInternet`. Set when the action is dispatched.
+   * @internal
    */
   _maxDelayNoInternet: number = 1000;
 
@@ -3064,6 +3106,7 @@ export abstract class KissAction<St> {
    * Checks the internet connection with the (protected) `hasInternet()` method, unless it's
    * being simulated with `internetOnOffSimulation`, which takes precedence. Used by
    * `checkInternet` and `unlimitedRetryCheckInternet`.
+   * @internal
    */
   _hasInternet(): Promise<boolean> {
     const simulation = this.internetOnOffSimulation;
@@ -3766,6 +3809,7 @@ export abstract class KissAction<St> {
   /**
    * For Kiss internal use only.
    * Sets the store and the initial state, so that the action can access them.
+   * @internal
    */
   _setStore(_store: Store<St>) {
     this._store = _store;
@@ -3774,6 +3818,7 @@ export abstract class KissAction<St> {
 
   /**
    * For Kiss internal use only.
+   * @internal
    */
   _injectStore(_store: Store<St>) {
     this._setStore(_store);
@@ -4005,6 +4050,7 @@ export abstract class KissAction<St> {
 
   /**
    * For Kiss internal use only.
+   * @internal
    */
   _changeStatus(params: {
     isDispatched?: boolean,
@@ -4020,6 +4066,7 @@ export abstract class KissAction<St> {
 
   /**
    * For Kiss internal use only.
+   * @internal
    */
   _createPromise(): Promise<ActionStatus> {
     return new Promise<ActionStatus>((resolve, reject) => {
@@ -4030,6 +4077,7 @@ export abstract class KissAction<St> {
 
   /**
    * For Kiss internal use only.
+   * @internal
    */
   _resolvePromise(failure: { error: any } | null = null): void {
     // Settles the promise created by `dispatchAndWait()`. It rejects with the error, if the
@@ -4041,6 +4089,7 @@ export abstract class KissAction<St> {
   /**
    * For Kiss internal use only.
    * Returns true if the action was dispatched with `dispatchAndWait()`.
+   * @internal
    */
   _isAwaited(): boolean {
     return this._resolve !== null;
@@ -4872,6 +4921,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
 
   /**
    * For Kiss internal use only.
+   * @internal
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
@@ -5522,6 +5572,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
 
   /**
    * For Kiss internal use only.
+   * @internal
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
@@ -6201,6 +6252,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
 
   /**
    * For Kiss internal use only.
+   * @internal
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
@@ -6226,6 +6278,7 @@ export type PushMetadata = {
 /**
  * The revision that `OptimisticSyncWithPush` and `ServerPush` keep for each key. For Kiss
  * internal use only.
+ * @internal
  */
 export type _OptimisticSyncRevision = {
   // Incremented by each `OptimisticSyncWithPush` dispatch.
@@ -6238,18 +6291,6 @@ export type _OptimisticSyncRevision = {
   // there was none. It's put back in the state when a push applied while a request was in
   // flight turns out to be older than that request.
   localValue: any,
-};
-
-/**
- * The information the store keeps for each `ignoreOld` key, while actions with that key are
- * running. For Kiss internal use only.
- */
-export type _IgnoreOldEntry = {
-  key: any,
-  // The dispatch order of the newest action with this key.
-  newestOrder: number,
-  // The actions with this key that are running.
-  running: Set<KissAction<any>>,
 };
 
 /**
@@ -6475,6 +6516,7 @@ export abstract class ServerPush<St> extends KissAction<St> {
 
   /**
    * For Kiss internal use only.
+   * @internal
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
@@ -6523,6 +6565,7 @@ export type StatusOptions = {
   statusKey?: unknown;
 };
 
+/** @internal */
 export function _isSameNonReentrantKey(a: any, b: any): boolean {
   if (Object.is(a, b)) return true;
 

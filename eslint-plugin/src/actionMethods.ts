@@ -263,6 +263,11 @@ export function extendsServerPush(classNode: ClassNode, context: Context, typeIn
   return extendsKissClass(classNode, 'ServerPush', context, typeInfo);
 }
 
+/** True if the class extends Kiss's `LoadPages`, directly or not. */
+export function extendsLoadPages(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  return extendsKissClass(classNode, 'LoadPages', context, typeInfo);
+}
+
 /** True if the class extends the Kiss class with this name (which extends `KissAction`), directly or not. */
 function extendsKissClass(classNode: ClassNode, name: string, context: Context, typeInfo: TypeInfo | null): boolean {
   if (typeInfo) {

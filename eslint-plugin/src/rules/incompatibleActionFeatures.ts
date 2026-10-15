@@ -93,6 +93,12 @@ const INCOMPATIBLE_WITH_SERVER_PUSH: [PropertyFeature, string?][] = [
   ['ignoreOld', 'It already ignores the stale pushes.'],
 ];
 
+/** The features a `LoadPages` can't use, and why. */
+const INCOMPATIBLE_WITH_LOAD_PAGES: [PropertyFeature, string?][] = [
+  ['nonReentrant', 'It already runs one load per list at a time.'],
+  ['ignoreOld', 'It already aborts the older loads of the list.'],
+];
+
 /** How a feature is set in the action: if it's on, and its declaration in the class itself, if any. */
 export interface FeatureState {
   on: boolean;
@@ -127,13 +133,18 @@ export interface FeatureState {
  *   checkInternet = { dialog: false };  // Error (a `ServerPush` can't use any feature)
  *   ...
  * }
+ *
+ * class LoadTodos extends LoadPages<State, Todo[], string | null> {
+ *   ignoreOld = true;  // Error (a `LoadPages` already aborts the older loads of the list)
+ *   ...
+ * }
  * ```
  *
  * The features are `nonReentrant`, `retry`, `checkInternet`, `debounce`, `throttle`, `fresh`,
  * `sequential`, polling (`poll`), `unlimitedRetryCheckInternet`, `ignoreOld`, `OptimisticCommand`,
  * `OptimisticSync`, `OptimisticSyncWithPush` (which can use the same features as an
- * `OptimisticSync`) and `ServerPush`. It also reports an `OptimisticCommand` that retries forever
- * (`retry = { maxRetries: -1 }` or `retry = { unlimitedRetries: true }`).
+ * `OptimisticSync`), `ServerPush` and `LoadPages`. It also reports an `OptimisticCommand` that
+ * retries forever (`retry = { maxRetries: -1 }` or `retry = { unlimitedRetries: true }`).
  *
  * Features inherited from superclasses count too (in this file, or anywhere with type
  * information), but the problem is only reported in the class that declares at least one of the
@@ -161,6 +172,8 @@ export default createRule({
       incompatibleWithServerPush:
         'A `ServerPush` can\'t use `{{feature}}`, since it should be used alone. Dispatching it throws a ' +
         '`StoreException`.{{reason}}',
+      incompatibleWithLoadPages:
+        'A `LoadPages` can\'t use `{{feature}}`. Dispatching it throws a `StoreException`.{{reason}}',
       commandRetriesForever:
         'An `OptimisticCommand` can\'t retry forever (`{{option}}`), since a command that never finishes ' +
         'would never release its non-reentrant key. Dispatching it throws a `StoreException`. Use a ' +
@@ -225,6 +238,19 @@ export default createRule({
           context.report({
             node: keyOf(state.own),
             messageId: 'incompatibleWithServerPush',
+            data: {feature, reason: reasonText(reason)},
+            suggest: suggestionsFor([state.own], [feature]),
+          });
+        }
+      }
+
+      if (isLoadPages(classNode, context, typeInfo)) {
+        for (const [feature, reason] of INCOMPATIBLE_WITH_LOAD_PAGES) {
+          const state = features.get(feature)!;
+          if (!state.on || !state.own) continue;
+          context.report({
+            node: keyOf(state.own),
+            messageId: 'incompatibleWithLoadPages',
             data: {feature, reason: reasonText(reason)},
             suggest: suggestionsFor([state.own], [feature]),
           });
@@ -367,7 +393,7 @@ export function featureState(name: PropertyFeature, classNode: ClassNode, contex
  * True if the class is an action: it extends `KissAction` (with type information), or, without
  * it, its superclasses in this file reach one of Kiss's action classes, or it (or one of them)
  * declares `reduce` or the methods of an `OptimisticCommand`, an `OptimisticSync`, an
- * `OptimisticSyncWithPush` or a `ServerPush`.
+ * `OptimisticSyncWithPush`, a `ServerPush` or a `LoadPages`.
  */
 export function isAction(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
   if (!classNode.superClass) return false;
@@ -376,7 +402,19 @@ export function isAction(classNode: ClassNode, context: Context, typeInfo: TypeI
   return chain.end !== null || !!findMemberInChain(chain, 'reduce') ||
     !!findMemberInChain(chain, 'sendCommandToServer') || !!findMemberInChain(chain, 'optimisticValue') ||
     !!findMemberInChain(chain, 'sendValueToServer') || !!findMemberInChain(chain, 'valueToApply') ||
-    !!findMemberInChain(chain, 'applyServerPushToState') || !!findMemberInChain(chain, 'pushMetadata');
+    !!findMemberInChain(chain, 'applyServerPushToState') || !!findMemberInChain(chain, 'pushMetadata') ||
+    !!findMemberInChain(chain, 'loadPage') || !!findMemberInChain(chain, 'nextPageParam');
+}
+
+/**
+ * True if the class is a `LoadPages`. Without type information, its superclasses in this file
+ * must reach `LoadPages`, or declare its methods.
+ */
+export function isLoadPages(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  if (typeInfo) return extendsClassNamed(instanceTypeOfClass(classNode, typeInfo), 'LoadPages', typeInfo.checker);
+  const chain = classChain(classNode, context);
+  return chain.end === 'LoadPages' || (chain.end === null &&
+    (!!findMemberInChain(chain, 'loadPage') || !!findMemberInChain(chain, 'nextPageParam')));
 }
 
 /**

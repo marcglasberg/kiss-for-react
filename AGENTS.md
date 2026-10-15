@@ -57,9 +57,10 @@ Guidelines:
 
 ## Talking to the user
 
-Always talk to the user in a clear way, using simple words. Each sentence must say **what** you
-are talking about, in full. Never refer to something by a name, a value or a shortcut that only
-makes sense if the reader watched you work.
+Always talk to the user in ASD-STE100 format. Ideas must be presented in a clear way, 
+using simple words. Each sentence must say **what** you are talking about, in full. 
+Never refer to something by a name, a value or a shortcut that only makes sense if 
+the reader watched you work.
 
 Bad: "I left `null` as the way to reconnect the source."
 

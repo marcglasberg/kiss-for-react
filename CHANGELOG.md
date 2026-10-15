@@ -232,6 +232,20 @@
   `OptimisticSyncWithPush.deviceId()`, which you can change. `ServerPush` can't be combined with
   any other feature.
 
+* New `LoadPages` abstract class, for lists loaded page by page ("load more", infinite
+  scroll). It keeps the loaded pages in the state, in an immutable `Pages` value (`pages`,
+  `pageParams`, `hasNextPage`, `hasPreviousPage`). Implement `getPagesFromState`,
+  `applyPagesToState`, `initialPageParam`, `loadPage` and `nextPageParam` (and
+  `previousPageParam` for the other direction), and dispatch it with the pages to load:
+  `'refresh'` (the default: loads again the pages in the state, one after the other from the
+  first, or the first page if there are none), `'next'`, `'previous'` or `'first'` (starts
+  over). Only one load per list runs at a time: a `'next'` or `'previous'` is aborted while
+  the list is loading, and a `'first'` or `'refresh'` aborts the running loads. `maxPages`
+  limits the pages kept, dropping the page at the other end. `pagesKeyParams()` separates the
+  lists loaded by the same class, and is also the `statusKey`. `fresh` and `throttle` only
+  apply to `'first'` and `'refresh'`. It can't be combined with `nonReentrant` or
+  `ignoreOld`. If the state is persisted with a `ClassPersistor`, add `Pages` to its classes.
+
 * New `debounce` action property. With `debounce = 300` (milliseconds), or `debounce = true`
   for the default 333 milliseconds, the action waits until it stops being dispatched for that
   long, and only the last action runs its reducer. Actions of the same class debounce each
@@ -245,7 +259,7 @@
   again, the actions of the previous dispatches (with the same key) that are still running
   become old: their results and errors are ignored, and they are aborted silently. Only the
   newest dispatch changes the state, so a slow request that finishes late doesn't overwrite
-  the newer information. `isOld` tells if a newer action was dispatched. An action waiting to
+  the newer information. `isAborted` tells if the action became old. An action waiting to
   retry stops retrying when it becomes old. Actions of the same class share the key, or
   override `ignoreOldKeyParams()` to separate them by some fields, or `computeIgnoreOldKey()`
   so that different classes share it. It can be combined with `debounce`, `throttle`, `fresh`,
@@ -253,10 +267,27 @@
   `unlimitedRetryCheckInternet`, nor used in an `OptimisticCommand`, `OptimisticSync`,
   `OptimisticSyncWithPush` or `ServerPush`.
 
-* New `abortSignal` action getter, an `AbortSignal` that is aborted when an `ignoreOld` action
-  becomes old. Pass it to `fetch` (or any API that accepts a signal) to cancel the requests of
-  old actions. The `AbortError` that `fetch` then throws is ignored, like any error of an old
-  action. For actions without `ignoreOld`, it's never aborted.
+* New `store.abort(ActionType)`, which aborts all the actions of the type (or of a subclass)
+  that are in progress, and new `action.abort()`, which aborts one action instance. An aborted
+  action finishes silently: its `abortSignal` is aborted (so a `fetch` that got it is
+  cancelled right away), its result is ignored, and so are its errors (no error dialog, it
+  doesn't count as failed, and it isn't retried). Its status has `isDispatchAborted: true`,
+  and `dispatchAndWait` resolves. A request that ignores the signal still finishes, and only
+  then its result is ignored. An action aborted during `before` doesn't run its reducer, one
+  aborted while waiting to retry stops retrying, and one aborted before it's dispatched
+  doesn't run at all. Pass `{ statusKey }` to abort only the actions with that key. Use it
+  for a "Cancel" button, or in `useStoreEffect` with `onUnmount: (store) => store.abort(LoadUser)`,
+  to cancel the request a component started when it unmounts.
+
+* New `abortSignal` action getter, an `AbortSignal` that is aborted when the action is
+  aborted: by `ignoreOld`, by `store.abort` or by `action.abort()`. Pass it to `fetch` (or
+  any API that accepts a signal) to cancel the request. The `AbortError` that `fetch` then
+  throws is ignored, like any error of an aborted action. New `isAborted` action getter,
+  `true` when the action was aborted, to check inside the reducer after an `await`.
+
+* The internal members of `KissAction` and `Store` (the ones named with a leading underscore,
+  like `_abortController`) are no longer in the published typings, so they don't show up in
+  autocompletion. They still exist at runtime, for Kiss itself.
 
 * New `throttle` action property. With `throttle = 5000` (milliseconds), or `throttle = true`
   for the default 1000 milliseconds, the action runs at most once per throttle period, and
@@ -389,6 +420,26 @@
     `clearInternalActionProps()` now calls it, so `logOut()`, `setShutDown(true)` and
     `dispose()` clear the failures too.
   - New exported type `StatusOptions` (`{ statusKey?: unknown }`).
+
+* New hook `useSuspense(ActionType, { statusKey?, throwErrors? })`, for apps that prefer
+  React's `<Suspense>` and error boundaries to `useIsWaiting`/`useIsFailed` checks, like
+  TanStack Query's `useSuspenseQuery`. While an action of the type (or of a subclass) is in
+  progress, the hook throws a stable promise, so the nearest `<Suspense>` shows its fallback
+  until the action finishes. If the action failed (with any error), the hook throws the error
+  to the nearest error boundary; pass `throwErrors: false` to not throw it. The failure stays
+  recorded, like with `useIsFailed`, until the action is dispatched again or
+  `clearExceptionFor` is called. On the server and while hydrating, it never suspends or
+  throws. The store creates a promise only when a component suspends, and releases it when
+  the action finishes, so apps that don't use the hook pay nothing. New exported type
+  `SuspenseOptions`.
+
+  ```tsx
+  function UserName({ userId }: { userId: string }) {
+    useSuspense(LoadUser, { statusKey: userId });
+    const user = useSelect((state: State) => state.users[userId]);
+    return <p>{user.name}</p>;
+  }
+  ```
 
 ### Breaking changes
 

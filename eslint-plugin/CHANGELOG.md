@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1
+
+* The rules now know the `LoadPages` base action (Kiss 2.0.0):
+  `incompatible-action-features` reports a `LoadPages` with `nonReentrant` or `ignoreOld`;
+  `missing-super-in-override` reports a `reduce` or `statusKey` override in a `LoadPages`,
+  an `abortDispatch` that doesn't call `super.abortDispatch()`, and an `ignoreFresh` or
+  `ignoreThrottle` getter that doesn't read the `super` value; `missing-key-params` warns
+  about a `LoadPages` with fields that doesn't override `pagesKeyParams`;
+  `lifecycle-method-call` reports calls to its methods; `retry-without-non-reentrant` doesn't
+  report it; and the naming rules check it as a concrete action, even without type
+  information.
+
 ## 1.0.0
 
 * First version, with 57 rules:

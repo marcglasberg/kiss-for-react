@@ -34,6 +34,7 @@ import {
   UpdateStateAction,
   StatusOptions,
 } from './KissAction';
+import { LoadPages, PageDirection, Pages, PagesToLoad } from './LoadPages';
 import { Store, createStore, ShowUserException, PropDispose, PropPredicate, SetPropOptions, AppSignalSource } from './Store';
 import { StoreProvider, StoreProviderProps, StoreSlice, StoreSliceProps } from './StoreProvider';
 import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
@@ -57,4 +58,5 @@ export {
   UserException,
   OptimisticCommand, OptimisticSync, OptimisticSyncWithPush, ServerPush, PushMetadata, Retry, RetryOptions, UnlimitedRetryCheckInternet,
   Poll,
+  LoadPages, Pages, PagesToLoad, PageDirection,
 };

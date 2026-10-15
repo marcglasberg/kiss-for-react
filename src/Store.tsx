@@ -10,7 +10,6 @@ import {
   Poll,
   ReduxReducer,
   UpdateStateAction,
-  _IgnoreOldEntry,
   _isSameNonReentrantKey,
   _OptimisticSyncRevision,
   StatusOptions,
@@ -26,7 +25,19 @@ import { capTimeoutMillis, describeValue, isPlainObject, MAX_TIMEOUT_MILLIS } fr
 // `pollOnlyWhenOnline`). In that last case, `cancelWait` stops listening for them, and drops
 // the tick.
 /** One failure kept for `isFailed` and `exceptionFor`: the action's `statusKey` and its error. */
-type Failure = { statusKey: unknown, error: unknown };
+export type Failure = { statusKey: unknown, error: unknown };
+
+/**
+ * One promise given to `useSuspense`, for a component suspended while an action of `type` (or
+ * of a subclass) with `statusKey` is in progress. Resolved, and removed, when no such action is
+ * in progress anymore. See `Store._suspenseValue`.
+ */
+type SuspenseWait = {
+  type: abstract new (...args: any[]) => KissAction<any>,
+  statusKey: unknown,
+  promise: Promise<void>,
+  resolve: () => void,
+};
 
 type PollingCycle = {
   key: any,
@@ -763,22 +774,24 @@ export class Store<St> {
   /**
    * Internal: subscribes to state changes. Used by `useSelect`, `useObject` and `useAllState`.
    * The function is stable for the store, so React doesn't resubscribe on every render.
+   * @internal
    */
   public _subscribeState: (listener: StoreListener) => Unsubscribe = (listener) => this._stateListeners.add(listener);
 
   /**
    * Internal: subscribes to changes in the status of the actions. Used by `useIsWaiting`,
    * `useIsFailed` and `useExceptionFor`.
+   * @internal
    */
   public _subscribeStatus: (listener: StoreListener) => Unsubscribe = (listener) => this._statusListeners.add(listener);
 
-  /** Internal: subscribes to the store becoming ready. Used by `useIsStoreReady`. */
+  /** Internal: subscribes to the store becoming ready. Used by `useIsStoreReady`. @internal */
   public _subscribeReady: (listener: StoreListener) => Unsubscribe = (listener) => this._readyListeners.add(listener);
 
-  /** Internal: returns the current state. The same as `store.state`, as a stable function. */
+  /** Internal: returns the current state. The same as `store.state`, as a stable function. @internal */
   public _getState: () => St = () => this._state;
 
-  /** Internal: returns `_isReady`, as a stable function. */
+  /** Internal: returns `_isReady`, as a stable function. @internal */
   public _getIsReady: () => boolean = () => this._isReady;
 
   // The focus and online signals of the app (see `focusSource` and `onlineSource` in
@@ -789,16 +802,16 @@ export class Store<St> {
   private readonly _focus: AppSignal;
   private readonly _online: AppSignal;
 
-  /** Internal: subscribes to the focus signal. Used by `useIsFocused` and `useStoreEffect`. */
+  /** Internal: subscribes to the focus signal. Used by `useIsFocused` and `useStoreEffect`. @internal */
   public _subscribeFocus: (listener: StoreListener) => Unsubscribe = (listener) => this._focus.subscribe(listener);
 
-  /** Internal: subscribes to the online signal. Used by `useIsOnline` and `useStoreEffect`. */
+  /** Internal: subscribes to the online signal. Used by `useIsOnline` and `useStoreEffect`. @internal */
   public _subscribeOnline: (listener: StoreListener) => Unsubscribe = (listener) => this._online.subscribe(listener);
 
-  /** Internal: returns `isFocused`, as a stable function. */
+  /** Internal: returns `isFocused`, as a stable function. @internal */
   public _getIsFocused: () => boolean = () => this._focus.value;
 
-  /** Internal: returns `isOnline`, as a stable function. */
+  /** Internal: returns `isOnline`, as a stable function. @internal */
   public _getIsOnline: () => boolean = () => this._online.value;
 
   /**
@@ -866,6 +879,7 @@ export class Store<St> {
   /**
    * Internal: the `initialState` passed to the constructor. It's the state the server rendered,
    * and the state a client store hydrates with, unless `StoreProvider` is given a `serverState`.
+   * @internal
    */
   public readonly _initialState: St;
 
@@ -921,6 +935,7 @@ export class Store<St> {
   /**
    * For Kiss internal use only. Logs the message returned by `buildMessage`, but only calls it
    * when logging is turned on, so that no work is done to build messages that are discarded.
+   * @internal
    */
   static _logLazy(buildMessage: () => any): void {
     if (Store._isLogging()) Store.log(buildMessage());
@@ -1029,6 +1044,7 @@ export class Store<St> {
    * For Kiss internal use only.
    * Returns true if `clearInternalActionProps()` was called (for example, by shutting down the
    * store) after the action was dispatched, so that the action must stop retrying.
+   * @internal
    */
   _wereInternalActionPropsCleared(action: KissAction<St>): boolean {
     return action._clearCountAtDispatch !== this._clearCount;
@@ -1041,28 +1057,28 @@ export class Store<St> {
    * the action was dispatched, either before or during the wait, so that it stops retrying.
    * Also throws it if the action uses `ignoreOld`, and became old, since the result of the
    * retry would be ignored anyway.
+   * @internal
    */
   async _waitRetryDelay(action: KissAction<St>, delay: number): Promise<void> {
     const throwIfMustStop = () => {
       if (this._wereInternalActionPropsCleared(action)) throw Store._clearedRetryError();
-      if (action.isOld)
-        throw kissAbort('A newer action was dispatched (ignoreOld), so the action stopped retrying.');
+      if (action.isAborted) throw this._abortError(action);
     };
     throwIfMustStop();
 
-    // An `ignoreOld` action stops waiting as soon as it becomes old.
-    const signal = (action._ignoreOldEntry !== null) ? action.abortSignal : null;
+    // The action stops waiting as soon as it's aborted.
+    const signal = action.abortSignal;
 
     await new Promise<void>(resolve => {
       const end = () => {
         clearTimeout(timer);
         this._retryWaitEnders.delete(end);
-        signal?.removeEventListener('abort', end);
+        signal.removeEventListener('abort', end);
         resolve();
       };
       const timer = setTimeout(end, capTimeoutMillis(delay));
       this._retryWaitEnders.add(end);
-      signal?.addEventListener('abort', end);
+      signal.addEventListener('abort', end);
     });
 
     throwIfMustStop();
@@ -1129,7 +1145,6 @@ export class Store<St> {
     this._stopAllPolling();
     this._discardAllSequentialQueues();
     this._removeAllOptimisticSyncKeys();
-    this._ignoreOldEntries = [];
     this._clearCount++;
     this._stopAllRetries();
     this.clearAllExceptions();
@@ -1196,6 +1211,14 @@ export class Store<St> {
    * runs, even if its state was already applied.
    */
   private readonly _nonReentrantActionsRunning: Set<KissAction<St>>;
+
+  /**
+   * The promises given to `useSuspense`, one per action type and `statusKey` that a suspended
+   * component waits for. The list is only filled when `useSuspense` is called while the action
+   * is in progress, and emptied as the actions finish, so a store whose components never call
+   * `useSuspense` keeps it empty, and only checks its size when an action finishes.
+   */
+  private readonly _suspenseWaits: SuspenseWait[] = [];
 
   /**
    * The failures of the actions that failed recently.
@@ -1284,14 +1307,6 @@ export class Store<St> {
   // The revisions of the `OptimisticSyncWithPush` and `ServerPush` keys, at most one per key.
   private _optimisticSyncRevisions: Array<{ key: any, revision: _OptimisticSyncRevision }> = [];
 
-  // The `ignoreOld` keys with actions running, at most one per key. Removed when their last
-  // action finishes, or by `clearInternalActionProps()`. The running actions keep a reference to
-  // their entry, so that removing it doesn't affect them.
-  private _ignoreOldEntries: Array<_IgnoreOldEntry> = [];
-
-  // Incremented for each `ignoreOld` action that starts running, to know their dispatch order.
-  private _ignoreOldOrder = 0;
-
   // The `sequential` queues, at most one per key, each with its actions in the order they will
   // run. The first action of each queue is the one running. Each waiting action is released by
   // the action that runs before it (with `false`), or by a failed action that discards the queue
@@ -1315,6 +1330,7 @@ export class Store<St> {
    * They are kept here, and not in the events, so that the events, and the state, stay
    * immutable. A `WeakSet`, so that events nobody references anymore are garbage collected.
    * Use `isEventSpent` instead.
+   * @internal
    */
   public readonly _spentEvents = new WeakSet<Evt<any>>();
 
@@ -1542,6 +1558,7 @@ export class Store<St> {
   /**
    * Internal: true if the store is ready (see `ready`). Used by `useIsStoreReady`.
    * Don't use it in your code; use `useIsStoreReady` or `await store.ready()` instead.
+   * @internal
    */
   get _isReady(): boolean {
     return this._processPersistence?.isReady ?? true;
@@ -1838,6 +1855,7 @@ export class Store<St> {
     // Set before `abortDispatch()` runs, since it may already dispatch other actions.
     action._logOutCountAtDispatch = this._logOutCount;
     try {
+      if (action.isAborted) return true;
       if (action['abortDispatch']()) return true;
       if (action._debounceMillis !== null) return false;
       return this._isBlockedByKey(action);
@@ -1925,6 +1943,7 @@ export class Store<St> {
   /**
    * For Kiss internal use only. Use `removeThrottleLock()` in the action instead.
    * Removes the throttle lock with the given value, if any.
+   * @internal
    */
   _removeThrottleLock(lock: any): void {
     this._throttleLocks = this._throttleLocks.filter(entry => !_isSameNonReentrantKey(entry.lock, lock));
@@ -1933,6 +1952,7 @@ export class Store<St> {
   /**
    * For Kiss internal use only. Use `removeAllThrottleLocks()` in the action instead.
    * Removes all throttle locks.
+   * @internal
    */
   _removeAllThrottleLocks(): void {
     this._throttleLocks = [];
@@ -1971,6 +1991,7 @@ export class Store<St> {
   /**
    * For Kiss internal use only. Use `removeFreshKey()` in the action instead.
    * Removes the fresh-key with the given value, if any.
+   * @internal
    */
   _removeFreshKey(key: any): void {
     this._freshKeys = this._freshKeys.filter(entry => !_isSameNonReentrantKey(entry.key, key));
@@ -1979,6 +2000,7 @@ export class Store<St> {
   /**
    * For Kiss internal use only. Use `removeAllFreshKeys()` in the action instead.
    * Removes all fresh-keys.
+   * @internal
    */
   _removeAllFreshKeys(): void {
     this._freshKeys = [];
@@ -1988,6 +2010,7 @@ export class Store<St> {
    * For Kiss internal use only.
    * If no other `OptimisticSync` or `OptimisticSyncWithPush` action has the given key, the given
    * action takes it, and this returns true. Otherwise, returns false.
+   * @internal
    */
   _takeOptimisticSyncKey(key: any, action: KissAction<St>): boolean {
     if (this._optimisticSyncKeys.some(entry => _isSameNonReentrantKey(entry.key, key))) return false;
@@ -1999,6 +2022,7 @@ export class Store<St> {
    * For Kiss internal use only.
    * Returns true if the given `OptimisticSync` action has a key. It doesn't, after it released
    * it, or after `clearInternalActionProps()` removed all keys.
+   * @internal
    */
   _hasOptimisticSyncKey(action: KissAction<St>): boolean {
     return this._optimisticSyncKeys.some(entry => entry.action === action);
@@ -2008,6 +2032,7 @@ export class Store<St> {
    * For Kiss internal use only.
    * Releases the key of the given `OptimisticSync` action, if it has one. A key taken by
    * another action is kept.
+   * @internal
    */
   _releaseOptimisticSyncKey(action: KissAction<St>): void {
     this._optimisticSyncKeys = this._optimisticSyncKeys.filter(entry => entry.action !== action);
@@ -2022,6 +2047,7 @@ export class Store<St> {
    * For Kiss internal use only.
    * Returns the revision that `OptimisticSyncWithPush` and `ServerPush` keep for the given key,
    * or `undefined` if there is none.
+   * @internal
    */
   _getOptimisticSyncRevision(key: any): _OptimisticSyncRevision | undefined {
     return this._optimisticSyncRevisions.find(entry => _isSameNonReentrantKey(entry.key, key))?.revision;
@@ -2030,6 +2056,7 @@ export class Store<St> {
   /**
    * For Kiss internal use only.
    * Sets the revision that `OptimisticSyncWithPush` and `ServerPush` keep for the given key.
+   * @internal
    */
   _setOptimisticSyncRevision(key: any, revision: _OptimisticSyncRevision): void {
     const entry = this._optimisticSyncRevisions.find(entry => _isSameNonReentrantKey(entry.key, key));
@@ -2183,6 +2210,7 @@ export class Store<St> {
     });
   }
 
+  /** @internal */
   _calculateIsWaitingIsFailed(action: KissAction<St>) {
 
     // Dispatch is starting, so we remove the failure of this action type and `statusKey`.
@@ -2273,13 +2301,13 @@ export class Store<St> {
     if (error == null) error = Store._nullThrownError(action, error);
 
     //
-    // The errors of an old `ignoreOld` action are ignored, since a newer action was dispatched.
-    // This includes the `AbortError` thrown by `fetch` when the action's `abortSignal` is
-    // aborted, and an `AbortDispatchException` thrown by the action. Errors that point to a bug
-    // (`StoreException`) are still thrown.
-    if (action.isOld && !isKissAbort(error) && !(error instanceof StoreException)) {
-      Store._logLazy(() => `Ignored the error of ${action}, since a newer action was dispatched (ignoreOld): ${error}`);
-      error = kissAbort('A newer action was dispatched (ignoreOld).');
+    // The errors of an aborted action are ignored (by `ignoreOld`, when a newer action was
+    // dispatched, or by `abort()`). This includes the error `fetch` rejects with when the
+    // action's `abortSignal` is aborted, and an `AbortDispatchException` thrown by the action.
+    // Errors that point to a bug (`StoreException`) are still thrown.
+    if (action.isAborted && !isKissAbort(error) && !(error instanceof StoreException)) {
+      Store._logLazy(() => `Ignored the error of ${action}, since it was aborted (${this._abortError(action).message}): ${error}`);
+      error = this._abortError(action);
     }
 
     // The errors of an action dispatched before a `logOut()` are ignored, since they belong to
@@ -2413,7 +2441,6 @@ export class Store<St> {
     if (action._throttleMillis !== null) this._releaseThrottleLock(action);
     if (action._freshMillis !== null) this._releaseFreshKey(action);
     if (action.sequential) this._releaseSequentialQueue(action);
-    if (action._ignoreOldEntry !== null) this._releaseIgnoreOldEntry(action);
 
     // Releases the non-reentrant key. This is only done here, after `after()`, and not when the
     // state is applied (which removes the action from `_actionsInProgress` before `after()`).
@@ -2426,6 +2453,7 @@ export class Store<St> {
     // the waiting.
     const removed = this._actionsInProgress.delete(action);
     if (removed) {
+      this._resolveSuspenseWaits();
       this._statusListeners.notify();
 
       // Check the wait-conditions after state change. We pass it the trigger-action.
@@ -2531,7 +2559,7 @@ export class Store<St> {
     // Numbers the action before `before()` runs, since an ASYNC `before` may make an older
     // action reach its reducer after a newer one. A dispatch that doesn't run the reducer
     // doesn't make the other actions old.
-    if (action.ignoreOld && !this._pollSkipsReduce(action)) this._takeIgnoreOldEntry(action);
+    if (action.ignoreOld && !this._pollSkipsReduce(action)) this._abortOlderIgnoreOld(action);
 
     // BEFORE
 
@@ -2609,11 +2637,23 @@ export class Store<St> {
    */
   private _getWrapReduce(action: KissAction<St>): (reduce: () => ReduxReducer<St>) => () => ReduxReducer<St> {
     const wrapReduce = this._getFeaturesWrapReduce(action);
-    if (action._ignoreOldEntry === null) return wrapReduce;
     return (reduce) => {
       const wrapped = wrapReduce(reduce);
-      return () => this._ignoreOldResult(action, wrapped());
+      return () => {
+        // An action aborted before its reducer runs (during an ASYNC `before`, for example)
+        // doesn't run it.
+        if (action.isAborted) throw this._abortError(action);
+        return this._discardIfAborted(action, wrapped());
+      };
     };
+  }
+
+  // The `AbortDispatchException` to throw to finish an aborted action silently. Its message
+  // is the one of the `AbortError` that is the reason of the action's `abortSignal` (see
+  // `KissAction._abort()`).
+  private _abortError(action: KissAction<St>): AbortDispatchException {
+    const reason = action.abortSignal.reason;
+    return kissAbort((typeof reason?.message === 'string') ? reason.message : 'The action was aborted.');
   }
 
   // The `wrapReduce` of `_getWrapReduce`, without the `ignoreOld` check.
@@ -2637,32 +2677,16 @@ export class Store<St> {
     return new Error(`Action '${action}' failed with \`${thrown}\` (it threw \`${thrown}\`, or a Promise was rejected with no reason). Throw an Error instead.`);
   }
 
-  // Gives the `ignoreOld` action its dispatch order, and the entry of its key, creating it if
-  // no other action with that key is running. The other running actions become old, so their
-  // `abortSignal` is aborted.
-  private _takeIgnoreOldEntry(action: KissAction<St>): void {
+  // Aborts the `ignoreOld` actions in progress with the same key as the given action, which is
+  // starting to run. Actions dispatched before `clearInternalActionProps()` are not aborted:
+  // the actions dispatched after it behave as if no action had been dispatched before.
+  private _abortOlderIgnoreOld(action: KissAction<St>): void {
     const key = action['computeIgnoreOldKey']();
-    let entry = this._ignoreOldEntries.find(other => _isSameNonReentrantKey(other.key, key));
-    if (entry === undefined) {
-      entry = { key, newestOrder: 0, running: new Set() };
-      this._ignoreOldEntries.push(entry);
+    for (const other of this._actionsInProgress) {
+      if (other === action || !other.ignoreOld || this._wereInternalActionPropsCleared(other)) continue;
+      if (_isSameNonReentrantKey(other['computeIgnoreOldKey'](), key))
+        other._abort('A newer action was dispatched (ignoreOld).');
     }
-    action._ignoreOldOrder = ++this._ignoreOldOrder;
-    action._ignoreOldEntry = entry;
-    action._abortController ??= new AbortController();
-    entry.newestOrder = action._ignoreOldOrder;
-    for (const other of entry.running) other._abortController!.abort();
-    entry.running.add(action);
-  }
-
-  // Called when an `ignoreOld` action finishes. Removes the entry of its key, if no other
-  // action with that key is running. The action gets a copy of the entry, so that its `isOld`
-  // keeps the value it had when it finished.
-  private _releaseIgnoreOldEntry(action: KissAction<St>): void {
-    const entry = action._ignoreOldEntry!;
-    entry.running.delete(action);
-    if (entry.running.size === 0) this._ignoreOldEntries = this._ignoreOldEntries.filter(other => other !== entry);
-    action._ignoreOldEntry = { key: entry.key, newestOrder: entry.newestOrder, running: new Set() };
   }
 
   // True if the action uses polling, and its `poll` value means it won't run the reducer:
@@ -2675,28 +2699,28 @@ export class Store<St> {
   }
 
   /**
-   * Checks the result of the reducer of an `ignoreOld` action, so that if the action is old,
-   * it's aborted instead of changing the state. The check is done right when the state is
-   * applied: now, for the state returned by a SYNC reducer, or, for the function
-   * `(state) => newState` returned by an ASYNC reducer, when the store calls it.
+   * Checks the result of the reducer, so that if the action was aborted, it doesn't change the
+   * state. The check is done right when the state is applied: now, for the state returned by
+   * a SYNC reducer, or, for the function `(state) => newState` returned by an ASYNC reducer,
+   * when the store calls it.
    */
-  private _ignoreOldResult(action: KissAction<St>, result: ReduxReducer<St>): ReduxReducer<St> {
-    const throwIfOld = () => {
-      if (action.isOld) throw kissAbort('A newer action was dispatched (ignoreOld).');
+  private _discardIfAborted(action: KissAction<St>, result: ReduxReducer<St>): ReduxReducer<St> {
+    const throwIfAborted = () => {
+      if (action.isAborted) throw this._abortError(action);
     };
     const checked = (fn: (state: St) => (St | null)) => (state: St) => {
-      throwIfOld();
+      throwIfAborted();
       return fn(state);
     };
 
     if (result instanceof Promise)
       return result.then(fn => {
         if (typeof fn === 'function') return checked(fn);
-        throwIfOld();
+        throwIfAborted();
         return fn;
       });
 
-    throwIfOld();
+    throwIfAborted();
     return result;
   }
 
@@ -2767,6 +2791,7 @@ export class Store<St> {
    * For Kiss internal use only. Use `removeAllDebounceLocks()` in the action instead.
    * Removes all debounce locks. The actions waiting for their debounce period finish right
    * away, without running their reducer.
+   * @internal
    */
   _removeAllDebounceLocks(): void {
     const entries = this._debounceLocks;
@@ -2946,6 +2971,7 @@ export class Store<St> {
   /**
    * For Kiss internal use only. Use `stopAllPolling()` in the action instead.
    * Stops all polling cycles. Runs that are in progress still finish, but no new ticks start.
+   * @internal
    */
   _stopAllPolling(): void {
     const cycles = this._pollingCycles;
@@ -3248,6 +3274,7 @@ export class Store<St> {
       // Note: `after()` still runs later, in `_processWrapsFinally`, and a non-reentrant key is
       // only released there.
       const removed = this._actionsInProgress.delete(action);
+      if (removed) this._resolveSuspenseWaits();
 
       // Publish the new state, and then the status change. React checks the components that
       // use them, and renders the ones whose selected values changed. Nothing is rendered
@@ -3400,6 +3427,44 @@ export class Store<St> {
   }
 
   /**
+   * Aborts all the actions of the given `type` (or of a subclass) that are in progress. Each
+   * one finishes silently: its `abortSignal` is aborted, its result is ignored (it doesn't
+   * change the state), and so are its errors (no error dialog, it doesn't count as failed, and
+   * it isn't retried). Its status has `isDispatchAborted: true`, and `dispatchAndWait`
+   * resolves. Inside the action, `isAborted` is `true`.
+   *
+   * For example, to cancel the request a component started, when the component unmounts:
+   *
+   * ```ts
+   * useStoreEffect({
+   *   onMount: (store) => store.dispatch(new LoadUser(userId)),
+   *   onUnmount: (store) => store.abort(LoadUser),
+   * });
+   * ```
+   *
+   * Or from a "Cancel" button: `onClick={() => store.abort(UploadFile)}`.
+   *
+   * - A request that uses the action's `abortSignal` is cancelled right away. Otherwise, the
+   *   action is still in progress (`isWaiting` is `true`) until the request finishes, and
+   *   only then its result is ignored.
+   * - An action aborted during its `before` method doesn't run its reducer. One aborted while
+   *   waiting to retry stops retrying.
+   * - It does nothing if no action of the type is in progress.
+   *
+   * Pass `{ statusKey }` to abort only the actions with that `statusKey` (see
+   * `KissAction.statusKey`): `store.abort(LoadUser, { statusKey: userId })`.
+   *
+   * To abort a single action instance, use its `abort()` method.
+   */
+  abort<T extends KissAction<St>>(type: abstract new (...args: any[]) => T, options?: StatusOptions): void {
+    const statusKey = options?.statusKey;
+    for (const action of this._actionsInProgress) {
+      if (action instanceof type && (statusKey === undefined || _isSameNonReentrantKey(action.statusKey, statusKey)))
+        action._abort(`The action was aborted by store.abort(${type.name}).`);
+    }
+  }
+
+  /**
    * You can use `isWaiting` and pass it an action `type`:
    * - It returns true if an action of the given type (or of a subclass) is currently being processed.
    * - It returns false if no action of the given type is currently being processed.
@@ -3509,6 +3574,56 @@ export class Store<St> {
     if (this._failedActions.size === 0) return;
     this._failedActions.clear();
     this._statusListeners.notify();
+  }
+
+  /**
+   * Internal: the value `useSuspense` reads as its snapshot, for the given action `type` and
+   * `statusKey` (`undefined` matches any key):
+   *
+   * - A promise, while an action of the type (or of a subclass) with that key is in progress,
+   *   as `isWaiting` sees it. The same promise object is returned until the action finishes, as
+   *   React's Suspense needs, and it resolves then (see `_resolveSuspenseWaits`). The promise
+   *   is created the first time it's asked for, so a store whose components never call
+   *   `useSuspense` creates none.
+   * - Otherwise, when `throwErrors` is true, the failure record of the type with that key, as
+   *   `isFailed` sees it (the exact type; without a key, the most recent failure). It's the
+   *   same object until the failure is replaced or cleared.
+   * - Otherwise `null`.
+   *
+   * @internal
+   */
+  _suspenseValue(
+    type: abstract new (...args: any[]) => KissAction<any>,
+    statusKey: unknown,
+    throwErrors: boolean = true,
+  ): Promise<void> | Failure | null {
+    if (this.isWaiting(type, { statusKey })) {
+      let wait = this._suspenseWaits.find(w => w.type === type && _isSameNonReentrantKey(w.statusKey, statusKey));
+      if (wait === undefined) {
+        let resolve!: () => void;
+        const promise = new Promise<void>(r => resolve = r);
+        wait = { type, statusKey, promise, resolve };
+        this._suspenseWaits.push(wait);
+      }
+      return wait.promise;
+    }
+    if (!throwErrors) return null;
+    return this._findFailure(type as new (...args: any[]) => KissAction<any>, { statusKey });
+  }
+
+  /**
+   * Resolves and removes the `useSuspense` promises whose action is not in progress anymore.
+   * Called when an action leaves `_actionsInProgress`. Costs nothing while the list is empty.
+   */
+  private _resolveSuspenseWaits(): void {
+    if (this._suspenseWaits.length === 0) return;
+    for (let i = this._suspenseWaits.length - 1; i >= 0; i--) {
+      const wait = this._suspenseWaits[i];
+      if (!this.isWaiting(wait.type, { statusKey: wait.statusKey })) {
+        this._suspenseWaits.splice(i, 1);
+        wait.resolve();
+      }
+    }
   }
 
   /**
@@ -3987,6 +4102,7 @@ export class Store<St> {
    * that publishes it. For `StoreSlice`, which merges while React renders it (the children
    * must read the merged state in the same render), and publishes after the commit, since
    * publishing during a render would make React warn about updating other components.
+   * @internal
    */
   _mergeServerStateSilently(slice: object): () => void {
     return this._notificationBatch.suspend(() => this._mergeServerState(slice));
@@ -4007,6 +4123,7 @@ export class Store<St> {
    * Internal: merges a slice into a state, with the `mergeServerState` option of the
    * constructor, or with the default shallow merge. Used by `MergeServerStateAction` (for the
    * store state) and by `StoreSlice` (for the server state of its subtree).
+   * @internal
    */
   _mergeSlice(state: St, slice: object): St {
     if (this._mergeServerStateFn !== undefined) return this._mergeServerStateFn(state, slice);
@@ -4025,6 +4142,7 @@ export class Store<St> {
   /**
    * Internal: merges the slices merged before the store was ready into the persisted state,
    * which replaces the store state. Called by `ProcessPersistence`.
+   * @internal
    */
   _applyPendingServerSlices(persistedState: St): St {
     let state = persistedState;
@@ -4270,6 +4388,7 @@ export class Store<St> {
 
   /**
    * For Kiss internal use only. Does the `logOut`, using the given persistence (if any).
+   * @internal
    */
   async _logOut(
     persistence: ProcessPersistence<St> | null,

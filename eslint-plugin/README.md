@@ -772,6 +772,27 @@ An error for an override that silently turns off a Kiss feature, because it does
   so overriding it turns that off. Implement `optimisticValue`, `getValueFromState`,
   `applyValueToState` and `sendCommandToServer` instead.
 
+- `reduce()` in a subclass of `LoadPages`. Its `reduce` loads the pages and puts them in the
+  state, so overriding it turns that off. Implement `getPagesFromState`, `applyPagesToState`,
+  `initialPageParam`, `loadPage` and `nextPageParam` instead.
+
+- In a subclass of `LoadPages`: an `abortDispatch()` that doesn't call `super.abortDispatch()`
+  (a `'next'` or `'previous'` then runs while another load of the list is running, or when
+  there is no page in that direction), an `ignoreFresh` or `ignoreThrottle` getter that
+  doesn't read `super.ignoreFresh` or `super.ignoreThrottle` (a `'next'` or `'previous'` is
+  then aborted while the list is fresh or throttled), and a `statusKey` getter (it's
+  `pagesKeyParams()`, which the `LoadPages` uses to find the other loads of the same list;
+  override `pagesKeyParams()` instead).
+
+  ```ts
+  class LoadTodos extends LoadPages<State, Todo[], string | null> {
+    abortDispatch() { return this.state.todos === null; }                           // Error
+    abortDispatch() { return super.abortDispatch() || this.state.todos === null; }  // OK
+    get ignoreFresh() { return this.force; }                                        // Error
+    get ignoreFresh() { return this.force || super.ignoreFresh; }                   // OK
+  }
+  ```
+
 - `reduce()` in a subclass of `OptimisticSync`. Its `reduce` does the optimistic update, and
   sends the requests to the server, so overriding it turns that off. Implement
   `valueToApply`, `applyOptimisticValueToState`, `getValueFromState` and `sendValueToServer`
@@ -830,6 +851,8 @@ The methods are the ones Kiss calls:
   `computeOptimisticSyncKey`, `valueToApply`, `applyOptimisticValueToState`,
   `getValueFromState`, `sendValueToServer`, `applyServerResponseToState`, `onFinish`,
   `ifShouldSendAnotherRequest` and `getServerRevisionFromState`.
+- `LoadPages`: `getPagesFromState`, `applyPagesToState`, `initialPageParam`, `loadPage`,
+  `nextPageParam`, `previousPageParam` and `pagesKeyParams`.
 - `ServerPush`: `associatedAction`, `pushMetadata`, `applyServerPushToState` and
   `getServerRevisionFromState`.
 
@@ -904,7 +927,8 @@ class LoadText extends Action {
 
 Not reported when the action (or its superclass) declares `nonReentrant`, even as `false`,
 or overrides `abortDispatch`. Also not reported for `OptimisticCommand`, which is always
-non-reentrant, for `OptimisticSync`, `OptimisticSyncWithPush` and `ServerPush`, which can't
+non-reentrant, for `LoadPages`, which already runs one load per list at a time and can't use
+`nonReentrant`, for `OptimisticSync`, `OptimisticSyncWithPush` and `ServerPush`, which can't
 use `retry` nor `nonReentrant` (see
 [`incompatible-action-features`](#incompatible-action-features)), with
 `unlimitedRetryCheckInternet`, which is already non-reentrant, with `throttle` or `fresh`,
@@ -996,6 +1020,8 @@ dispatched):
 - An `OptimisticSync` or an `OptimisticSyncWithPush` with any feature other than
   `checkInternet`: `nonReentrant`, `retry`, `debounce`, `throttle`, `fresh`, `sequential`,
   `poll`, `unlimitedRetryCheckInternet` or `ignoreOld`.
+- A `LoadPages` with `nonReentrant` (it already runs one load per list at a time) or
+  `ignoreOld` (it already aborts the older loads of the list).
 - A `ServerPush` with any feature, including `checkInternet`. It should be used alone.
 
 A feature is on unless it's set to `false`, `null`, `undefined`, `0` or `''`. But `retry` is
@@ -1268,7 +1294,12 @@ It also warns about a subclass of `OptimisticSync` (or `OptimisticSyncWithPush`)
 that doesn't override `optimisticSyncKeyParams` or `computeOptimisticSyncKey`. Then, while `ToggleLike('A')` has a
 request in flight, `ToggleLike('B')` changes the state, but doesn't send its own request. And
 the follow-up request of `ToggleLike('A')` only checks item A, so item B may never be sent to
-the server:
+the server.
+
+And about a subclass of `LoadPages` with fields, that doesn't override `pagesKeyParams`. Then
+all `LoadComments` load the same list: while `LoadComments('A')` runs, a `'next'` of
+`LoadComments('B')` is aborted, and a `'first'` or `'refresh'` of `LoadComments('B')`
+aborts the load of `'A'`:
 
 ```ts
 class SaveTodo extends OptimisticCommand<State> { // Warning
@@ -1284,6 +1315,10 @@ class ToggleLike extends OptimisticSync<State, boolean> { // Warning
   constructor(readonly itemId: string) { super(); }
 }
 
+class LoadComments extends LoadPages<State, Comment[], number> { // Warning
+  constructor(readonly postId: string) { super(); }
+}
+
 class SaveTodo extends OptimisticCommand<State> { // OK
   constructor(readonly todoId: string) { super(); }
   nonReentrantKeyParams() { return this.todoId; }
@@ -1293,20 +1328,25 @@ class ToggleLike extends OptimisticSync<State, boolean> { // OK
   constructor(readonly itemId: string) { super(); }
   optimisticSyncKeyParams() { return this.itemId; }
 }
+
+class LoadComments extends LoadPages<State, Comment[], number> { // OK
+  constructor(readonly postId: string) { super(); }
+  pagesKeyParams() { return this.postId; }
+}
 ```
 
 The fields are the class's own constructor parameter properties (like `readonly todoId:
 string`), and its own properties, except the static ones, the ones with a function, Kiss's
-configuration properties (like `retry` or `pollInterval`), and the ones starting with `_`. Not
-reported for abstract classes.
+configuration properties (like `retry`, `pollInterval` or `maxPages`), and the ones starting
+with `_`. Not reported for abstract classes.
 
 It's opt-in, since sharing the key is often intended. Without
 [type information](#type-information), the class must extend `KissAction`,
-`OptimisticCommand`, `OptimisticSync` or `OptimisticSyncWithPush` in the same file (directly,
-or through its superclasses).
+`OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush` or `LoadPages` in the same
+file (directly, or through its superclasses).
 
-Quick fix (suggestion): override `nonReentrantKeyParams()` (or `optimisticSyncKeyParams()`),
-returning the fields. You may then remove the fields that shouldn't be part of the key.
+Quick fix (suggestion): override `nonReentrantKeyParams()` (or `optimisticSyncKeyParams()`, or
+`pagesKeyParams()`), returning the fields. You may then remove the fields that shouldn't be part of the key.
 
 ---
 
@@ -2043,7 +2083,8 @@ There are 3 ways to name actions, and one rule for each. Turn on only one of the
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
 `reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
-`OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
+`OptimisticSync`, `OptimisticSyncWithPush`, `ServerPush` or `LoadPages`. With it, any class
+that extends
 `KissAction` is an action. Class expressions, like
 `const LoadUser = class extends Action { ... }`, `declare class` and declaration files
 (`.d.ts`) are not checked.
@@ -2076,7 +2117,8 @@ There are 3 ways to name actions, and one rule for each. Turn on only one of the
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
 `reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
-`OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
+`OptimisticSync`, `OptimisticSyncWithPush`, `ServerPush` or `LoadPages`. With it, any class
+that extends
 `KissAction` is an action. Class expressions, like
 `const LoadUser = class extends Action { ... }`, `declare class` and declaration files
 (`.d.ts`) are not checked.
@@ -2111,7 +2153,8 @@ Names that only contain `Action` elsewhere, like `ActionLog`, are fine.
 Only actions that can be dispatched are checked. Abstract classes, like the base action, are
 not. Without [type information](#type-information), a class is an action if it declares
 `reduce`, or inherits it from a class of the same file, or extends `OptimisticCommand`,
-`OptimisticSync`, `OptimisticSyncWithPush` or `ServerPush`. With it, any class that extends
+`OptimisticSync`, `OptimisticSyncWithPush`, `ServerPush` or `LoadPages`. With it, any class
+that extends
 `KissAction` is an action. Class expressions, like
 `const LoadUser = class extends Action { ... }`, `declare class` and declaration files
 (`.d.ts`) are not checked.

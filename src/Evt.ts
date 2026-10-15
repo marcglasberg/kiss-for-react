@@ -74,6 +74,7 @@ export class Evt<T = true> {
   /**
    * Internal: `true` for `Evt.spent()`, and for a restored (persisted) event. Such an event is
    * spent in every store. Use `store.isEventSpent(evt)` instead.
+   * @internal
    */
   readonly _spentAtCreation: boolean;
 
@@ -139,6 +140,7 @@ export class EvtState<T = true> {
   /**
    * Internal: `true` for `EvtState.spent()`, and for a restored (persisted) event, which never
    * fire. Use `store.isEventSpent(evt)` instead.
+   * @internal
    */
   readonly _spentAtCreation: boolean;
 

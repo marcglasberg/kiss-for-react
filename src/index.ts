@@ -22,6 +22,7 @@ import {
   UpdateStateAction,
   StatusOptions,
 } from './KissAction';
+import { LoadPages, PageDirection, Pages, PagesToLoad } from './LoadPages';
 import { Store, createStore, ShowUserException, PropDispose, PropPredicate, SetPropOptions, AppSignalSource } from './Store';
 import { StoreProvider, StoreProviderProps, StoreSlice, StoreSliceProps } from './StoreProvider';
 import {
@@ -50,6 +51,8 @@ import {
   useStore,
   useStoreEffect,
   UseStoreEffectOptions,
+  useSuspense,
+  SuspenseOptions,
 } from './Hooks';
 import { AbortDispatchException, StoreException, TimeoutException } from './StoreException';
 import { Evt, EvtState } from './Evt';
@@ -64,7 +67,7 @@ export {
   UserExceptionAction,
   ActionStatus, ReduxReducer, SyncReducer, AsyncReducer, AsyncReducerResult, StatusOptions,
   Store, createStore, PropDispose, PropPredicate, SetPropOptions, AppSignalSource, useStore, useStoreEffect, UseStoreEffectOptions, useAllState, useSelect, useSelector, useObject, StoreProvider, StoreProviderProps, StoreSlice, StoreSliceProps, ShowUserException,
-  useIsStoreReady, useIsWaiting, useIsFailed, useExceptionFor, useClearExceptionFor, useIsFocused, useIsOnline,
+  useIsStoreReady, useIsWaiting, useIsFailed, useExceptionFor, useClearExceptionFor, useSuspense, SuspenseOptions, useIsFocused, useIsOnline,
   useEnvironment, useConfiguration,
   Evt, EvtState, useEvent, useLayoutEvent,
   useDispatch, useDispatchAll, useDispatchAndWait, useDispatchAndWaitAll, useDispatchSync, useDispatchWhen, useDispatcher,
@@ -74,6 +77,7 @@ export {
   UserException,
   OptimisticCommand, OptimisticSync, OptimisticSyncWithPush, ServerPush, PushMetadata, Retry, RetryOptions, UnlimitedRetryCheckInternet,
   Poll,
+  LoadPages, Pages, PagesToLoad, PageDirection,
 };
 
 

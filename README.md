@@ -1,13 +1,13 @@
 <img src="https://kissforreact.org/img/KISS_outline.svg" alt="Kiss for React Image" width="150" />
 
+* AI-ready state management for React
 * Simple to learn and easy to use
-* Powerful enough to handle complex apps with millions of users
 * Testable
 <br></br>
 
 ## What is it?
 
-Kiss is a state management package for React, launched in May 2025. While new to React, it's a **mature solution**, having been available for Flutter for years under the name [Async Redux](https://pub.dev/packages/async_redux) (top 8% of packages), battle-tested in hundreds of real-world applications.
+Kiss is a state management package for React.
 
 ## Documentation & AI
 
@@ -22,10 +22,15 @@ Kiss is a state management package for React, launched in May 2025. While new to
 
 ## How does it compare?
 
-State management solutions can sometimes overwhelm you with complex concepts and the significant knowledge overhead needed to avoid pitfalls. Kiss is the opposite, as there's no need to be especially clever to make things work.
+State management solutions can sometimes overwhelm you with complex concepts and the 
+significant knowledge overhead needed to avoid pitfalls. 
+Kiss is the opposite, as there's no need to be especially clever to make things work.
 [Detailed comparison](https://kissforreact.org/react/category/comparisons).
 
-**AI-ready:** Kiss centralizes state and business logic in predictable ways, making it easier for AI models to reason about code. This improves AI-driven code generation and helps you get good results with surprisingly little effort.
+**AI-ready:** Kiss centralizes state and business logic in predictable ways, 
+making it easier for AI models to reason about code. 
+This improves AI-driven code generation 
+and helps you get good results with surprisingly little effort.
 
 ---
 
@@ -344,6 +349,38 @@ failed (the action type, the key and the error), until the action runs again for
 `clearExceptionFor` or `clearAllExceptions` is called. `logOut` and `clearInternalActionProps`
 clear them all.
 
+### Suspense and error boundaries
+
+If you prefer React's `<Suspense>` and error boundaries to `isWaiting`/`isFailed` checks, use
+`useSuspense` instead. It suspends the component while the action runs, and throws the error
+to the nearest error boundary if the action failed:
+
+```tsx
+function UserName({ userId }: { userId: string }) {
+  useSuspense(LoadUser, { statusKey: userId });
+  const user = useSelect((state: State) => state.users[userId]);
+  return <p>{user.name}</p>;
+}
+
+function UserCard({ userId }: { userId: string }) {
+  return (
+    <ErrorBoundary fallback={<p>Loading failed.</p>}>
+      <Suspense fallback={<Spinner />}>
+        <UserName userId={userId} />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+```
+
+While `LoadUser` runs for that key, the hook throws a promise: React stops the render there,
+shows the `fallback` of the nearest `<Suspense>`, and renders the component again when the
+action finishes. If the action failed, the hook throws the error (any error, like `isFailed`),
+and the nearest error boundary catches it. The failure stays recorded until the action is
+dispatched again, so a "retry" button in the boundary should dispatch the action, and then
+reset the boundary. Pass `{ throwErrors: false }` to not throw errors, and use `useIsFailed`
+instead. On the server and while hydrating, the hook never suspends or throws.
+
 &nbsp;
 
 ## Actions can send events to the UI
@@ -660,13 +697,32 @@ class LoadTab extends Action {
 ```
 
 Only the newest dispatch changes the state. Until it finishes, the state keeps what it had
-before. Check `this.isOld` inside the reducer to know if a newer action was dispatched.
+before. Check `this.isAborted` inside the reducer to know if the action was aborted.
 
 By default, actions of the same class affect each other. Override `ignoreOldKeyParams()` to
 separate them by some fields (for example, when each item goes into its own place in a cache),
 or `computeIgnoreOldKey()` so that actions of different classes share the key. It's also useful
 together with `debounce`, when searching while the user types: if the user pauses for longer
 than the wait time and then types again, the older search is cancelled.
+
+### Aborting actions
+
+Call `store.abort(ActionType)` to abort all the actions of that type that are in progress,
+for example from a "Cancel" button, or when the component that started a request unmounts.
+Each aborted action finishes silently: its `abortSignal` is aborted, so a `fetch` that got it
+is cancelled right away; its result is ignored, and so are its errors (it doesn't count as
+failed). Its status has `isDispatchAborted: true`. To abort one action instance, call its
+`abort()` method.
+
+```tsx
+useStoreEffect({
+  onMount: (store) => store.dispatch(new LoadUser(userId)),
+  onUnmount: (store) => store.abort(LoadUser),
+});
+```
+
+A request that ignores the signal still finishes, and only then its result is ignored. Pass
+`{ statusKey }` to abort only the actions with that key.
 
 ### Throttle
 
@@ -899,6 +955,40 @@ class PushLike extends ServerPush<State> {
 The server must return a server revision that always increases, and its pushes must include
 the server revision, and the local revision and device ID sent by `sendValueToServer`.
 
+### LoadPages
+
+To load a list page by page (a "load more" button, or an infinite scroll), extend `LoadPages`.
+It keeps the loaded pages in the state, in an immutable `Pages` value, and knows how to load
+the next page, the previous page, the first page again, or all the loaded pages again.
+
+```tsx
+class LoadTodos extends LoadPages<State, Todo[], string | null> {
+  getPagesFromState(state: State) { return state.todos; }
+  applyPagesToState(state: State, todos: Pages<Todo[], string | null>) { return state.copy({ todos }); }
+  initialPageParam() { return null; }                                     // The first page has no cursor.
+  loadPage(cursor: string | null) { return api.todosAfter(cursor, 20); }  // 20 items with id > cursor.
+  nextPageParam(lastPage: Todo[]) { return lastPage.length < 20 ? null : lastPage.at(-1)!.id; } // null = no more.
+}
+
+dispatch(new LoadTodos());         // Loads again the pages in the state, or the first page if there are none.
+dispatch(new LoadTodos('next'));   // Adds the next page to the end. Does nothing if there is no next page.
+dispatch(new LoadTodos('first'));  // Starts over: loads the first page, and drops the other pages.
+```
+
+The page param can be anything: the id of the last item, a page number, or a cursor returned
+by the server. The component reads the `Pages` value from the state: `pages.pages` (one
+entry per page), `pages.pageParams`, `pages.hasNextPage` and `pages.hasPreviousPage`.
+
+Only one load per list runs at a time: a `'next'` dispatched while the list is loading is
+aborted (two quick taps load one page), and a `'first'` or `'refresh'` aborts the loads
+that are running. A `'refresh'` reloads the pages one after the other, from the first, with
+the page params `nextPageParam` gives, so the pages stay consistent, and changes the state
+once at the end. Implement `previousPageParam` to load `'previous'` pages (a chat that
+loads older messages upward), set `maxPages` to keep at most that many pages in memory, and
+override `pagesKeyParams()` when the same action loads several lists (it's also the
+`statusKey`, for `useIsWaiting(LoadTodos, { statusKey })`). `fresh` and `throttle` only
+apply to `'first'` and `'refresh'`.
+
 ### Clearing the features on logout
 
 The store keeps some information for these features: the fresh keys, the throttle and
@@ -1018,12 +1108,12 @@ class LoadUser extends Action {
 ```
 
 In components, `useEnvironment()` and `useConfiguration()` return the environment and the
-configuration, and never re-render, since the values don't change. Components should usually
-not need the dependencies. The `errorObserver` gets the store, so it can read
+configuration, and never re-render, since the values don't change. Components should 
+usually not need the dependencies. The `errorObserver` gets the store, so it can read
 `store.environment`, for example to send the errors to a monitoring service only in
-production. `store.dispose()` disposes the dependencies and the configuration when they have a
-`dispose()`, `[Symbol.dispose]()` or `[Symbol.asyncDispose]()` method, and `logOut` keeps them.
-In tests:
+production. `store.dispose()` disposes the dependencies and the configuration when they 
+have a `dispose()`, `[Symbol.dispose]()` or `[Symbol.asyncDispose]()` method, and `logOut` 
+keeps them. In tests:
 
 ```tsx
 const store = createStore<State>({
@@ -1096,8 +1186,9 @@ enough; for class instances, `Map`s and `Set`s, use your own `toJSON`/`fromJSON`
 serializer you use for persistence.
 
 On the server and while hydrating, `useIsWaiting` and `useIsFailed` are `false`,
-`useExceptionFor` is `null`, and `useIsStoreReady` is `true`: the HTML never shows an action in
-progress, a failed action, or a store that is not ready. After hydration, these hooks follow
+`useExceptionFor` is `null`, `useSuspense` never suspends or throws, and `useIsStoreReady` is
+`true`: the HTML never shows an action in progress, a failed action, or a store that is not
+ready. After hydration, these hooks follow
 the live store. So, on the server, wait for your actions to finish (and for `store.ready()`,
 if the server store has a persistor) before rendering.
 

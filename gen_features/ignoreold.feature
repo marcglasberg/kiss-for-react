@@ -66,29 +66,29 @@ Feature: IgnoreOld
     Given An action with ignoreOld, dispatched with "A", which is still running.
     When The action is dispatched with "B".
     Then "A" is old right away, and "B" is not.
-    And Both can check it with isOld, after their requests finish.
+    And Both can check it with isAborted, after their requests finish.
 
-  Scenario: isOld keeps the value it had when the action finished.
+  Scenario: isAborted keeps the value it had when the action finished.
     Given An action with ignoreOld, dispatched with "A", "B" and "C".
     And "B" finished before "C" was dispatched, while "A" was still running.
     Then "B" is not old, even after "C" is dispatched, and its abortSignal is not aborted.
     And "A" is still old after it finishes, even after the keys are cleared.
 
-  Scenario: isOld is always false for an action without ignoreOld.
+  Scenario: isAborted is always false for an action without ignoreOld.
     Given An action WITHOUT ignoreOld, dispatched with "A", which is still running.
     When The action is dispatched with "B".
     Then "A" is not old.
 
   Scenario Outline: Only the state returned by the reducer of an old action is ignored. Its other effects still happen.
     Given An action with ignoreOld, whose reducer dispatches another action after its request finishes.
-    And The reducer {Checks isOld} before dispatching it.
+    And The reducer {Checks isAborted} before dispatching it.
     When The action is dispatched with "A", and then with "B".
     And The request for "B" finishes first, and then the request for "A".
     Then The other action is dispatched {Dispatched}.
     Examples: 
-      | Checks isOld         | Dispatched        |
-      | checks isOld         | only by "B"       |
-      | does not check isOld | by "B" and by "A" |
+      | Checks isAborted         | Dispatched        |
+      | checks isAborted         | only by "B"       |
+      | does not check isAborted | by "B" and by "A" |
 
   Scenario: The abortSignal of an action is aborted when it becomes old, which cancels its request.
     Given An action with ignoreOld, that passes its abortSignal to its request.
@@ -280,15 +280,6 @@ Feature: IgnoreOld
     And The action is dispatched with "B", and then with "C".
     Then "C" makes "B" old, but not "A".
     And The state has "A" at the end, since "A" finished last, and was not old.
-
-  Scenario Outline: The store forgets the keys when their actions finish, in any way.
-    Given An action with ignoreOld.
-    When The action is dispatched a few times, and they finish {How}.
-    Then The store does not keep any information for its key.
-    Examples: 
-      | How          |
-      | successfully |
-      | with errors  |
 
   Scenario: The ignoreOld property is not shown in the description of the action.
     Given An action with ignoreOld, and a field.
