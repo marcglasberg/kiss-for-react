@@ -8,7 +8,10 @@ const root = path.resolve(__dirname, '..');
 const eslintVersion = process.argv[2] || '10.13.0';
 if (!/^\d+\.\d+\.\d+$/.test(eslintVersion)) throw new Error('Use an explicit ESLint version.');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kiss-plugin-pack-'));
-const npmCli = process.env.npm_execpath || path.join(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js');
+// Windows distributions keep npm beside node; Unix distributions use a bin/npm symlink.
+const npmCli = process.env.npm_execpath || (process.platform === 'win32'
+  ? path.join(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')
+  : fs.realpathSync(path.join(path.dirname(process.execPath), 'npm')));
 function npm(args, cwd) {
   execFileSync(process.execPath, [npmCli, ...args], { cwd, stdio: 'inherit' });
 }
