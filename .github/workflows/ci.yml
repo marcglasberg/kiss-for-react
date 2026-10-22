@@ -92,3 +92,21 @@ jobs:
         run: npm test
         env:
           CI: true
+
+  plugin-consumers:
+    name: Packed ESLint plugin / ESLint ${{ matrix.eslint }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        eslint: [9.22.0, 10.13.0]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.x
+          check-latest: true
+          cache: npm
+      - run: node scripts/check-node-runtime.cjs
+      - run: npm ci
+      - run: node scripts/plugin-pack-smoke.cjs ${{ matrix.eslint }}

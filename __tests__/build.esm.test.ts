@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -63,11 +63,31 @@ test('The hooks render on the server from the CJS build', () => {
   expect(out.trim()).toBe('<p>2:2:false:false:none:true</p>');
 });
 
+test('The react-server condition resolves Kiss to its server entry without evaluating React', () => {
+  const esm = spawnSync(process.execPath, ['--conditions=react-server', '--input-type=module', '-e',
+    "console.log(import.meta.resolve('kiss-for-react'))"], { cwd: root, encoding: 'utf8' });
+  const cjs = spawnSync(process.execPath, ['--conditions=react-server', '-e',
+    "console.log(require.resolve('kiss-for-react'))"], { cwd: root, encoding: 'utf8' });
+  expect(esm.status).toBe(0);
+  expect(cjs.status).toBe(0);
+  expect(esm.stdout.trim().replace(/\\/g, '/')).toMatch(/\/lib\/esm\/server\.mjs$/);
+  expect(cjs.stdout.trim().replace(/\\/g, '/')).toMatch(/\/lib\/cjs\/server\.js$/);
+});
+
 test('The react-server condition gives the server entry, without the hooks, in ESM and CJS', () => {
   // As a React Server Components bundler resolves the package for server components.
   for (const file of ['server-smoke.mjs', 'server-smoke.cjs']) {
-    const out = run(`node --conditions=react-server ${path.join(smokeDir, file)}`);
-    expect(out.trim()).toBe('function:undefined:undefined:2');
+    const result = spawnSync(process.execPath, ['--conditions=react-server', path.join(smokeDir, file)],
+      { cwd: root, encoding: 'utf8' });
+    const reactVersion = jest.requireActual<{ version: string }>('react/package.json').version;
+    if (reactVersion.startsWith('18.')) {
+      // Stable React 18 rejects its own experimental entry, before Kiss can load.
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('This entry point is not yet supported outside of experimental channels');
+    } else {
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe('function:undefined:undefined:2');
+    }
   }
 });
 
