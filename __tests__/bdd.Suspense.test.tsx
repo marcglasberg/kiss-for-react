@@ -20,7 +20,12 @@ import { ErrorBoundary, failOnConsoleErrors, hydrate, mount, unmountAll } from '
 import { Deferred } from './fixtures/deferred';
 
 reporter(new FeatureFileReporter());
-failOnConsoleErrors();
+const boundaryConsole = failOnConsoleErrors([
+  // React 18 reports caught errors through the console; React 19 uses onCaughtError below.
+  /^Error: Uncaught \[UserException: Load failed\.\]$/,
+  /^Error: Uncaught \[Error: Network down\.\]$/,
+  /^The above error occurred in the <UserName> component:[\s\S]*ErrorBoundary[\s\S]*React will try to recreate/,
+]);
 afterEach(unmountAll);
 
 const feature = new Feature('Suspense and error boundaries with useSuspense');
@@ -335,6 +340,8 @@ Bdd(feature)
     await end();
     expect(shown(m)).toBe('error:Load failed.');
     expect(errors).toEqual(['Load failed.']);
+    if (React.version.startsWith('18.'))
+      expect(boundaryConsole.messages).toContain('Error: Uncaught [UserException: Load failed.]');
     expect(log).toEqual([]);
     expect(store.isFailed(LoadUser, { statusKey: '1' })).toBe(true);
 
@@ -371,6 +378,8 @@ Bdd(feature)
     });
     expect(store.isFailed(LoadUser, { statusKey: '1' })).toBe(true);
     expect(shown(m)).toBe('error:Network down.');
+    if (React.version.startsWith('18.'))
+      expect(boundaryConsole.messages).toContain('Error: Uncaught [Error: Network down.]');
   });
 
 Bdd(feature)

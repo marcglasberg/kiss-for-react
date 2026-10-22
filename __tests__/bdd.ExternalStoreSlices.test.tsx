@@ -1,5 +1,6 @@
 /**
  * @jest-environment jsdom
+ * @jest-environment-options {"customExportConditions": ["node", "node-addons"]}
  */
 import './fixtures/jsdomNodeGlobals'; // Must come first: see the file.
 import { expect } from '@jest/globals';

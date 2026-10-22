@@ -1,5 +1,6 @@
 /**
  * @jest-environment jsdom
+ * @jest-environment-options {"customExportConditions": ["node", "node-addons"]}
  */
 import './fixtures/jsdomNodeGlobals'; // Must come first: see the file.
 import { expect } from '@jest/globals';
@@ -260,7 +261,10 @@ Bdd(feature)
   .when('The page is streamed with renderToReadableStream, and the whole stream is read.')
   .then('The HTML has the count in the shell and in the Suspense content, and no error is reported.')
   .run(async (_) => {
-    const { renderToReadableStream } = await import('react-dom/server.browser');
+    // React 18 exposes this runtime subpath but its types only declare the shared server API.
+    const browserEntry: string = 'react-dom/server.browser';
+    const { renderToReadableStream }: Pick<typeof import('react-dom/server'), 'renderToReadableStream'> =
+      await import(browserEntry);
 
     const store = createStore(7);
     const { Lazy, release } = lazyLateCount();

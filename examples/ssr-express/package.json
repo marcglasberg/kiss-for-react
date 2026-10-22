@@ -9,17 +9,17 @@
     "test": "npm run build && playwright test"
   },
   "dependencies": {
-    "express": "^5.0.0",
+    "express": "^5.3.0",
     "kiss-for-react": "file:../..",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
-    "@types/express": "^5.0.0",
-    "@types/node": "^24.0.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "esbuild": "^0.28.2",
     "typescript": "~6.0.3"
   },

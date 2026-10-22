@@ -12,14 +12,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [26]
+        node: [26.x]
         react: [18, 19]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+          check-latest: true
           cache: npm
+      - name: Verify the supported Node major and security floor
+        run: node scripts/check-node-runtime.cjs
       - run: npm ci
       - name: Use React ${{ matrix.react }}
         if: matrix.react == 18
@@ -65,7 +68,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 26
+          node-version: 26.x
+          check-latest: true
+      - name: Verify the supported Node major and security floor
+        run: node scripts/check-node-runtime.cjs
+        working-directory: .
       # The examples install `kiss-for-react` from the repository root (`file:../..`, packed
       # by npm as it is, see their `.npmrc`), so the library must be built before.
       - name: Install the library's dependencies, and build it
@@ -85,3 +92,21 @@ jobs:
         run: npm test
         env:
           CI: true
+
+  plugin-consumers:
+    name: Packed ESLint plugin / ESLint ${{ matrix.eslint }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        eslint: [9.22.0, 10.13.0]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26.x
+          check-latest: true
+          cache: npm
+      - run: node scripts/check-node-runtime.cjs
+      - run: npm ci
+      - run: node scripts/plugin-pack-smoke.cjs ${{ matrix.eslint }}

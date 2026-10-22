@@ -7,7 +7,7 @@
 // Usage, from the repository root: `node scripts/pack-smoke.cjs [reactMajor]`.
 // `reactMajor` is 18 or 19 (default: the major of the React installed in the repository).
 // It needs network access, to install React in the consumer project. It never publishes.
-const { execSync } = require('child_process');
+const { execSync, execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -70,10 +70,34 @@ for (const file of ['hooks-smoke.mjs', 'hooks-smoke.cjs']) {
 
 // 4b) Under the `react-server` condition (React Server Components), the package resolves to its
 // server entry, which has no hooks and doesn't need React's client features.
+// Resolve the conditional exports without importing React, on both React majors.
+for (const [args, suffix] of [
+  [['--conditions=react-server', '--input-type=module', '-e', "console.log(import.meta.resolve('kiss-for-react'))"], '/lib/esm/server.mjs'],
+  [['--conditions=react-server', '-e', "console.log(require.resolve('kiss-for-react'))"], '/lib/cjs/server.js'],
+]) {
+  const resolved = execFileSync(process.execPath, args, { cwd: consumer, encoding: 'utf8' }).trim().replace(/\\/g, '/');
+  if (!resolved.endsWith(suffix)) throw new Error(`Incorrect conditional export: ${resolved}`);
+}
+// The explicit server subpath is also a supported ordinary SSR import, including React 18.
+for (const [args, expression] of [
+  [['--input-type=module'], "const m = await import('kiss-for-react/server'); console.log(typeof m.createStore, typeof m.useSelect)"],
+  [[], "const m = require('kiss-for-react/server'); console.log(typeof m.createStore, typeof m.useSelect)"],
+]) {
+  const out = execFileSync(process.execPath, [...args, '-e', expression], { cwd: consumer, encoding: 'utf8' }).trim();
+  if (out !== 'function undefined') throw new Error(`Invalid server-subpath exports: ${out}`);
+}
 const expectedServer = 'function:undefined:undefined:2';
 for (const file of ['server-smoke.mjs', 'server-smoke.cjs']) {
-  const out = run(`node --conditions=react-server ${file}`, consumer).trim();
-  if (out !== expectedServer) throw new Error(`${file} printed ${JSON.stringify(out)}, expected ${JSON.stringify(expectedServer)}`);
+  const result = spawnSync(process.execPath, ['--conditions=react-server', file],
+    { cwd: consumer, encoding: 'utf8' });
+  if (String(reactMajor) === '18') {
+    // Stable React 18 rejects its own experimental RSC entry. Client SSR above and
+    // the typed consumer below still run in full for this supported React major.
+    if (result.status === 0 || !result.stderr.includes('This entry point is not yet supported outside of experimental channels'))
+      throw new Error(`${file}: expected React 18's explicit unsupported experimental entry error: ${result.stderr}`);
+  } else if (result.status !== 0 || result.stdout.trim() !== expectedServer) {
+    throw new Error(`${file} failed: ${result.stderr || result.stdout}`);
+  }
 }
 
 // 5) The published types: valid uses compile, invalid ones don't.
