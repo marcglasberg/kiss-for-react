@@ -1,20 +1,8 @@
 # Changelog
 
-## 1.0.1
-
-* The rules now know the `LoadPages` base action (Kiss 2.0.0):
-  `incompatible-action-features` reports a `LoadPages` with `nonReentrant` or `ignoreOld`;
-  `missing-super-in-override` reports a `reduce` or `statusKey` override in a `LoadPages`,
-  an `abortDispatch` that doesn't call `super.abortDispatch()`, and an `ignoreFresh` or
-  `ignoreThrottle` getter that doesn't read the `super` value; `missing-key-params` warns
-  about a `LoadPages` with fields that doesn't override `pagesKeyParams`;
-  `lifecycle-method-call` reports calls to its methods; `retry-without-non-reentrant` doesn't
-  report it; and the naming rules check it as a concrete action, even without type
-  information.
-
 ## 1.0.0
 
-* First version, with 57 rules:
+* First version, for Kiss 2.0.0, with 57 rules:
 
   * Components and hooks: `no-new-object-in-use-select`, `new-values-in-use-object`, `avoid-use-all-state`, `store-in-selector`, `dispatch-in-render`, `store-state-in-render`, `then-on-dispatch-and-wait`.
   * Reducers: `stale-state-after-await`, `prefer-state-parameter`, `no-state-mutation`, `reduce-without-await`, `prefer-return-null`.
@@ -24,3 +12,13 @@
   * Errors: `user-exception-outside-action`, `user-exception-without-cause`, `throw-in-error-observer`, `error-observer-without-environment` (opt-in).
   * Tests and debugging: `expect-without-waiting`, `testing-feature-in-production`, `action-status-details-in-production`, `debug-observer-in-release`.
   * Naming: `action-name-ends-with-action` (opt-in), `action-name-ends-with-underscore-action` (opt-in), `action-name-without-action` (opt-in), `action-file-name-ends-with-action` (opt-in), `action-file-name-starts-with-action` (opt-in).
+
+* The rules know the `LoadPages` base action:
+  `incompatible-action-features` reports a `LoadPages` with `nonReentrant` or `ignoreOld`;
+  `missing-super-in-override` reports a `reduce` or `statusKey` override in a `LoadPages`,
+  an `abortDispatch` that doesn't call `super.abortDispatch()`, and an `ignoreFresh` or
+  `ignoreThrottle` getter that doesn't read the `super` value; `missing-key-params` warns
+  about a `LoadPages` with fields that doesn't override `pagesKeyParams`;
+  `lifecycle-method-call` reports calls to its methods; `retry-without-non-reentrant` doesn't
+  report it; and the naming rules check it as a concrete action, even without type
+  information.

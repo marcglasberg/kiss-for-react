@@ -8,6 +8,10 @@
 - Comes with a linter that enforces good practices without spending tokens
 - For the human: Final code is easy to read and understand
 
+```bash
+npm install kiss-for-react
+```
+
 ## Complete docs → **[https://kissforreact.org](https://kissforreact.org)**
 
 * [Getting Started](https://kissforreact.org/react/intro) / [Tutorial: A simple Todo List app](https://kissforreact.org/react/tutorial/setting-up-the-store) / [The Basics](https://kissforreact.org/react/basics/store-and-state)
