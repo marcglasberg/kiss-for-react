@@ -14,11 +14,13 @@ import { emptyState, type State } from './state';
  * client bundle, so this file never reaches the browser.
  *
  * One store per request: a module-level store would be shared by all the requests the Node
- * process serves, mixing the users' data. The store is disposed at the end, so that it leaves
- * no timers behind (this app has none, but a polling or debounced action would).
+ * process serves, mixing the users' data. It's a server store (`server: true`): the actions
+ * that poll, retry or debounce on the client run once here, and start no timers. The store is
+ * still disposed at the end, so that its props, pending waits and dependencies leave nothing
+ * behind.
  */
 export async function loadInitialState(): Promise<State> {
-  const store = createStore<State>({ initialState: emptyState });
+  const store = createStore<State>({ initialState: emptyState, server: true });
   try {
     await store.dispatchAndWait(new LoadItems());
     return store.state;

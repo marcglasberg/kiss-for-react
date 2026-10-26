@@ -14,11 +14,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.get(['/', '/about'], async (req, res) => {
   // One store per request. A module-level store would be shared by all the requests the Node
-  // process serves, mixing the users' data. The store is disposed when the render is done, so
-  // that it leaves no timers behind in the process (this app has none, but a polling or
-  // debounced action would). The server never has the persistor: `createStore` here, not
-  // `createAppStore`, and the hooks render `serverState`, so `useIsStoreReady` renders `true`.
-  const store = createStore<State>({ initialState: emptyState });
+  // process serves, mixing the users' data. It's a server store (`server: true`): the actions
+  // that poll, retry or debounce on the client run once here, and start no timers. The store
+  // is still disposed when the render is done, so that its props, pending waits and
+  // dependencies leave nothing behind in the process. The server never has the persistor:
+  // `createStore` here, not `createAppStore`, and the hooks render `serverState`, so
+  // `useIsStoreReady` renders `true`.
+  const store = createStore<State>({ initialState: emptyState, server: true });
   let disposed = false;
   const dispose = () => {
     if (disposed) return;

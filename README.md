@@ -897,7 +897,7 @@ actions before rendering, wait for them to finish, and pass the state to render 
 `serverState`:
 
 ```tsx
-const store = createStore<State>({ initialState: new State() });
+const store = createStore<State>({ initialState: new State(), server: true });
 await store.dispatchAndWait(new LoadData());
 const html = renderToString(
   <StoreProvider store={store} serverState={store.state}>
@@ -929,17 +929,12 @@ enough; for class instances, `Map`s and `Set`s, use your own `toJSON`/`fromJSON`
 the
 serializer you use for persistence.
 
-After rendering, dispose the server store with `await store.dispose()`. It stops the
-polling, debounce, retry and other timers, cancels the pending `dispatchWhen`s, and
-rejects the waits still pending (`waitCondition`, `waitAllActions`...), so that a request
-leaves nothing behind in the Node process. Streaming works the same way: with
-`renderToPipeableStream` or `renderToReadableStream`, the Suspense boundaries that resolve
-later also render the `serverState`, and the complete HTML hydrates without mismatches. In
-React 18, keep each of those boundaries next to the components that read the store, not
-inside one: the hooks re-render those components synchronously when the store changes, and
-React 18 gives up hydrating a boundary that hasn't hydrated yet when a component above it
-re-renders synchronously (it client-renders the boundary, with a console error). React 19
-hydrates the boundary first, and doesn't need this.
+The server store is created with `server: true`, so the actions that poll, retry or debounce
+on the client run once there. After rendering, dispose it with `await store.dispose()`, so
+that the request leaves nothing behind in the Node process. Streaming works the same way,
+with `renderToPipeableStream` or `renderToReadableStream`. See the
+[server-side rendering](https://kissforreact.org/react/miscellaneous/server-side-rendering)
+page of the docs for the details.
 
 ### Next.js and React Server Components
 
@@ -948,8 +943,9 @@ In a React Server Components app, like the Next.js **app router**, the hooks and
 server components, `kiss-for-react` resolves to its server entry (through the
 `react-server` export condition), which has the store and the actions, but no hooks, so
 that importing a hook there is a build error instead of a runtime one. The pattern is: a
-server component loads the data (it can create a store and dispatch actions for that, one
-store per request, disposed after), and passes the state as a prop to a client component,
+server component loads the data (it can create a store with `server: true` and dispatch
+actions for that, one store per request, disposed after), and passes the state as a prop to
+a client component,
 which creates the store once and renders the `StoreProvider` with that state as
 `serverState`:
 

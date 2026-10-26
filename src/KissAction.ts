@@ -1110,6 +1110,9 @@ export abstract class KissAction<St> {
    * Notes:
    * - It should not be combined with `retry`, nor used in an `OptimisticCommand`.
    *   Dispatching it with those throws a `StoreException`.
+   * - In a server store (created with `server: true`, for server-side rendering), the debounce
+   *   period is not waited: the reducer runs right away. The action is still ASYNC. See the
+   *   `server` option of `createStore`.
    * - It works with both SYNC and ASYNC reducers, but the action is always ASYNC, since it
    *   waits for the debounce period. So, it can't be dispatched with `dispatchSync`.
    *   Doing so throws a `StoreException`.
@@ -2371,6 +2374,11 @@ export abstract class KissAction<St> {
    * before the `pollInterval` starts counting for the next tick. See `pollWaitsForRun` if you
    * want ticks at a fixed rate instead.
    *
+   * In a server store (created with `server: true`, for server-side rendering), `Poll.start`
+   * and `Poll.runNowAndRestart` run the action once, like `Poll.once`, and start no polling:
+   * the server renders once, and nothing would use the next tick. See the `server` option of
+   * `createStore`.
+   *
    * To start polling, dispatch the action with `Poll.start`.
    * To stop, dispatch with `Poll.stop`:
    *
@@ -2864,6 +2872,10 @@ export abstract class KissAction<St> {
    * - If you `await dispatchAndWait(action)` and the action uses unlimited retries,
    *   it may never finish if it keeps failing. So, be careful when using it.
    *
+   * - In a server store (created with `server: true`, for server-side rendering), the reducer
+   *   runs once, and if it throws, the action fails with that error right away, without
+   *   retrying. See the `server` option of `createStore`.
+   *
    * - Calling `store.clearInternalActionProps()` (for example, on logout), or shutting down the
    *   store with `store.setShutDown(true)`, stops the retries. The action is then aborted with
    *   an `AbortDispatchException`, so it doesn't fail.
@@ -3055,6 +3067,9 @@ export abstract class KissAction<St> {
    * Notes:
    * - If you `await dispatchAndWait(action)`, it only finishes when the action succeeds, and
    *   this may take a long time (or never happen) if there is no internet, or if it keeps failing.
+   * - In a server store (created with `server: true`, for server-side rendering), the internet
+   *   is not checked (the server counts as online), the reducer runs once, and if it throws,
+   *   the action fails with that error right away. See the `server` option of `createStore`.
    * - Calling `store.clearInternalActionProps()` (for example, on logout), or shutting down the
    *   store with `store.setShutDown(true)`, stops the retries. The action is then aborted with
    *   an `AbortDispatchException`, so it doesn't fail.
@@ -4495,7 +4510,9 @@ export class ActionStatus {
  * When combined with `retry`, only the `sendCommandToServer` call is retried, not the
  * optimistic update or rollback. This prevents UI flickering that would otherwise occur if the
  * entire reducer was retried on each attempt. The optimistic state remains in place during
- * retries, and the rollback only happens if all retry attempts fail.
+ * retries, and the rollback only happens if all retry attempts fail. In a server store (created
+ * with `server: true`, for server-side rendering), `sendCommandToServer` is called once, and
+ * not retried. See the `server` option of `createStore`.
  *
  * Every error is retried, including `UserException`s, unless `shouldRetry(error, attempt)` returns
  * `false` for it. The command then gives up right away: it rolls back (if `shouldRollback` says
@@ -4883,7 +4900,8 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    * of an `OptimisticCommand`.
    */
   private async _sendCommandWithRetryIfNeeded(optimistic: T): Promise<any> {
-    if (!this.ifRetryIsOn) return this.sendCommandToServer(optimistic);
+    // A server store doesn't retry (see the `server` option of `createStore`).
+    if (!this.ifRetryIsOn || this.store.isServer) return this.sendCommandToServer(optimistic);
 
     while (true) {
       try {

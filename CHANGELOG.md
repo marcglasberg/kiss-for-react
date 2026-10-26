@@ -4,6 +4,30 @@
 
 ### New features
 
+* New **`server` option** of `createStore`, for the store that loads the data of a request in
+  server-side rendering (the one the server code creates per request, dispatches the loading
+  actions on, renders from, and disposes). The server runs the same action classes as the
+  client, and only wants to run their reducers once. So, in a store created with
+  `server: true`, the action features that repeat or wait run the reducer once, now, and stop:
+  `Poll.start` and `Poll.runNowAndRestart` run the action once and start no polling; `retry`,
+  `unlimitedRetryCheckInternet` and the `retry` of an `OptimisticCommand` run once and fail
+  right away with the reducer's error; `debounce` runs the reducer right away. The
+  `focusSource` and `onlineSource` are not started, and a `persistor` throws a
+  `StoreException`. Everything else is unchanged, the validations of the features still run,
+  and the store still has to be disposed after rendering. The new `store.isServer` getter
+  reads the option, so an action can skip client-only work on the server. The default is
+  `false`, and nothing changes for the stores that don't use the option.
+
+  ```ts
+  const store = createStore<State>({ initialState: emptyState, server: true });
+  try {
+    await store.dispatchAndWait(new LoadData());
+    return store.state;
+  } finally {
+    await store.dispose();
+  }
+  ```
+
 * New **store props**, to keep the long-lived things of the app that are not state, and must
   not go in the state: intervals, WebSockets, `EventSource`s, `AbortController`s, listeners
   (like Firebase's `onSnapshot`), RxJS subscriptions. `setProp(key, value, { dispose? })`,

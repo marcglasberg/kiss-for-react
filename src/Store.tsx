@@ -191,6 +191,9 @@ interface ConstructorParams<St> {
    *
    * Kiss also offers a built-in `ClassPersistor` that can be used to persist the state by
    * serializing it to a string and saving it to the local device storage.
+   *
+   * A persistor is not allowed in a server store (see the `server` option): the store creation
+   * throws a `StoreException`.
    */
   persistor?: Persistor<St>;
 
@@ -488,6 +491,52 @@ interface ConstructorParams<St> {
    * `store.forceInternetOnOffSimulation`, which takes precedence for the action features.
    */
   onlineSource?: AppSignalSource;
+
+  /**
+   * Set it to `true` in the store that loads the data of a request, in server-side rendering:
+   * the store the server code creates per request, dispatches the loading actions on, renders
+   * from, and disposes (see "Server-side rendering" in the README). The default is `false`.
+   *
+   * ```ts
+   * const store = createStore<State>({ initialState: emptyState, server: true });
+   * try {
+   *   await store.dispatchAndWait(new LoadData());
+   *   return store.state;
+   * } finally {
+   *   await store.dispose();
+   * }
+   * ```
+   *
+   * The server runs the same action classes as the client, and only wants to run their
+   * reducers once. So, in a server store, the action features that repeat or wait run the
+   * reducer once, now, and stop:
+   *
+   * - Polling: an action dispatched with `Poll.start` or `Poll.runNowAndRestart` runs once,
+   *   and no polling is started (as with `Poll.once`).
+   * - `retry` and `unlimitedRetryCheckInternet`: the reducer runs once, and if it throws, the
+   *   action fails with that error right away. The same for the `retry` of an
+   *   `OptimisticCommand`, which calls `sendCommandToServer` once.
+   * - `debounce`: the reducer runs right away, without waiting the debounce period.
+   * - The `focusSource` and `onlineSource` are not started: the app counts as focused and
+   *   online.
+   * - A `persistor` is not allowed: the store creation throws a `StoreException`.
+   *
+   * Everything else is the same, and the validations of the features still run, so an action
+   * class that is wrong on the client is also wrong on the server. The store still has to be
+   * disposed with `store.dispose()` after rendering, since the props, the pending waits and
+   * the dependencies are not affected by this option.
+   *
+   * Don't set it in the store the components use (the one given to the `StoreProvider`), not
+   * even when a framework renders that store on the server: on the server, that store only
+   * renders the state it was given, and the server never runs the effects that dispatch. Read
+   * it with `store.isServer`.
+   *
+   * The option is explicit on purpose. The store doesn't detect the server by itself (with
+   * `typeof window === 'undefined'`, for example): tests that run in Node would silently get
+   * the server behavior, React Native has a `window`, and a store created without the option
+   * must behave the same wherever it runs.
+   */
+  server?: boolean;
 }
 
 /**
@@ -738,6 +787,10 @@ const defaultOnlineSource: AppSignalSource = (setOnline) => {
     win.removeEventListener('offline', offline);
   };
 };
+
+// The source of a server store (see the `server` option): it never sets a value, so the app
+// counts as focused and online.
+const _noSource: AppSignalSource = () => {};
 
 /**
  * The store holds the state of the application and allows the state to be updated
@@ -1475,12 +1528,21 @@ export class Store<St> {
                 logStateChanges,
                 focusSource,
                 onlineSource,
+                server,
               }: ConstructorParams<St>
   ) {
+    this._isServer = (server === true);
+    if (this._isServer && persistor !== undefined)
+      throw new StoreException(
+        'A server store must not have a persistor. The `server` option is for the store that ' +
+        'loads the data of a request on the server, which has no local device to persist to. ' +
+        'Give the persistor to the store the components use, in the browser.');
     this._state = initialState;
-    this._focus = new AppSignal(focusSource ?? defaultFocusSource, this._focusListeners,
+    // A server store never listens to the focus and online sources: the app counts as focused
+    // and online there.
+    this._focus = new AppSignal(this._isServer ? _noSource : (focusSource ?? defaultFocusSource), this._focusListeners,
       (error) => this._reportDisposeError(error, 'Stopping the focus source threw an error'));
-    this._online = new AppSignal(onlineSource ?? defaultOnlineSource, this._onlineListeners,
+    this._online = new AppSignal(this._isServer ? _noSource : (onlineSource ?? defaultOnlineSource), this._onlineListeners,
       (error) => this._reportDisposeError(error, 'Stopping the online source threw an error'));
     this._initialState = initialState;
     this._environment = environment;
@@ -2693,7 +2755,8 @@ export class Store<St> {
   // `Poll.stop`, or `Poll.start` while polling is already active.
   private _pollSkipsReduce(action: KissAction<St>): boolean {
     if (action.poll === Poll.stop) return true;
-    if (action.poll !== Poll.start) return false;
+    // In a server store, `Poll.start` always runs the reducer, since no polling cycle exists.
+    if (action.poll !== Poll.start || this._isServer) return false;
     const key = action['computePollingKey']();
     return this._pollingCycles.some(cycle => _isSameNonReentrantKey(cycle.key, key));
   }
@@ -2743,7 +2806,9 @@ export class Store<St> {
     function _wrapReduceDebounce(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
 
       async function _wrapReduceDebounceAsync(): AsyncReducer<St> {
-        const isLast = await store._waitDebounce(action['debounceLockBuilder'](), debounceMillis);
+        // In a server store, the debounce period is not waited: there is no user input to
+        // merge on the server. The action is still ASYNC, as any debounced action.
+        const isLast = store._isServer || await store._waitDebounce(action['debounceLockBuilder'](), debounceMillis);
         if (!isLast) return null;
         if (store._mustAbortAfterDebounce(action))
           throw kissAbort('The non-reentrant key, throttle lock or fresh-key was taken when the debounce period ended.');
@@ -2821,6 +2886,13 @@ export class Store<St> {
         if ((action.poll === Poll.start || action.poll === Poll.runNowAndRestart)
           && store._wereInternalActionPropsCleared(action))
           throw kissAbort('The internal action props were cleared, so the action did not start polling.');
+
+        // In a server store, `Poll.start` and `Poll.runNowAndRestart` run the action once, like
+        // `Poll.once`, and start no polling cycle: the server renders once, and nothing would
+        // use the next tick. The polling validations (`createPollingAction()` is overridden,
+        // the options are valid) already ran at dispatch, as in any store.
+        if (store._isServer && (action.poll === Poll.start || action.poll === Poll.runNowAndRestart))
+          return userWrapReduce(reduce)();
 
         const key = action['computePollingKey']();
         const cycle = store._pollingCycles.find(entry => _isSameNonReentrantKey(entry.key, key));
@@ -2993,8 +3065,9 @@ export class Store<St> {
 
     // With unlimitedRetryCheckInternet, the internet is checked before each attempt. If there is
     // no internet, the reducer doesn't run, and it's retried later. Note this retries unlimited
-    // times, and the waits between attempts are capped by `maxDelayNoInternet`.
-    const checkInternet = action._isUnlimitedRetryCheckInternet;
+    // times, and the waits between attempts are capped by `maxDelayNoInternet`. A server store
+    // doesn't check the internet (it counts as online), and doesn't retry (see `_waitToRetry`).
+    const checkInternet = action._isUnlimitedRetryCheckInternet && !this._isServer;
 
     const _syncRetryError = () => Store._syncRetryError(action);
 
@@ -3012,6 +3085,9 @@ export class Store<St> {
       // This is checked before checking the retries left, so that a last attempt that fails
       // is aborted too, instead of failing.
       if (store._wereInternalActionPropsCleared(action)) throw Store._clearedRetryError();
+      // A server store doesn't retry: the action fails right away with the reducer's error.
+      // (The error is never `null` here, since a server store doesn't check the internet.)
+      if (store._isServer) throw error;
       retry.attempts++;
       if (!retry.unlimitedRetries && (retry.maxRetries >= 0) && (retry.attempts > retry.maxRetries)) throw error;
       // The action can give up on some errors (`shouldRetry`). Not when there is no internet.
@@ -4158,6 +4234,20 @@ export class Store<St> {
    * True after `dispose()` was called. A disposed store doesn't accept new actions, and
    * doesn't keep new props.
    */
+  // True if the store was created with the `server` option. See `isServer`.
+  private readonly _isServer: boolean;
+
+  /**
+   * True if the store was created with `server: true` (see the `server` option in
+   * `createStore`): it's the store that loads the data of a request, in server-side rendering.
+   * In actions, `this.store.isServer` lets you skip client-only work on the server, for example
+   * not opening a WebSocket, or not starting an interval with `setProp`. It's `false` by
+   * default, and in the store the components use.
+   */
+  get isServer(): boolean {
+    return this._isServer;
+  }
+
   get isDisposed(): boolean {
     return this._disposed;
   }
