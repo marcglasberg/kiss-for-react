@@ -1,36 +1,33 @@
 <img src="https://kissforreact.org/img/KISS_outline.svg" alt="Kiss for React Image" width="150" />
 
-* AI-ready state management for React
-* Simple to learn and easy to use
-* Testable
-<br></br>
+**State management for React, built for AI agents:**
 
-## What is it?
+- Helps the AI write well-structured code, separating business logic and UI
+- Forces the AI to write predictable, testable, maintainable code
+- Promotes less token usage, saving money!
+- Comes with a linter that enforces good practices without spending tokens
+- For the human: Final code is easy to read and understand
 
-Kiss is a state management package for React.
+## Complete docs → **[https://kissforreact.org](https://kissforreact.org)**
 
-## Documentation & AI
-
-### Complete docs → **[https://kissforreact.org](https://kissforreact.org)**
-
-* [Getting Started](https://kissforreact.org/react/intro)
-* [Tutorial: A simple Todo List app](https://kissforreact.org/react/tutorial/setting-up-the-store)
-* [The Basics](https://kissforreact.org/react/basics/store-and-state)
-* [Complete AI Documentation](https://kissforreact.org/kiss-state-management-docs.md): A single file containing all Kiss documentation, optimized for AI agents. Just copy the link and paste it into any AI.
+* [Getting Started](https://kissforreact.org/react/intro) / [Tutorial: A simple Todo List app](https://kissforreact.org/react/tutorial/setting-up-the-store) / [The Basics](https://kissforreact.org/react/basics/store-and-state)
+* [Complete AI Docs](https://kissforreact.org/kiss-state-management-docs.md): Single file
+  with all Kiss docs, optimized for AI agents.
+  Just copy the link and paste it into any AI.
 
 ### Linter and Quick fixes → [eslint-plugin-kiss-for-react](https://www.npmjs.com/package/eslint-plugin-kiss-for-react)
 
-## How does it compare?
+## Why it helps AI agents
 
-State management solutions can sometimes overwhelm you with complex concepts and the 
-significant knowledge overhead needed to avoid pitfalls. 
-Kiss is the opposite, as there's no need to be especially clever to make things work.
-[Detailed comparison](https://kissforreact.org/react/category/comparisons).
+Kiss improves AI-driven code generation by giving the AI strong guardrails
+that force it to do the right thing while saving tokens.
+[Read about it here](https://kissforreact.org/react/category/ai).
 
-**AI-ready:** Kiss centralizes state and business logic in predictable ways, 
-making it easier for AI models to reason about code. 
-This improves AI-driven code generation 
-and helps you get good results with surprisingly little effort.
+## For the human
+
+AI can sometimes create code that works but seems alien when you read it.
+With Kiss the code remains human-readable the whole time.
+[Read about it here](https://kissforreact.org/react/category/ai).
 
 ---
 
@@ -43,13 +40,13 @@ Here are the main concepts:
 The **store** holds all application **state**. Here are a few examples:
 
 ```tsx
-// If your state is a number
+// Your state is a number
 const store = createStore<number>({initialState: 1});
 
-// If your state is a plain JavaScript object
+// Your state is a plain JavaScript object
 const store = createStore({initialState: {name: 'Mary', age: 25}});
 
-// If your state is an instance of an ES6 class
+// Your state is an instance of an ES6 class
 class State { constructor(public name: string, public age: number){} }
 const store = createStore<State>({initialState: new State('Mary', 25)});
 ```
@@ -66,17 +63,13 @@ function App() {
 };
 ```
 
-Apps usually create a single store, outside the components, and keep it for their whole life.
-If the `store` prop changes, the components below switch to the new store: they stop listening
-to the old one, read the new one right away, and the `useStoreEffect` callbacks run `onUnmount`
-for the old store and `onMount` for the new one.
-
 &nbsp;
 
 ## Components use the state
 
-The `useAllState` hook lets you access the state from any component.
-The component re-renders when the state changes.
+The `useAllState` hook lets you access the whole state from any component.
+The component re-renders when any part of the state changes (not recommended, but good for
+fast prototyping).
 
 ```tsx
 function MyComponent() { 
@@ -114,21 +107,11 @@ function MyComponent() {
 
 These hooks connect to the store with React's own
 [`useSyncExternalStore`](https://react.dev/reference/react/useSyncExternalStore),
-so React reads the state itself, compares what each component selected, and renders only the
-components whose selection changed. React also checks the state again before committing a
-render it paused (a transition), and renders again if the state changed meanwhile, so a screen
-never shows parts of two different states at the same time.
-
-Two things follow from this:
-
-* Selectors must be **pure**: they read their `state` parameter and return the same value for
-  the same state. React may call them more than once per render, and may throw a render away.
-  Return parts of the state, not new objects (see `useObject` above for that).
-
-* Store updates are rendered right away, with React's synchronous priority. Even if you
-  dispatch inside `startTransition`, the render that shows the new state is not a deferred
-  transition. Async actions are still async: this only says how React schedules the render,
-  after the state changes. Your own local state transitions can still read the store.
+so React reads the state itself, compares what each component selected, and renders only
+the components whose selection changed. React also checks the state again before
+committing a
+render it paused (a transition), and renders again if the state changed meanwhile, so a
+screen never shows parts of two different states at the same time.
 
 &nbsp;
 
@@ -153,8 +136,8 @@ class Increment extends Action {
 
 The store's state is **immutable**.
 
-The only way to change the store's state is by dispatching an **action**.
-This runs the action's reducer to get a new state.
+The only way to change the store's state is by dispatching an **action**,
+wich runs the action's reducer to get a new state.
 The new state replaces the current one, and affected components re-render.
 
 ```tsx
@@ -171,14 +154,15 @@ await store.dispatchAndWait(new Increment());
 await store.dispatchAndWaitAll([new Increment(), new LoadText()]);
 
 // Dispatch an action when the state meets a condition
-store.dispatchWhen(new LoadText(), (state) => state.count >= 3, { timeoutMillis: 0 });
+store.dispatchWhen(new LoadText(), (state) => state.count >= 3);
 ```
 
 &nbsp;
 
 ## Components can dispatch actions
 
-Hooks for dispatching actions include `useDispatch`, `useDispatchAll`, `useDispatchWhen`, etc.
+Hooks for dispatching actions include `useDispatch`, `useDispatchAll`, `useDispatchWhen`,
+etc.
 
 ```tsx
 function MyComponent() { 
@@ -206,23 +190,32 @@ function MyComponent() {
 };
 ```
 
-To dispatch actions when the component mounts, when some values change, and when it unmounts,
+To dispatch actions when the component mounts, when some values change, and when it
+unmounts,
 use `useStoreEffect` instead of a `useEffect`:
 
 ```tsx
 useStoreEffect({
-  deps: userId,
+  deps: userId, // List the dependencies
+  
+  // Loads information needed for this screen
   onMount: (store) => store.dispatch(new LoadUser(userId)),
+  
+  // When the userId changes, stop listening to the old user and load the new one
   onDepsChange: (store, oldUserId) => {
     store.dispatch(new StopListening(oldUserId));
     store.dispatch(new LoadUser(userId));
   },
+  
+  // When the component unmounts, clean up any resources used by this screen
   onUnmount: (store) => store.dispatch(new CleanResources()),
 });
 ```
 
-To reload the data on screen when the user comes back to the browser tab, or when the internet
-comes back, add `onFocus` and `onOnline` (there are also `onBlur` and `onOffline`). They run
+To reload the data on screen when the user comes back to the browser tab, or when the
+internet
+comes back, add `onFocus` and `onOnline` (there are also `onBlur` and `onOffline`). They
+run
 only on the transitions, while the component is mounted, never on mount. Give the action a
 `fresh` period to skip the reload when the data is recent:
 
@@ -234,12 +227,8 @@ useStoreEffect({
 });
 ```
 
-The store knows whether the app is focused and online: `store.isFocused` (in the browser, the
-document is visible) and `store.isOnline` (`navigator.onLine`), also available in components
-with `useIsFocused()` and `useIsOnline()`, for an "offline" banner. Where the store can't know
-(the server, Node, React Native), both are `true`, unless you give `createStore` a `focusSource`
-or an `onlineSource` (for example, `AppState` and `NetInfo` in React Native). In tests, drive
-them with `store.setFocused(false)` and `store.setOnline(false)`.
+Also available in components with `useIsFocused()` and `useIsOnline()`,
+for an "offline" banner.
 
 &nbsp;
 
@@ -272,9 +261,10 @@ class LoadText extends Action {
 ## Actions can throw errors
 
 If an error occurs, you can simply **throw it**. In this case, the action will not
-change the state. Errors are caught globally and can be handled later in one central place.
+change the state. Errors are caught globally and can be handled later in one central
+place.
 
-If you throw a `UserException`, a type provided by Kiss, a dialog or another UI element
+If you throw a `UserException` (a type provided by Kiss), a dialog or another UI element
 opens automatically and shows the error message to the user.
 
 ```tsx
@@ -287,20 +277,6 @@ class LoadText extends Action {
     let text = await response.text();     
     return (state: string) => text;
   }
-}
-```
-
-To stop an action silently instead, throw an `AbortDispatchException`. The action is
-aborted without showing any errors, and it doesn't count as failed:
-
-```tsx
-class LoadText extends Action {
-
-  async before() {
-    if (await isTextCached()) throw new AbortDispatchException();
-  }
-  
-  async reduce() { ... }
 }
 ```
 
@@ -325,9 +301,10 @@ function MyComponent() {
 }
 ```
 
-These hooks work per action class: `useIsWaiting(LoadUser)` is true while **any** `LoadUser`
-runs. In a list where each row loads its own user, give the action a `statusKey`, and pass the
-same key to the hooks, so that each row sees only its own user:
+These hooks work per action class: `useIsWaiting(LoadUser)` is true while **any**
+`LoadUser` runs. In a list where each row loads its own user,
+give the action a `statusKey`, and pass the same key to the hooks,
+so that each row sees only its own user:
 
 ```tsx
 class LoadUser extends Action {
@@ -343,16 +320,12 @@ function UserRow({ userId }: { userId: string }) {
 }
 ```
 
-The key must come from the action's own fields, and never change. `useExceptionFor` and
-`useClearExceptionFor` take the same option. The store keeps one failure record per key that
-failed (the action type, the key and the error), until the action runs again for that key, or
-`clearExceptionFor` or `clearAllExceptions` is called. `logOut` and `clearInternalActionProps`
-clear them all.
-
 ### Suspense and error boundaries
 
-If you prefer React's `<Suspense>` and error boundaries to `isWaiting`/`isFailed` checks, use
-`useSuspense` instead. It suspends the component while the action runs, and throws the error
+If you prefer React's `<Suspense>` and error boundaries to `isWaiting`/`isFailed` checks,
+use
+`useSuspense` instead. It suspends the component while the action runs, and throws the
+error
 to the nearest error boundary if the action failed:
 
 ```tsx
@@ -373,22 +346,22 @@ function UserCard({ userId }: { userId: string }) {
 }
 ```
 
-While `LoadUser` runs for that key, the hook throws a promise: React stops the render there,
-shows the `fallback` of the nearest `<Suspense>`, and renders the component again when the
-action finishes. If the action failed, the hook throws the error (any error, like `isFailed`),
-and the nearest error boundary catches it. The failure stays recorded until the action is
-dispatched again, so a "retry" button in the boundary should dispatch the action, and then
-reset the boundary. Pass `{ throwErrors: false }` to not throw errors, and use `useIsFailed`
-instead. On the server and while hydrating, the hook never suspends or throws.
-
 &nbsp;
 
 ## Actions can send events to the UI
 
-Sometimes an action needs the UI to do something once, that is not a state change: scroll a
-list to the top, clear or focus an input, open a dialog. The UI keeps these things itself (DOM
-elements, refs, scroll positions), so the reducer can't reach them. For that, the action puts an
-**event** (`Evt`) in the state, and the component handles it with `useEvent`:
+Sometimes an action needs the UI to do something **once**, without changing the state.
+For example:
+
+* Scroll a list to the top
+* Clear or focus an input
+* Open a dialog
+
+The UI keeps track of these things itself (DOM elements, refs, scroll positions).
+They are not part of the global app state, so action reducers can't access them.
+
+But you can put **events** (`Evt`) in the state, which actions can modify,
+and then UI components can react to these events with `useEvent`:
 
 ```tsx
 class State {
@@ -401,10 +374,12 @@ class State {
   static initialState = new State([], Evt.spent(), Evt.spent());
 }
 
+// Dispatch this action to scroll the list to the top
 class ScrollFeedToTop extends Action {
   reduce() { return this.state.copy({ scrollToTopEvt: new Evt() }); }
 }
 
+// Dispatch this action to change the text in an input
 class ChangeText extends Action {
   async reduce() {
     const text = await api.fetchText();
@@ -415,19 +390,17 @@ class ChangeText extends Action {
 function Feed() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
+  
+  // The callbacks below run only once per event, with their values.
+  
+  // Handle the event that scrolls the list
   useEvent((state: State) => state.scrollToTopEvt, () => listRef.current?.scrollTo({ top: 0 }));
+  
+  // Handle the event that changes the input text
   useEvent((state: State) => state.changeTextEvt, (text) => { inputRef.current!.value = text; });
   ...
 }
 ```
-
-The callback runs once per event, with its value, even if the component mounts after the
-action ran. The store remembers which events were already handled (**spent**), so the event
-and the state stay immutable. In the initial state, use `Evt.spent()`, so that nothing fires
-when the app starts. Use `useLayoutEvent` to run the callback before the browser paints, and
-`EvtState` for an event that all the mounted components react to. The `ClassPersistor` saves
-events as spent, so an old event doesn't fire when the app restarts.
 
 &nbsp;
 
@@ -496,10 +469,7 @@ class SellStockForPrice extends Action {
 
 &nbsp;
 
-## Add features to your actions
-
-It's easy to add your own reusable features to actions.
-Kiss also includes several useful features out of the box:
+## Add "features" to your actions
 
 ### NonReentrant
 
@@ -508,7 +478,7 @@ add the `nonReentrant` property to your action class and set it to `true`.
 
 ```tsx
 class LoadText extends Action { 
-  nonReentrant = true;
+  nonReentrant = true; // Here!
    
   reduce() { ... }
 }
@@ -519,15 +489,16 @@ when they have different parameters, override `nonReentrantKeyParams()`:
 
 ```tsx
 class SaveItem extends Action {
-  nonReentrant = true;
   constructor(readonly itemId: string) { super(); }
+  
+  nonReentrant = true;
   nonReentrantKeyParams() { return this.itemId; }
   ...
 }
 ```
 
-Now `SaveItem('A')` and `SaveItem('B')` can run in parallel, but two `SaveItem('A')` cannot.
-To make different action classes share the same key, override `computeNonReentrantKey()`.
+Now `SaveItem('A')` and `SaveItem('B')` can run in parallel, but two `SaveItem('A')`
+cannot.
 
 ### Retry
 
@@ -536,13 +507,13 @@ add the `retry` property to your action class.
 
 ```tsx
 class LoadText extends Action {   
-  retry = {on: true}
+  retry = {on: true} // Here!
          
   async reduce() { ... }
 }
 ```
 
-And you can specify the retry policy:
+Or you can specify the retry policy:
 
 ```tsx
 class LoadText extends Action {
@@ -558,9 +529,9 @@ class LoadText extends Action {
 }
 ```
 
-By default, every error is retried, including `UserException`s. To give up on errors that
-will fail again anyway (like a 404 or a 401), override `shouldRetry`. The action then fails
-right away with that error:
+By default, every error is retried.
+To give up on errors that will fail again anyway (like a 404 or a 401),
+override `shouldRetry`.
 
 ```tsx
 class LoadText extends Action {
@@ -574,41 +545,30 @@ class LoadText extends Action {
 }
 ```
 
-`shouldRetry` also works with `unlimitedRetryCheckInternet` (see below), where it's the only
-way to stop an action that would otherwise retry forever, and with an `OptimisticCommand`
-with `retry`.
-
 ### CheckInternet
 
-To check for an internet connection before running the action, add the `checkInternet` property.
-If there is no internet connection, the action stops. You can also show a dialog with the title
-"There is no Internet", and the message "Please, verify your connection."
+To check for an internet connection before running the action, add the `checkInternet`
+property. If there is no internet connection, the action stops. You can also show a dialog
+with the title "There is no Internet", and the message "Please, verify your connection".
 
 ```tsx
 class LoadPrices extends Action {    
-  checkInternet = { dialog: true } 
+  checkInternet = { dialog: true } // Here! 
    
   async reduce() { ... } 
 }
 ```
 
-Use `checkInternet = { dialog: false }` to fail without a dialog, so you can show the error
-in your components with `isFailed`. Or use `checkInternet = { abort: true }` to abort the
+Use `checkInternet = { dialog: false }` to fail without a dialog, so you can show the
+error in your components with `isFailed`. Or use `checkInternet = { abort: true }` to
+abort the
 action silently, as if it had never been dispatched, without any errors.
-
-The connection checked is the store's online signal, `store.isOnline`: in the browser,
-`navigator.onLine`; elsewhere, always online, unless you give `createStore` an `onlineSource`
-(like `NetInfo` in React Native). To check in some other way for each action, override
-`hasInternet()` in your base action.
-
-In tests, simulate the internet connection as off (or on) for all actions with
-`store.forceInternetOnOffSimulation = () => false`. Return `null` to use the real connection.
 
 ### UnlimitedRetryCheckInternet
 
-To keep trying an action until it succeeds, even while the device is offline, add the
-`unlimitedRetryCheckInternet` property. If there is no internet, the action waits, and
-retries until there is. It also retries if there is internet but the action fails.
+To keep trying an action until it succeeds, add the `unlimitedRetryCheckInternet`
+property. If there is no internet, the action waits, and retries until there is.
+It also retries if there is internet but the action fails.
 
 ```tsx
 class LoadPrices extends Action {    
@@ -618,32 +578,12 @@ class LoadPrices extends Action {
 }
 ```
 
-Note that combining `retry` with `checkInternet` doesn't retry when there is no internet.
-It only retries when there is internet but the action fails.
-
-The action is non-reentrant for the whole time until it succeeds, including the waits between
-retries. You can also change the retry delays:
-
-```tsx
-class LoadPrices extends Action {
-
-  unlimitedRetryCheckInternet = {
-    initialDelay: 350,        // Delay in milliseconds before the first retry
-    multiplier: 2,            // Factor used to increase the delay after each retry
-    maxDelay: 5000,           // Maximum delay between retries, when the action fails
-    maxDelayNoInternet: 1000, // Maximum delay between retries, when there is no internet
-  }
-   
-  async reduce() { ... }
-}
-```
-
 ### Debounce
 
 To limit how often an action runs in response to rapid input, add a `debounce` property
-to your action class. For example, when a user types into a search bar, debouncing ensures that not
-every keystroke triggers a server request. Instead, the action waits until the user stops typing for a short time
-before running.
+to your action class. For example, when a user types into a search bar, debouncing ensures
+that not every keystroke triggers a server request. Instead, the action waits until the
+user stops typing for a short time before running.
 
 ```tsx
 class SearchText extends Action {
@@ -658,30 +598,14 @@ class SearchText extends Action {
 }
 ```
 
-Each dispatch resets the wait time, and only the last action runs its reducer. The previous
-ones finish without changing the state. Use `debounce = true` for the default of 333 milliseconds.
-
-By default, actions of the same class debounce each other. To use a different lock, override
-`debounceLockBuilder()`. Actions with the same lock debounce each other, even if they are
-of different classes:
-
-```tsx
-class SearchText extends Action {
-  constructor(public field: string, public searchTerm: string) { super(); }
-  debounce = 300;
-  debounceLockBuilder() { return this.field; }
-  ...
-}
-```
-
 ### IgnoreOld
 
-When the same action may be dispatched again before the previous one finishes (for example,
-when the user switches tabs or filters quickly), a slow older request may finish last, and
-overwrite the newer information. To prevent that, add the `ignoreOld` property to your action
-class and set it to `true`. When the action is dispatched again, the previous ones that are
-still running become old: their results and errors are ignored, and their `abortSignal` is
-aborted. Pass it to `fetch` to cancel their requests.
+When the same action may be dispatched again before the previous one finishes (for
+example, when the user switches tabs or filters quickly), a slow older request may finish
+last, and overwrite the newer information. To prevent that, add the `ignoreOld` property
+to your action class.
+
+You can optionally pass the action's `abortSignal` to `fetch` to cancel requests:
 
 ```tsx
 class LoadTab extends Action {
@@ -696,23 +620,13 @@ class LoadTab extends Action {
 }
 ```
 
-Only the newest dispatch changes the state. Until it finishes, the state keeps what it had
-before. Check `this.isAborted` inside the reducer to know if the action was aborted.
-
-By default, actions of the same class affect each other. Override `ignoreOldKeyParams()` to
-separate them by some fields (for example, when each item goes into its own place in a cache),
-or `computeIgnoreOldKey()` so that actions of different classes share the key. It's also useful
-together with `debounce`, when searching while the user types: if the user pauses for longer
-than the wait time and then types again, the older search is cancelled.
+You can also check `this.isAborted` inside the reducer to know if the action was aborted.
 
 ### Aborting actions
 
 Call `store.abort(ActionType)` to abort all the actions of that type that are in progress,
-for example from a "Cancel" button, or when the component that started a request unmounts.
-Each aborted action finishes silently: its `abortSignal` is aborted, so a `fetch` that got it
-is cancelled right away; its result is ignored, and so are its errors (it doesn't count as
-failed). Its status has `isDispatchAborted: true`. To abort one action instance, call its
-`abort()` method.
+for example, from a "Cancel" button, or when the component that started a request
+unmounts.
 
 ```tsx
 useStoreEffect({
@@ -721,15 +635,12 @@ useStoreEffect({
 });
 ```
 
-A request that ignores the signal still finishes, and only then its result is ignored. Pass
-`{ statusKey }` to abort only the actions with that key.
-
 ### Throttle
 
-To prevent an action from running too frequently, you can add a `throttle` property to your
-action class. The action then runs at most once per throttle period. If you dispatch it again
-during that period, the new dispatch is aborted. After the period ends, the next dispatch runs,
-and starts a new period.
+To prevent an action from running too frequently, you can add a `throttle` property to
+your action class. The action then runs at most once per throttle period. If you dispatch
+it again during that period, the new dispatch is aborted. After the period ends, the next
+dispatch runs, and starts a new period.
 
 ```tsx
 class LoadPrices extends Action {    
@@ -742,30 +653,24 @@ class LoadPrices extends Action {
 }
 ```
 
-Use `throttle = true` for the default of 1000 milliseconds. Override `ignoreThrottle` to run
-the action anyway under some conditions (for example, a `force` flag). If the action fails,
-the throttle period is kept, unless you set `removeThrottleLockOnError = true`.
-
-By default, actions of the same class throttle each other. To use a different lock, override
-`throttleLockBuilder()`. Actions with the same lock throttle each other, even if they are
-of different classes:
+Override `ignoreThrottle` to run the action anyway under some conditions (for example,
+a `force` flag).
 
 ```tsx
 class LoadPrices extends Action {
-  constructor(public category: string, public force = false) { super(); }
+  constructor(public force = false) { super(); }
   throttle = 5000;
-  get ignoreThrottle() { return this.force; }
-  throttleLockBuilder() { return this.category; }
+  get ignoreThrottle() { return this.force; }  
   ...
 }
 ```
 
 ### Fresh
 
-To avoid reloading the same information too often, add a `fresh` property to your action class.
-When the action runs, its result is considered fresh for that period (counted from the
-dispatch), and dispatching it again during that period is aborted. After the period ends, the data is stale, and the next
-dispatch runs and starts a new period.
+To avoid reloading the same information too often, add a `fresh` property to your action
+class. When the action runs, its result is considered fresh for that period of time,
+and dispatching it again during that period is aborted. After the period ends,
+the data is stale, and the next dispatch runs and starts a new period.
 
 ```tsx
 class LoadPrices extends Action {    
@@ -778,34 +683,15 @@ class LoadPrices extends Action {
 }
 ```
 
-Use `fresh = true` for the default of 1000 milliseconds. Override `ignoreFresh` to run the
-action anyway under some conditions (for example, a `force` flag). Unlike `throttle`, if the
-action fails, its data doesn't stay fresh, so you can dispatch it again right away.
-
-By default, actions of the same class share the fresh period. Override `freshKeyParams()` to
-give each value of some fields its own fresh period, or `computeFreshKey()` so that actions of
-different classes share it:
-
-```tsx
-class LoadUserCart extends Action {
-  constructor(public userId: string, public force = false) { super(); }
-  fresh = 5000;
-  get ignoreFresh() { return this.force; }
-  freshKeyParams() { return this.userId; }
-  ...
-}
-```
-
 ### Sequential
 
 To make actions run one at a time, in the exact order they were dispatched, add the
 `sequential` property to your action class and set it to `true`. Each dispatched action
-waits until all the actions dispatched before it have finished, and only then runs its
-`before`, `reduce` and `after` methods.
+waits until all the actions dispatched before it have finished.
 
 ```tsx
 class SaveItem extends Action {
-  sequential = true;
+  sequential = true; // Here!
   constructor(readonly item: Item) { super(); }
    
   async reduce() {
@@ -816,8 +702,8 @@ class SaveItem extends Action {
 ```
 
 By default, all sequential actions share a single queue, even if they are of different
-classes. To have independent queues, override `sequentialKeyParams()`. Actions with the same
-key run one at a time, while actions with different keys run in parallel:
+classes. To have independent queues, override `sequentialKeyParams()`. Actions with the
+same key run one at a time, while actions with different keys run in parallel:
 
 ```tsx
 class SaveUser extends Action {
@@ -828,20 +714,14 @@ class SaveUser extends Action {
 }
 ```
 
-If the actions depend on the previous ones (for example, creating an item and then updating
-it), override `discardQueueOnError()` to return `true`. If an action fails, the actions
-waiting behind it are then discarded, without running. While waiting for their turn, actions
-count as being in progress, so `isWaiting` shows a spinner right away. Note an action must
-never wait (for example, with `dispatchAndWait`) for another action in the same queue,
-because they would wait for each other forever.
-
 ### Polling
 
-To periodically dispatch an action at a fixed interval, add a `poll` property to your action
-class (usually as a constructor parameter), and override `createPollingAction()` to return
-the action each tick dispatches. Dispatch it with `Poll.start` to run it right away and start
-polling, and with `Poll.stop` to stop polling. Use `Poll.runNowAndRestart` to run it now and
-restart the timer, and `Poll.once` (the default) to run it once, without affecting the polling.
+To periodically dispatch an action at a fixed interval, add a `poll` property to your
+action class (usually as a constructor parameter), and override `createPollingAction()` to
+return the action each tick dispatches. Dispatch it with `Poll.start` to run it right away
+and start polling, and with `Poll.stop` to stop polling. Use `Poll.runNowAndRestart` to
+run it now and restart the timer, and `Poll.once` (the default) to run it once, without
+affecting the polling.
 
 ```tsx
 class LoadPrices extends Action {
@@ -859,170 +739,59 @@ dispatch(new LoadPrices(Poll.start)); // Start polling.
 dispatch(new LoadPrices(Poll.stop)); // Stop polling.
 ```
 
-The default `pollInterval` is 10000 milliseconds. Each tick waits for the previous run to
-finish, so runs never overlap. Set `pollWaitsForRun = false` to tick at a fixed rate instead.
+Each tick waits for the previous run to finish, so runs never overlap.
+Set `pollWaitsForRun = false` to tick at a fixed rate instead.
 
-By default, the ticks only run while the app is focused (in the browser, the tab is visible)
-and online. A tick that comes due while the user is away waits, and runs as soon as the user
-comes back to the tab, or the internet comes back. Set `pollOnlyWhenFocused = false` or
-`pollOnlyWhenOnline = false` to keep polling anyway. Where the store can't know if the app is
-focused or online (the server, Node, React Native without a `focusSource`/`onlineSource`), the
-polling never pauses.
-By default, actions of the same class share the same polling. Override `pollingKeyParams()`
-to give each value of some fields its own polling, or `computePollingKey()` so that actions
-of different classes share it. To stop all polling at once (for example, on logout), call
-`stopAllPolling()` from any action.
+By default, the ticks only run while the app is focused (in the browser, the tab is
+visible) and online. A tick that comes due while the user is away waits, and runs as soon
+as the user comes back to the tab, or the internet comes back. Set
+`pollOnlyWhenFocused = false` or `pollOnlyWhenOnline = false` to keep polling anyway.
+
+To stop all polling at once (for example, on logout), call `stopAllPolling()` from any
+action.
+
+## Advanced Features
 
 ### OptimisticCommand
 
-To provide instant feedback when an action sends a command to the server (like adding a todo,
-or sending a message), extend `OptimisticCommand`. It changes the state immediately, before the server
-confirms that the command succeeded. If the command fails, the state is changed back, and the
-error is shown to the user. It can also reload the value from the server.
-
-```tsx
-class AddTodo extends OptimisticCommand<State, Todo[]> {
-  constructor(readonly todo: Todo) { super(); }
-
-  optimisticValue() { return [...this.state.todos, this.todo]; }
-  getValueFromState(state: State) { return state.todos; }
-  applyValueToState(state: State, todos: Todo[]) { return state.copy({ todos }); }
-  sendCommandToServer() { return api.addTodo(this.todo); }
-  reloadFromServer() { return api.loadTodos(); }
-}
-```
+To provide instant feedback when an action sends a command to the server (like adding a
+todo, or sending a message), extend `OptimisticCommand`. It changes the state immediately,
+before the server confirms that the command succeeded.
+If the command fails, the state is changed back, and the error is shown to the user.
+It can also reload the value from the server.
 
 ### OptimisticSync
 
-For rapid toggles (like a "like" button), extend `OptimisticSync`. Every dispatch changes the
-state immediately, but only one request per key is sent to the server at a time. When the
-request finishes, if the state changed meanwhile, a follow-up request sends the latest value,
-until the state stabilizes. This keeps the UI responsive, while minimizing server load.
-
-```tsx
-class ToggleLike extends OptimisticSync<State, boolean> {
-  constructor(readonly itemId: string) { super(); }
-
-  optimisticSyncKeyParams() { return this.itemId; }
-  valueToApply() { return !this.state.isLiked(this.itemId); }
-  applyOptimisticValueToState(state: State, liked: boolean) { return state.setLiked(this.itemId, liked); }
-  getValueFromState(state: State) { return state.isLiked(this.itemId); }
-  sendValueToServer(liked: boolean) { return api.setLiked(this.itemId, liked); }
-}
-```
-
-Optionally, apply the server response with `applyServerResponseToState`, and run code when the
-state stabilizes, or when a request fails, with `onFinish` (for example, to reload the value
-from the server).
+For rapid toggles (like a "like" button), extend `OptimisticSync`. Every dispatch changes
+the state immediately, but only one request per key is sent to the server at a time.
+When the request finishes, if the state changed meanwhile, a follow-up request sends the
+latest value, until the state stabilizes. This keeps the UI responsive, while minimizing
+server load.
 
 ### OptimisticSyncWithPush and ServerPush
 
-If your app also receives server pushes (WebSockets, Server-Sent Events, Firebase) that may
-change the same values, and more than one device can change them, extend
-`OptimisticSyncWithPush` instead of `OptimisticSync`, and apply the pushes with an action that
-extends `ServerPush`. They track revisions, so that stale or out-of-order pushes are ignored,
-local changes are not overwritten by older pushes, and the last write wins across devices.
-
-```tsx
-class ToggleLike extends OptimisticSyncWithPush<State, boolean> {
-  constructor(readonly itemId: string) { super(); }
-
-  optimisticSyncKeyParams() { return this.itemId; }
-  valueToApply() { return !this.state.isLiked(this.itemId); }
-  applyOptimisticValueToState(state: State, liked: boolean) { return state.setLiked(this.itemId, liked); }
-  getValueFromState(state: State) { return state.isLiked(this.itemId); }
-  getServerRevisionFromState(state: State, key: any) { return state.revisionOf(key); }
-
-  async sendValueToServer(liked: boolean, localRevision: number, deviceId: number) {
-    const response = await api.setLiked(this.itemId, liked, localRevision, deviceId);
-    this.informServerRevision(response.serverRevision);
-  }
-}
-
-class PushLike extends ServerPush<State> {
-  constructor(readonly itemId: string, readonly liked: boolean, readonly metadata: PushMetadata) { super(); }
-
-  associatedAction() { return ToggleLike; }
-  optimisticSyncKeyParams() { return this.itemId; }
-  pushMetadata() { return this.metadata; } // { serverRevision, localRevision, deviceId }
-  applyServerPushToState(state: State, key: any, serverRevision: number) {
-    return state.setLiked(this.itemId, this.liked).setRevision(key, serverRevision);
-  }
-  getServerRevisionFromState(state: State, key: any) { return state.revisionOf(key); }
-}
-```
-
-The server must return a server revision that always increases, and its pushes must include
-the server revision, and the local revision and device ID sent by `sendValueToServer`.
+If your app also receives server pushes (WebSockets, Server-Sent Events, Firebase) that
+may change the same values, and more than one device can change them, extend
+`OptimisticSyncWithPush` instead of `OptimisticSync`, and apply the pushes with an action
+that extends `ServerPush`. They track revisions, so that stale or out-of-order pushes are
+ignored, local changes are not overwritten by older pushes, and the last write wins across
+devices.
 
 ### LoadPages
 
-To load a list page by page (a "load more" button, or an infinite scroll), extend `LoadPages`.
-It keeps the loaded pages in the state, in an immutable `Pages` value, and knows how to load
-the next page, the previous page, the first page again, or all the loaded pages again.
+To load a list page by page (a "load more" button, or an infinite scroll), extend
+`LoadPages`.
+It keeps the loaded pages in the state, in an immutable `Pages` value, and knows how to
+load the next page, the previous page, the first page again, or all the loaded pages
+again.
 
-```tsx
-class LoadTodos extends LoadPages<State, Todo[], string | null> {
-  getPagesFromState(state: State) { return state.todos; }
-  applyPagesToState(state: State, todos: Pages<Todo[], string | null>) { return state.copy({ todos }); }
-  initialPageParam() { return null; }                                     // The first page has no cursor.
-  loadPage(cursor: string | null) { return api.todosAfter(cursor, 20); }  // 20 items with id > cursor.
-  nextPageParam(lastPage: Todo[]) { return lastPage.length < 20 ? null : lastPage.at(-1)!.id; } // null = no more.
-}
-
-dispatch(new LoadTodos());         // Loads again the pages in the state, or the first page if there are none.
-dispatch(new LoadTodos('next'));   // Adds the next page to the end. Does nothing if there is no next page.
-dispatch(new LoadTodos('first'));  // Starts over: loads the first page, and drops the other pages.
-```
-
-The page param can be anything: the id of the last item, a page number, or a cursor returned
-by the server. The component reads the `Pages` value from the state: `pages.pages` (one
-entry per page), `pages.pageParams`, `pages.hasNextPage` and `pages.hasPreviousPage`.
-
-Only one load per list runs at a time: a `'next'` dispatched while the list is loading is
-aborted (two quick taps load one page), and a `'first'` or `'refresh'` aborts the loads
-that are running. A `'refresh'` reloads the pages one after the other, from the first, with
-the page params `nextPageParam` gives, so the pages stay consistent, and changes the state
-once at the end. Implement `previousPageParam` to load `'previous'` pages (a chat that
-loads older messages upward), set `maxPages` to keep at most that many pages in memory, and
-override `pagesKeyParams()` when the same action loads several lists (it's also the
-`statusKey`, for `useIsWaiting(LoadTodos, { statusKey })`). `fresh` and `throttle` only
-apply to `'first'` and `'refresh'`.
-
-### Clearing the features on logout
-
-The store keeps some information for these features: the fresh keys, the throttle and
-debounce locks, the `ignoreOld` keys, the polling timers, the sequential queues, the actions waiting to retry, the
-`OptimisticSync` and `OptimisticSyncWithPush` keys, and the revisions kept by
-`OptimisticSyncWithPush` and `ServerPush`.
-On logout, call
-`store.clearInternalActionProps()` so that the previous user's actions stop, and don't affect
-the next user. For example, without it, loading the new user's data could be aborted because
-the previous user's data is still "fresh".
-
-```tsx
-class Logout extends Action {
-  reduce() {
-    this.store.clearInternalActionProps();
-    return State.initialState();
-  }
-}
-```
-
-It removes the fresh keys and throttle locks, makes waiting debounced actions finish without
-running their reducer, forgets the `ignoreOld` keys, stops all polling, discards the actions waiting in sequential queues,
-and stops the actions that retry (with `retry` or `unlimitedRetryCheckInternet`). Actions that
-are already running still finish, and may still change the state. It's also called when the
-store is shut down with `store.setShutDown(true)`.
-
-&nbsp;
-
-## Store props, and disposing the store
+## Disposing the store
 
 Apps have long-lived things that are not state, and must not go in the state: intervals,
-WebSockets, `EventSource`s, `AbortController`s, listeners (like Firebase's `onSnapshot`, which
-returns an unsubscribe function), RxJS subscriptions. Keep them in the store **props**, with
-`setProp`, and close them with `disposeProp`:
+WebSockets, `EventSource`s, `AbortController`s, listeners (like Firebase's `onSnapshot`,
+which returns an unsubscribe function), RxJS subscriptions.
+
+Keep them in the store **props**, with `setProp`, and close them with `disposeProp`:
 
 ```tsx
 class StartClock extends Action {
@@ -1041,44 +810,36 @@ class StopClock extends Action {
 }
 ```
 
-The props belong to the store, so each test (or each request, in server-side rendering) has its
-own, and they can all be closed at once. Kiss knows how to dispose an `AbortController`
-(aborted), a `WebSocket`, `EventSource`, `BroadcastChannel`, `MessagePort` or `Worker` (closed
-or terminated), an object with `unsubscribe()` (RxJS) and an object with `[Symbol.dispose]()`
-or `[Symbol.asyncDispose]()`. Timers and functions need the `dispose` option, since they look
-like other numbers and functions. Setting a prop again with the same key disposes the previous
-value, so dispatching `StartClock` twice doesn't leak the first interval. Read a prop with
-`prop(key)`, list them with `props`, and dispose many with `disposeProps(predicate?)`. The same
-methods exist on the store. On logout, `store.logOut({ disposeProps: true })` disposes them
-too (or pass a predicate to keep the ones that belong to the app, like a connectivity listener).
+The props belong to the store, so each test (or each request, in server-side rendering)
+has its own, and they can all be closed at once. Kiss knows how to automatically dispose
+an `AbortController` (aborted), a `WebSocket`, `EventSource`, `BroadcastChannel`,
+`MessagePort` or `Worker` (closed or terminated), an object with `unsubscribe()` (RxJS)
+and an object with `[Symbol.dispose]()` or `[Symbol.asyncDispose]()`.
 
-To end the store, when the app finishes or at the end of each test, call `store.dispose()`. It
-shuts down the store, stops all the action features, cancels the waiting `dispatchWhen`s,
-pauses the persistor, and disposes all the props. It returns a promise that waits for the async
-disposals. The store also implements `[Symbol.dispose]` and `[Symbol.asyncDispose]`:
+Setting a prop again with the same key disposes the previous value, so dispatching
+`StartClock` twice doesn't leak the first interval. Read a prop with
+`prop(key)`, list them with `props`, and dispose many with `disposeProps(predicate?)`.
 
-```tsx
-afterEach(() => store.dispose());
+The same methods exist on the store. On logout, `store.logOut({ disposeProps: true })`
+disposes them too.
 
-// Or, with TypeScript's explicit resource management:
-await using store = createStore<State>({ initialState: State.initialState });
-```
-
-The types of `[Symbol.dispose]` need `Symbol.dispose` declared: add `"ESNext.Disposable"` to
-the `lib` of your `tsconfig.json` (or have `@types/node`), unless `skipLibCheck` is on.
+To end the store, when the app finishes or at the end of each test, call
+`store.dispose()`. It shuts down the store, stops all the action features, cancels the
+waiting `dispatchWhen`s, pauses the persistor, and disposes all the props.
+It returns a promise that waits for the async disposals.
 
 &nbsp;
 
 ## Environment, dependencies and configuration
 
-Inject the services the actions use (API clients, repositories, analytics...) into the store,
-instead of importing them from modules. Each test then creates its own store with its own
-dependencies (fakes, for example), with nothing global to set up or reset, and two stores can
-live side by side (tests running concurrently, or one store per request in server-side
-rendering). The store takes the `environment` (production, staging, testing...), a
-`configuration` factory (feature flags) and a `dependencies` factory. The factories get the
-store, so they can depend on the environment, and the configuration is created first, so the
-dependencies can read it:
+Inject the services the actions use (API clients, repositories, analytics...) into the
+store, instead of importing them from modules. Each test then creates its own store with
+its own dependencies (fakes, for example), with nothing global to set up or reset, and two
+stores can live side by side (tests running concurrently, or one store per request in
+server-side rendering). The store takes the `environment` (production, staging,
+testing...), a `configuration` factory (feature flags) and a `dependencies` factory. The
+factories get the store, so they can depend on the environment, and the configuration is
+created first, so the dependencies can read it:
 
 ```tsx
 const store = createStore<State>({
@@ -1089,31 +850,13 @@ const store = createStore<State>({
 });
 ```
 
-They are typed `unknown`. Declare typed getters once, in your base action, and use them in all
-actions:
-
-```tsx
-abstract class Action extends KissAction<State> {
-  get env() { return this.store.environment as Environment; }
-  get config() { return this.store.configuration as Config; }
-  get deps() { return this.store.dependencies as Dependencies; }
-}
-
-class LoadUser extends Action {
-  async reduce() {
-    const user = await this.deps.api.loadUser(this.id);
-    return (state: State) => state.copy({ user });
-  }
-}
-```
-
 In components, `useEnvironment()` and `useConfiguration()` return the environment and the
-configuration, and never re-render, since the values don't change. Components should 
+configuration, and never re-render, since the values don't change. Components should
 usually not need the dependencies. The `errorObserver` gets the store, so it can read
 `store.environment`, for example to send the errors to a monitoring service only in
-production. `store.dispose()` disposes the dependencies and the configuration when they 
-have a `dispose()`, `[Symbol.dispose]()` or `[Symbol.asyncDispose]()` method, and `logOut` 
-keeps them. In tests:
+production.
+
+In tests:
 
 ```tsx
 const store = createStore<State>({
@@ -1122,9 +865,6 @@ const store = createStore<State>({
   dependencies: () => new FakeDependencies(),
 });
 ```
-
-Note `store.mocks` mocks actions, while the injected dependencies mock services. They
-complement each other.
 
 &nbsp;
 
@@ -1151,7 +891,8 @@ store.dispatch(new InitAppAction());
 Kiss works with `renderToString` and `hydrateRoot`. Create one store per request, never a
 module-level one, so that requests don't share state.
 
-On the server, the HTML shows the `initialState` the store was created with. If you dispatch
+On the server, the HTML shows the `initialState` the store was created with. If you
+dispatch
 actions before rendering, wait for them to finish, and pass the state to render as
 `serverState`:
 
@@ -1166,8 +907,10 @@ const html = renderToString(
 const transfer = serialize(store.state); // Put it in the HTML, for the client.
 ```
 
-On the client, create the store with the state transferred from the server, and hydrate. React
-needs to render exactly what the HTML shows, so if the client store may have changed before
+On the client, create the store with the state transferred from the server, and hydrate.
+React
+needs to render exactly what the HTML shows, so if the client store may have changed
+before
 hydrating (for example, a persistor restored a newer state), pass the transferred state as
 `serverState`. After hydration, the components catch up with the live state:
 
@@ -1182,33 +925,33 @@ hydrateRoot(
 ```
 
 Rebuild the same state on the client that the server rendered: for a plain object, JSON is
-enough; for class instances, `Map`s and `Set`s, use your own `toJSON`/`fromJSON` code, or the
+enough; for class instances, `Map`s and `Set`s, use your own `toJSON`/`fromJSON` code, or
+the
 serializer you use for persistence.
 
-On the server and while hydrating, `useIsWaiting` and `useIsFailed` are `false`,
-`useExceptionFor` is `null`, `useSuspense` never suspends or throws, and `useIsStoreReady` is
-`true`: the HTML never shows an action in progress, a failed action, or a store that is not
-ready. After hydration, these hooks follow
-the live store. So, on the server, wait for your actions to finish (and for `store.ready()`,
-if the server store has a persistor) before rendering.
-
-After rendering, dispose the server store with `await store.dispose()`. It stops the polling,
-debounce, retry and other timers, cancels the pending `dispatchWhen`s, and rejects the waits
-still pending (`waitCondition`, `waitAllActions`...), so that a request leaves nothing behind
-in the Node process. Streaming works the same way: with `renderToPipeableStream` or
-`renderToReadableStream`, the Suspense boundaries that resolve later also render the
-`serverState`, and the complete HTML hydrates without mismatches.
+After rendering, dispose the server store with `await store.dispose()`. It stops the
+polling, debounce, retry and other timers, cancels the pending `dispatchWhen`s, and
+rejects the waits still pending (`waitCondition`, `waitAllActions`...), so that a request
+leaves nothing behind in the Node process. Streaming works the same way: with
+`renderToPipeableStream` or `renderToReadableStream`, the Suspense boundaries that resolve
+later also render the `serverState`, and the complete HTML hydrates without mismatches. In
+React 18, keep each of those boundaries next to the components that read the store, not
+inside one: the hooks re-render those components synchronously when the store changes, and
+React 18 gives up hydrating a boundary that hasn't hydrated yet when a component above it
+re-renders synchronously (it client-renders the boundary, with a console error). React 19
+hydrates the boundary first, and doesn't need this.
 
 ### Next.js and React Server Components
 
 In a React Server Components app, like the Next.js **app router**, the hooks and the
 `StoreProvider` can only be used in client components (they are marked `'use client'`). In
-server components, `kiss-for-react` resolves to its server entry (through the `react-server`
-export condition), which has the store and the actions, but no hooks, so that importing a hook
-there is a build error instead of a runtime one. The pattern is: a server component loads the
-data (it can create a store and dispatch actions for that, one store per request, disposed
-after), and passes the state as a prop to a client component, which creates the store once
-and renders the `StoreProvider` with that state as `serverState`:
+server components, `kiss-for-react` resolves to its server entry (through the
+`react-server` export condition), which has the store and the actions, but no hooks, so
+that importing a hook there is a build error instead of a runtime one. The pattern is: a
+server component loads the data (it can create a store and dispatch actions for that, one
+store per request, disposed after), and passes the state as a prop to a client component,
+which creates the store once and renders the `StoreProvider` with that state as
+`serverState`:
 
 ```tsx
 'use client';
@@ -1218,13 +961,17 @@ export function KissProvider({ initialState, children }: { initialState: State, 
 }
 ```
 
-Render it in the root layout, so that the store survives client-side navigation. The subpath
-`kiss-for-react/server` is the same server entry, for code that must never pull in the hooks.
-In the Next.js **pages router**, there are no server components: load the data in
-`getServerSideProps`, and create the store once in `_app.tsx`, from the first page's props.
+Render it in the root layout, so that the store survives client-side navigation. The
+subpath `kiss-for-react/server` is the same server entry, for code that must never pull in
+the hooks.
 
-**Several routes.** Each route loads its own data on the server (a server component in the app
-router, `getServerSideProps` in the pages router), and gives it to the store with `StoreSlice`:
+In the Next.js **pages router**, there are no server components: load the data in
+`getServerSideProps`, and create the store once in `_app.tsx`, from the first page's
+props.
+
+**Several routes.** Each route loads its own data on the server (a server component in the
+app router, `getServerSideProps` in the pages router), and gives it to the store with
+`StoreSlice`:
 
 ```tsx
 // app/users/[id]/page.tsx, a server component.
@@ -1234,27 +981,42 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
 }
 ```
 
-The slice is a plain object (a prop a server component gives to a client component). On the
-server, the components inside the slice render the merged state, so the HTML shows the route's
-data; on the client, the slice is merged into the live store before they render, so hydration
-matches, and client-side navigation shows the new route's data in its first render, with no
-empty or stale frame. The slice is merged once per mount: give it a `key` that changes when the
-route's data changes. The merge is shallow (`{ ...state, ...slice }`) for a plain-object state;
-a class-based state needs the `mergeServerState` option of `createStore`, which gets the state
+The slice is a plain object (a prop a server component gives to a client component). On
+the
+server, the components inside the slice render the merged state, so the HTML shows the
+route's
+data; on the client, the slice is merged into the live store before they render, so
+hydration
+matches, and client-side navigation shows the new route's data in its first render, with
+no
+empty or stale frame. The slice is merged once per mount: give it a `key` that changes
+when the
+route's data changes. The merge is shallow (`{ ...state, ...slice }`) for a plain-object
+state;
+a class-based state needs the `mergeServerState` option of `createStore`, which gets the
+state
 and the slice and returns the new state (that's also where the slice is deserialized). The
-server data wins over the client's; to keep client fields, use the option. You can also call
-`store.mergeServerState(slice)` yourself (it dispatches a `MergeServerStateAction`). Mutations
+server data wins over the client's; to keep client fields, use the option. You can also
+call
+`store.mergeServerState(slice)` yourself (it dispatches a `MergeServerStateAction`).
+Mutations
 are ordinary Kiss actions, which may call a server action (app router) or an API route.
 
-Complete examples, each with a persistor on the client (which restores state before hydration)
-and a Playwright test that checks the server HTML, the absence of hydration warnings, and the
+Complete examples, each with a persistor on the client (which restores state before
+hydration)
+and a Playwright test that checks the server HTML, the absence of hydration warnings, and
+the
 store after hydration:
 
 - [Next.js app router](examples/nextjs-app-router)
-- [Next.js pages router](examples/nextjs-pages-router) (`getServerSideProps`, store in `_app.tsx`)
-- [Express, with streaming](examples/ssr-express) (`renderToPipeableStream` and `hydrateRoot`, no framework)
-- [Todo app with Next.js](examples/todo-app-nextjs): the [Vite todo app](examples/todo-app-example)
-  ported to the app router, with the same business code, a class-based state that travels as
+- [Next.js pages router](examples/nextjs-pages-router) (`getServerSideProps`, store in
+  `_app.tsx`)
+- [Express, with streaming](examples/ssr-express) (`renderToPipeableStream` and
+  `hydrateRoot`, no framework)
+- [Todo app with Next.js](examples/todo-app-nextjs):
+  the [Vite todo app](examples/todo-app-example)
+  ported to the app router, with the same business code, a class-based state that travels
+  as
   JSON and is rebuilt on the client, and the `ClassPersistor` (its classes declare
   `static typeName`, since Next.js minifies class names)
 
@@ -1310,8 +1072,10 @@ const store = createStore<string>({
 ```
 
 The `errorObserver` gets all errors thrown by your actions, and also the errors of the
-persistor (with a `null` action). It returns the error to use: the same one, a different one,
-or `null` to swallow it. Then, a `UserException` is shown to the user in an error dialog, and
+persistor (with a `null` action). It returns the error to use: the same one, a different
+one,
+or `null` to swallow it. Then, a `UserException` is shown to the user in an error dialog,
+and
 any other error is thrown.
 
 For example, here we convert the `FirestoreError` errors thrown by Firebase into
@@ -1331,7 +1095,8 @@ errorObserver: ({ error, action }) => {
 ```
 
 By default, Kiss logs what it does (for example, each dispatched action) to the console.
-Use `logger` to send these messages somewhere else, or set it to `null` to turn logging off.
+Use `logger` to send these messages somewhere else, or set it to `null` to turn logging
+off.
 With `null`, Kiss doesn't even build the log messages:
 
 ```tsx
@@ -1346,8 +1111,10 @@ const store = createStore<State>({
 
 ## Advanced action configuration
 
-The team lead can create a base action class that all actions will extend, and add some common
-functionality to it. For example, the base class can provide getter shortcuts to important parts of the state
+The team lead can create a base action class that all actions will extend, and add some
+common
+functionality to it. For example, the base class can provide getter shortcuts to important
+parts of the state
 and helper methods to find information.
 
 ```tsx
@@ -1393,4 +1160,5 @@ class SelectItem extends Action {
 
 * [Kiss GitHub](https://github.com/marcglasberg/kiss-for-react)
 
-* Created by [Marcelo Glasberg](https://glasberg.dev) ([GitHub](https://github.com/marcglasberg), [LinkedIn](https://www.linkedin.com/in/marcglasberg/))
+* Created by [Marcelo Glasberg](https://glasberg.dev)
+  ([GitHub](https://github.com/marcglasberg), [LinkedIn](https://www.linkedin.com/in/marcglasberg/))

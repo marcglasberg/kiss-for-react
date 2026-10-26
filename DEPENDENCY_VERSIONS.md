@@ -1,6 +1,6 @@
 # Direct dependency versions
 
-Official npm registry metadata checked on October 22, 2026. Manifest ranges permit reviewed compatible updates; committed lockfiles provide reproducibility. Ranges do not refresh locks automatically. No dependency bot, background schedule or auto-merge is enabled.
+Official npm registry metadata checked on October 26, 2026. Manifest ranges permit reviewed compatible updates; committed lockfiles provide reproducibility. Ranges do not refresh locks automatically. No dependency bot, background schedule or auto-merge is enabled. GitHub vulnerability alerts (Dependabot alerts) are enabled on the repository since October 26, 2026: GitHub e-mails the owner when a lockfile contains a version with a published advisory, and changes no files.
 
 ## package.json
 
@@ -25,7 +25,7 @@ Official npm registry metadata checked on October 22, 2026. Manifest ranges perm
 | react-test-renderer | `^19.3.1` | 19.3.1 | 19.3.1 |
 | ts-jest | `^29.4.15` | 29.4.15 | 29.4.15 |
 | typescript | `~6.0.3` | 6.0.3 | 7.0.2 |
-| typescript-eslint | `^8.72.0` | 8.72.0 | 8.72.0 |
+| typescript-eslint | `^8.72.0` | 8.72.1 | 8.72.1 |
 
 ## eslint-plugin/package.json
 
