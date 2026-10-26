@@ -888,13 +888,13 @@ store.dispatch(new InitAppAction());
 
 ## Server-side rendering
 
-Kiss works with `renderToString` and `hydrateRoot`. Create one store per request, never a
-module-level one, so that requests don't share state.
+Kiss works with server-side rendering out of the box: plain Node with `renderToString` or
+streaming, and Next.js with the app router or the pages router. The server renders the HTML
+from the store, the browser hydrates it with no mismatches, and from then on it's a normal
+Kiss app.
 
-On the server, the HTML shows the `initialState` the store was created with. If you
-dispatch
-actions before rendering, wait for them to finish, and pass the state to render as
-`serverState`:
+On the server, create a store per request with `server: true`, load the data with the same
+actions the client uses, render, and dispose the store:
 
 ```tsx
 const store = createStore<State>({ initialState: new State(), server: true });
@@ -904,117 +904,48 @@ const html = renderToString(
     <App />
   </StoreProvider>
 );
-const transfer = serialize(store.state); // Put it in the HTML, for the client.
+const transfer = JSON.stringify(store.state); // Goes in the HTML, for the browser.
+await store.dispose();
 ```
 
-On the client, create the store with the state transferred from the server, and hydrate.
-React
-needs to render exactly what the HTML shows, so if the client store may have changed
-before
-hydrating (for example, a persistor restored a newer state), pass the transferred state as
-`serverState`. After hydration, the components catch up with the live state:
+In the browser, create the store with the state the server sent, and hydrate with the same
+`StoreProvider`. That's all the setup. What you get:
 
-```tsx
-const store = createStore<State>({ initialState: deserialize(transfer) });
-hydrateRoot(
-  document.getElementById('root')!,
-  <StoreProvider store={store} serverState={store.state}>
-    <App />
-  </StoreProvider>
-);
-```
+- **No hydration mismatches.** While hydrating, the hooks render the state the server
+  rendered, even if a persistor already restored a newer state in the browser. After
+  hydration, the components catch up with the live state.
+- **The same actions on both sides.** A `LoadData` that polls, retries or debounces in the
+  browser simply runs once in the server store, so a request leaves nothing running in Node.
+- **Next.js, both routers.** A server component (or `getServerSideProps`) loads the data, and
+  a client component creates the store once and provides it. Each route gives its own data to
+  the store with `StoreSlice`: the HTML shows it, and client-side navigation shows the new
+  route's data in its very first render, with no empty or stale frame.
 
-Rebuild the same state on the client that the server rendered: for a plain object, JSON is
-enough; for class instances, `Map`s and `Set`s, use your own `toJSON`/`fromJSON` code, or
-the
-serializer you use for persistence.
+  ```tsx
+  // app/users/[id]/page.tsx, a server component.
+  export default async function UserPage({ params }) {
+    const user = await fetchUser((await params).id);
+    return <StoreSlice state={{ user }} key={user.id}><UserView /></StoreSlice>;
+  }
+  ```
 
-The server store is created with `server: true`, so the actions that poll, retry or debounce
-on the client run once there. After rendering, dispose it with `await store.dispose()`, so
-that the request leaves nothing behind in the Node process. Streaming works the same way,
-with `renderToPipeableStream` or `renderToReadableStream`. See the
+  Mutations are ordinary Kiss actions, which call a server action or an API route, so you keep
+  `useIsWaiting`, `useIsFailed`, retries and optimistic updates on top of them.
+- **Streaming.** `renderToPipeableStream` and `renderToReadableStream` work, Suspense
+  boundaries included.
+- **Nothing half-loaded in the HTML.** On the server, `useIsWaiting` and `useIsFailed` are
+  `false`, and `useSuspense` never suspends, so the HTML never shows a spinner or an error.
+
+Complete examples, each with a persistor in the browser and Playwright tests that check the
+server HTML, the hydration and the store:
+[Next.js app router](examples/nextjs-app-router),
+[Next.js pages router](examples/nextjs-pages-router),
+[Express with streaming](examples/ssr-express), and a
+[todo app with Next.js](examples/todo-app-nextjs) with a class-based state and the
+`ClassPersistor`. The details (serialization, the persistor, streaming, React Server
+Components) are in the
 [server-side rendering](https://kissforreact.org/react/miscellaneous/server-side-rendering)
-page of the docs for the details.
-
-### Next.js and React Server Components
-
-In a React Server Components app, like the Next.js **app router**, the hooks and the
-`StoreProvider` can only be used in client components (they are marked `'use client'`). In
-server components, `kiss-for-react` resolves to its server entry (through the
-`react-server` export condition), which has the store and the actions, but no hooks, so
-that importing a hook there is a build error instead of a runtime one. The pattern is: a
-server component loads the data (it can create a store with `server: true` and dispatch
-actions for that, one store per request, disposed after), and passes the state as a prop to
-a client component,
-which creates the store once and renders the `StoreProvider` with that state as
-`serverState`:
-
-```tsx
-'use client';
-export function KissProvider({ initialState, children }: { initialState: State, children: ReactNode }) {
-  const [store] = useState(() => createStore<State>({ initialState, persistor: clientPersistor() }));
-  return <StoreProvider store={store} serverState={initialState}>{children}</StoreProvider>;
-}
-```
-
-Render it in the root layout, so that the store survives client-side navigation. The
-subpath `kiss-for-react/server` is the same server entry, for code that must never pull in
-the hooks.
-
-In the Next.js **pages router**, there are no server components: load the data in
-`getServerSideProps`, and create the store once in `_app.tsx`, from the first page's
-props.
-
-**Several routes.** Each route loads its own data on the server (a server component in the
-app router, `getServerSideProps` in the pages router), and gives it to the store with
-`StoreSlice`:
-
-```tsx
-// app/users/[id]/page.tsx, a server component.
-export default async function UserPage({ params }: { params: Promise<{ id: string }> }) {
-  const user = await fetchUser((await params).id);
-  return <StoreSlice state={{ user }} key={`${user.id}:${user.updatedAt}`}><UserView /></StoreSlice>;
-}
-```
-
-The slice is a plain object (a prop a server component gives to a client component). On
-the
-server, the components inside the slice render the merged state, so the HTML shows the
-route's
-data; on the client, the slice is merged into the live store before they render, so
-hydration
-matches, and client-side navigation shows the new route's data in its first render, with
-no
-empty or stale frame. The slice is merged once per mount: give it a `key` that changes
-when the
-route's data changes. The merge is shallow (`{ ...state, ...slice }`) for a plain-object
-state;
-a class-based state needs the `mergeServerState` option of `createStore`, which gets the
-state
-and the slice and returns the new state (that's also where the slice is deserialized). The
-server data wins over the client's; to keep client fields, use the option. You can also
-call
-`store.mergeServerState(slice)` yourself (it dispatches a `MergeServerStateAction`).
-Mutations
-are ordinary Kiss actions, which may call a server action (app router) or an API route.
-
-Complete examples, each with a persistor on the client (which restores state before
-hydration)
-and a Playwright test that checks the server HTML, the absence of hydration warnings, and
-the
-store after hydration:
-
-- [Next.js app router](examples/nextjs-app-router)
-- [Next.js pages router](examples/nextjs-pages-router) (`getServerSideProps`, store in
-  `_app.tsx`)
-- [Express, with streaming](examples/ssr-express) (`renderToPipeableStream` and
-  `hydrateRoot`, no framework)
-- [Todo app with Next.js](examples/todo-app-nextjs):
-  the [Vite todo app](examples/todo-app-example)
-  ported to the app router, with the same business code, a class-based state that travels
-  as
-  JSON and is rebuilt on the client, and the `ClassPersistor` (its classes declare
-  `static typeName`, since Next.js minifies class names)
+page of the docs.
 
 &nbsp;
 
