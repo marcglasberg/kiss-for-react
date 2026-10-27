@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.1
+
+### Bug fixes
+
+* **`StoreSlice` no longer changes the live store while React renders.** It merged the slice
+  during the render, so a render React threw away (a transition to a route that suspends, then
+  cancelled) left the slice in the store, and the next state change showed it in the route
+  still on screen. Now the components inside the slice read the merged state from their first
+  render, and the store is only changed when the route commits. On the server (no `window`,
+  or a store created with `server: true`), the slice is still merged during the render.
+
 ## 2.0.0
 
 ### New features

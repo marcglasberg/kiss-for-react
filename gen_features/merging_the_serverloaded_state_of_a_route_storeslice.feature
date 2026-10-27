@@ -1,7 +1,7 @@
 Feature: Merging the server-loaded state of a route (StoreSlice)
 
   Scenario: On the server, the components inside the slice render the merged state, and the slice is merged into the request store.
-    Given A request store with the root state, and a page whose route content is inside a StoreSlice with the user Ann.
+    Given A request store (created with server: true) with the root state, and a page whose route content is inside a StoreSlice with the user Ann.
     When The page is rendered to a string.
     Then The HTML of the route shows Ann.
     And The layout, outside the slice, shows the root server state (it rendered before the slice).
@@ -29,7 +29,7 @@ Feature: Merging the server-loaded state of a route (StoreSlice)
     And The layout shows Ann after the commit, and no warning is logged.
 
   Scenario: In StrictMode, the slice is merged once: the state observer sees one change, and nothing is published twice.
-    Given A store with a state observer, and StrictMode, which calls the initializers twice.
+    Given A store with a state observer, and StrictMode, which calls the initializers twice and runs the effects twice.
     When A page with a slice mounts.
     Then The state observer saw one state change, and the store dispatched one action.
     And No warning is logged.
@@ -56,11 +56,24 @@ Feature: Merging the server-loaded state of a route (StoreSlice)
   Scenario: Under concurrent rendering, a route with a slice rendered in a transition, with a sibling that suspends, shows no tearing.
     Given A mounted page on route 1 (user One), and a client store.
     When A transition switches to route 2, whose slice has the user Two, and whose sibling suspends until later.
-    Then While the transition is pending, the page still shows route 1, consistent.
+    Then While the transition is pending, the page still shows route 1 with the user One everywhere, and the live store still has the user One.
     And When the sibling resolves, the page shows route 2 with the user Two, in the layout and in the route, and no warning is logged.
 
+  Scenario: A transition to a route that suspends, and is then abandoned, leaves nothing of its slice in the live store.
+    Given A mounted page on route 1 (user One), and a client store.
+    When A transition switches to route 2, whose slice has the user Two and whose content suspends, and before it resolves, another transition goes back to route 1.
+    And An unrelated action is dispatched.
+    Then The page shows route 1 with the user One everywhere, with the result of the action, and the live store has the user One.
+    And The route committed only once, with One, and no warning is logged.
+
+  Scenario: A route that suspends outside a transition merges its slice when its content commits, not while the fallback shows.
+    Given A mounted page on route 1 (user One), and a client store.
+    When The page switches (not in a transition) to route 2, whose slice has the user Two and whose content suspends, so the fallback shows.
+    Then While the fallback shows, the layout still shows the user One, and the live store has the user One.
+    And When the content resolves, the page shows route 2 with the user Two, in the layout and in the route, and the first commit of route 2 shows Two.
+
   Scenario: A slice inside a Suspense boundary that streams after the shell is in the streamed HTML, and hydrates without mismatch.
-    Given A request store, and a page whose route (with a slice with the user Ann) is a lazy component inside Suspense.
+    Given A request store (created with server: true), and a page whose route (with a slice with the user Ann) is a lazy component inside Suspense.
     When The page is streamed with renderToPipeableStream, and the complete HTML is hydrated by a client store with the root state.
     Then The streamed HTML has the layout with the root state and the route with Ann.
     And Hydration produces no mismatch, and the page then shows Ann everywhere.

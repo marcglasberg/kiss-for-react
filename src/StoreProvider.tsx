@@ -54,6 +54,14 @@ export interface StoreContextType<St> {
 
   /** Returns the `serverState` of the provider (or the store's `initialState`). See `StoreProviderProps`. */
   getServerState: () => St;
+
+  /**
+   * Returns the state the components below render on the client: the live store state, or,
+   * inside a `StoreSlice` that is not committed yet, the live state with the slice merged into
+   * it. The hooks give it to `useSyncExternalStore`, so it must return the same object while
+   * the live state doesn't change.
+   */
+  getState: () => St;
 }
 
 // Under the `react-server` export condition, React's server build has no `createContext`. A
@@ -62,13 +70,15 @@ export interface StoreContextType<St> {
 // re-exports the components from here, and a plain Node import of it with that condition (as in
 // the package's own tests) must not throw.
 export const StoreContext: React.Context<StoreContextType<any>> = (typeof createContext === 'function')
-  ? createContext<StoreContextType<any>>({ store: null, getServerState: () => undefined })
+  ? createContext<StoreContextType<any>>({ store: null, getServerState: () => undefined, getState: () => undefined })
   : (null as unknown as React.Context<StoreContextType<any>>);
 
 export function StoreProvider<St>(props: StoreProviderProps<St>): React.ReactElement {
   const {store, children} = props;
   const serverState = ('serverState' in props) ? props.serverState as St : store._initialState;
-  const value = useMemo<StoreContextType<St>>(() => ({store, getServerState: () => serverState}), [store, serverState]);
+  const value = useMemo<StoreContextType<St>>(
+    () => ({ store, getServerState: () => serverState, getState: store._getState }),
+    [store, serverState]);
   return (
     <StoreContext.Provider value={value}>
       {children}
@@ -111,10 +121,14 @@ const useIsomorphicLayoutEffect = (typeof window === 'undefined') ? useEffect : 
  *   render the merged state, so the HTML shows the route's data.
  * - On the client, while hydrating, the components inside it hydrate against the same merged
  *   server state (no mismatch, even if the live store already differs), and the slice is merged
- *   into the live store before they render, so nothing changes under them after hydration.
- * - On client-side navigation, the slice is merged into the live store before the children
- *   render, so the first render of the route already shows its data: no empty or stale frame.
- *   The other components (the layout) see the change right after the commit.
+ *   into the live store in the same commit, before their effects run, so nothing changes under
+ *   them after hydration.
+ * - On client-side navigation, the components inside it read the live state with the slice
+ *   merged into it from their first render, so the first render of the route already shows its
+ *   data: no empty or stale frame. The live store gets the slice when the route commits, before
+ *   the effects of the route and before the browser paints, and the other components (the
+ *   layout) catch up right then. A render that React throws away (a transition to the route
+ *   that is cancelled, or that suspends and never commits) leaves nothing in the live store.
  *
  * The merge is `store.mergeServerState(slice)`: the `mergeServerState` option of `createStore`,
  * or a shallow merge for plain-object states. The slice is merged once per mount: use `key`
@@ -128,29 +142,85 @@ export function StoreSlice(props: StoreSliceProps): React.ReactElement {
   const store = parent.store;
   if (store === null) throw new StoreException('StoreSlice must be used within a StoreProvider.');
 
-  // Once per mount, before the children render. The server state of the subtree is the
-  // parent's server state with the slice: what the server HTML shows for this route. The live
-  // store gets the slice now, silently: publishing it here, while React renders, would make
-  // React warn about updating the other components that use the store during a render. It's
-  // published after the commit, in the layout effect, so the other components catch up before
-  // the browser paints. (React calls this initializer twice in StrictMode: the second merge
-  // finds nothing to change, and publishes nothing.)
-  const [applied] = useState(() => ({
-    serverState: store._mergeSlice(parent.getServerState(), slice),
-    publish: store._mergeServerStateSilently(slice),
-  }));
-
-  useIsomorphicLayoutEffect(() => {
-    applied.publish();
-  }, [applied]);
+  // Once per mount. The server state of the subtree is the parent's server state with the slice:
+  // what the server HTML shows for this route. (React calls this initializer twice in
+  // StrictMode, and keeps one of the results.)
+  const [applied] = useState(() => new AppliedSlice(store, parent.getServerState(), slice));
 
   const value = useMemo<StoreContextType<any>>(
-    () => ({ store, getServerState: () => applied.serverState }),
+    () => ({ store, getServerState: applied.getServerState, getState: applied.getState }),
     [store, applied]);
 
+  // `CommitSlice` comes before the children, so that its layout effect runs before theirs.
   return (
     <StoreContext.Provider value={value}>
+      <CommitSlice applied={applied} />
       {children}
     </StoreContext.Provider>
   );
+}
+
+/**
+ * The slice of a mounted `StoreSlice`, and how the components inside it read the state.
+ *
+ * On the server there is no commit, so the slice is merged into the request's store right away,
+ * while React renders (the server render is synchronous and never thrown away, and nothing
+ * listens to the request's store, so nothing is published).
+ *
+ * On the client, the live store is not changed while React renders: React may throw the render
+ * away (a cancelled transition, a route that suspends and never commits), and a change made in
+ * it would stay in the store and show up in the other components later. Instead, until the
+ * route commits, the components inside the slice read the live state with the slice merged
+ * into it (`getState`, cached by the live state, since `useSyncExternalStore` needs the same
+ * object while nothing changed), and the other components still read the live state. When the
+ * route commits, `commit` merges the slice into the live store, in a layout effect that runs
+ * before the effects of the route's components, and publishes the change, so that the other
+ * components catch up before the browser paints. From then on, the components inside the
+ * slice read the live state, which has the slice.
+ */
+class AppliedSlice<St> {
+  private readonly serverState: St;
+  private isCommitted = false;
+  private base: St | undefined = undefined;
+  private merged: St | undefined = undefined;
+
+  constructor(
+    private readonly store: Store<St>,
+    parentServerState: St,
+    private readonly slice: object,
+  ) {
+    this.serverState = store._mergeSlice(parentServerState, slice);
+    if (typeof window === 'undefined' || store.isServer) {
+      store._mergeServerStateSilently(slice);
+      this.isCommitted = true;
+    }
+  }
+
+  readonly getServerState = (): St => this.serverState;
+
+  readonly getState = (): St => {
+    const state = this.store._getState();
+    if (this.isCommitted) return state;
+    if (this.base !== state) {
+      this.base = state;
+      this.merged = this.store._mergeSlice(state, this.slice);
+    }
+    return this.merged as St;
+  };
+
+  /** Merges the slice into the live store, once. The second call (StrictMode) does nothing. */
+  commit(): void {
+    if (this.isCommitted) return;
+    this.isCommitted = true;
+    this.store.mergeServerState(this.slice);
+  }
+}
+
+/** Rendered before the children of a `StoreSlice`: its layout effect runs before theirs. */
+function CommitSlice(props: { applied: AppliedSlice<any> }): null {
+  const { applied } = props;
+  useIsomorphicLayoutEffect(() => {
+    applied.commit();
+  }, [applied]);
+  return null;
 }

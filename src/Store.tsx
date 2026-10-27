@@ -644,11 +644,11 @@ class NotificationBatch {
 
   /**
    * Like `run`, but instead of publishing the notifications when `fn` finishes, returns a
-   * function that publishes them, for the caller to call when it's safe. Used by `StoreSlice`,
-   * which changes the state while React renders it (where a notification would make React warn
-   * about updating other components during a render), and publishes after the commit. Inside
-   * another batch, the notifications are left to that batch, and the returned function does
-   * nothing.
+   * function that publishes them, for the caller to call when it's safe. Used by `StoreSlice`
+   * on the server, which merges the slice into the request's store while React renders it
+   * (where a notification would make React warn about updating other components during a
+   * render). Inside another batch, the notifications are left to that batch, and the returned
+   * function does nothing.
    */
   suspend(fn: () => void): () => void {
     this.depth++;
@@ -4175,9 +4175,10 @@ export class Store<St> {
 
   /**
    * Internal: like `mergeServerState`, but doesn't publish the state change. Returns a function
-   * that publishes it. For `StoreSlice`, which merges while React renders it (the children
-   * must read the merged state in the same render), and publishes after the commit, since
-   * publishing during a render would make React warn about updating other components.
+   * that publishes it. For `StoreSlice` on the server, which merges the slice into the
+   * request's store while React renders it (there is no commit on the server), where
+   * publishing would make React warn about updating other components during a render. On the
+   * client, `StoreSlice` merges with `mergeServerState`, when the route commits.
    * @internal
    */
   _mergeServerStateSilently(slice: object): () => void {

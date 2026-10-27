@@ -79,14 +79,17 @@ function page(store: Store<State>, slice: object, serverState: State = rootState
 
 Bdd(feature)
   .scenario('On the server, the components inside the slice render the merged state, and the slice is merged into the request store.')
-  .given('A request store with the root state, and a page whose route content is inside a StoreSlice with the user Ann.')
+  .given('A request store (created with server: true) with the root state, and a page whose route content is inside a StoreSlice with the user Ann.')
   .when('The page is rendered to a string.')
   .then('The HTML of the route shows Ann.')
   .and('The layout, outside the slice, shows the root server state (it rendered before the slice).')
   .and('The request store has the merged state, and the merge was a MergeServerStateAction.')
   .run(async (_) => {
     const actions: string[] = [];
+    // In a real server there is no `window`, and `StoreSlice` knows it's on the server. In this
+    // jsdom test there is one, so the store must say it's the server store.
     const store = createStore(rootState, {
+      server: true,
       actionObserver: (action: KissAction<State>, _dispatchCount: number, ini: boolean) => { if (ini) actions.push(action.toString()); },
     });
 
@@ -171,7 +174,7 @@ Bdd(feature)
 
 Bdd(feature)
   .scenario('In StrictMode, the slice is merged once: the state observer sees one change, and nothing is published twice.')
-  .given('A store with a state observer, and StrictMode, which calls the initializers twice.')
+  .given('A store with a state observer, and StrictMode, which calls the initializers twice and runs the effects twice.')
   .when('A page with a slice mounts.')
   .then('The state observer saw one state change, and the store dispatched one action.')
   .and('No warning is logged.')
@@ -185,7 +188,7 @@ Bdd(feature)
 
     expect(m.text()).toBe('Ann/0Ann');
     expect(changes).toEqual(['MergeServerStateAction(user)']);
-    expect(store.dispatchCount).toBe(2); // StrictMode runs the initializer twice; the second merge changes nothing.
+    expect(store.dispatchCount).toBe(1); // StrictMode runs the layout effect twice; the second run merges nothing.
   });
 
 Bdd(feature)
@@ -268,7 +271,7 @@ Bdd(feature)
   .scenario('Under concurrent rendering, a route with a slice rendered in a transition, with a sibling that suspends, shows no tearing.')
   .given('A mounted page on route 1 (user One), and a client store.')
   .when('A transition switches to route 2, whose slice has the user Two, and whose sibling suspends until later.')
-  .then('While the transition is pending, the page still shows route 1, consistent.')
+  .then('While the transition is pending, the page still shows route 1 with the user One everywhere, and the live store still has the user One.')
   .and('When the sibling resolves, the page shows route 2 with the user Two, in the layout and in the route, and no warning is logged.')
   .run(async (_) => {
     const store = createStore();
@@ -297,8 +300,10 @@ Bdd(feature)
     expect(m.text()).toBe('One/0One');
 
     await act(async () => startTransition(() => setRoute(2)));
-    // The transition is pending (the sibling suspended): the committed page is still route 1.
-    expect(m.text()).toMatch(/^(One|Two)\/0One$/);
+    // The transition is pending (the sibling suspended): the committed page is still route 1,
+    // and the slice of route 2 is not in the live store, since route 2 didn't commit.
+    expect(m.text()).toBe('One/0One');
+    expect(store.state.user).toBe('One');
 
     await act(async () => {
       resolved = true;
@@ -310,8 +315,102 @@ Bdd(feature)
   });
 
 Bdd(feature)
+  .scenario('A transition to a route that suspends, and is then abandoned, leaves nothing of its slice in the live store.')
+  .given('A mounted page on route 1 (user One), and a client store.')
+  .when('A transition switches to route 2, whose slice has the user Two and whose content suspends, and before it resolves, another transition goes back to route 1.')
+  .and('An unrelated action is dispatched.')
+  .then('The page shows route 1 with the user One everywhere, with the result of the action, and the live store has the user One.')
+  .and('The route committed only once, with One, and no warning is logged.')
+  .run(async (_) => {
+    const store = createStore();
+    const gate = new Deferred<void>();
+    const Suspender: React.FC = () => {
+      throw gate.promise; // Never resolved.
+    };
+    let setRoute!: (route: number) => void;
+    const App: React.FC = () => {
+      const [route, set] = useState(1);
+      setRoute = set;
+      return (
+        <StoreProvider store={store}>
+          <Outer />
+          <Suspense fallback={<i>loading</i>}>
+            {route === 1
+              ? <StoreSlice state={{ user: 'One' }} key="1"><Inner /></StoreSlice>
+              : <StoreSlice state={{ user: 'Two' }} key="2"><Inner /><Suspender /></StoreSlice>}
+          </Suspense>
+        </StoreProvider>
+      );
+    };
+    const m = await mount(<App />);
+    expect(m.text()).toBe('One/0One');
+
+    await act(async () => startTransition(() => setRoute(2)));
+    expect(m.text()).toBe('One/0One');
+    expect(store.state.user).toBe('One');
+
+    await act(async () => startTransition(() => setRoute(1)));
+    expect(m.text()).toBe('One/0One');
+    expect(store.state.user).toBe('One');
+
+    await act(async () => { store.dispatch(new Increment()); });
+
+    expect(m.text()).toBe('One/1One');
+    expect(store.state.user).toBe('One');
+    expect(innerCommits).toEqual(['One']);
+  });
+
+Bdd(feature)
+  .scenario('A route that suspends outside a transition merges its slice when its content commits, not while the fallback shows.')
+  .given('A mounted page on route 1 (user One), and a client store.')
+  .when('The page switches (not in a transition) to route 2, whose slice has the user Two and whose content suspends, so the fallback shows.')
+  .then('While the fallback shows, the layout still shows the user One, and the live store has the user One.')
+  .and('When the content resolves, the page shows route 2 with the user Two, in the layout and in the route, and the first commit of route 2 shows Two.')
+  .run(async (_) => {
+    const store = createStore();
+    const gate = new Deferred<void>();
+    let resolved = false;
+    const Suspender: React.FC = () => {
+      if (!resolved) throw gate.promise;
+      return <i>ok</i>;
+    };
+    let setRoute!: (route: number) => void;
+    const App: React.FC = () => {
+      const [route, set] = useState(1);
+      setRoute = set;
+      return (
+        <StoreProvider store={store}>
+          <Outer />
+          <Suspense fallback={<i>loading</i>}>
+            {route === 1
+              ? <StoreSlice state={{ user: 'One' }} key="1"><Inner /></StoreSlice>
+              : <StoreSlice state={{ user: 'Two' }} key="2"><Inner /><Suspender /></StoreSlice>}
+          </Suspense>
+        </StoreProvider>
+      );
+    };
+    const m = await mount(<App />);
+    expect(m.text()).toBe('One/0One');
+
+    await act(async () => setRoute(2));
+    // React shows the fallback, and keeps the content of route 1 mounted but hidden.
+    expect(m.container.querySelector('nav')!.textContent).toBe('One/0');
+    expect(m.text()).toContain('loading');
+    expect(store.state.user).toBe('One');
+
+    await act(async () => {
+      resolved = true;
+      gate.resolve();
+      await gate.promise;
+    });
+    expect(m.text()).toBe('Two/0Twook');
+    expect(store.state.user).toBe('Two');
+    expect(innerCommits).toEqual(['One', 'Two']);
+  });
+
+Bdd(feature)
   .scenario('A slice inside a Suspense boundary that streams after the shell is in the streamed HTML, and hydrates without mismatch.')
-  .given('A request store, and a page whose route (with a slice with the user Ann) is a lazy component inside Suspense.')
+  .given('A request store (created with server: true), and a page whose route (with a slice with the user Ann) is a lazy component inside Suspense.')
   .when('The page is streamed with renderToPipeableStream, and the complete HTML is hydrated by a client store with the root state.')
   .then('The streamed HTML has the layout with the root state and the route with Ann.')
   .and('Hydration produces no mismatch, and the page then shows Ann everywhere.')
@@ -326,7 +425,7 @@ Bdd(feature)
       </StoreProvider>
     );
 
-    const serverStore = createStore();
+    const serverStore = createStore(rootState, { server: true }); // See the first scenario.
     const chunks: string[] = [];
     const finished = new Deferred<void>();
     const sink = new Writable({

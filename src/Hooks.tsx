@@ -19,9 +19,11 @@ import { Evt, EvtState } from './Evt';
 // never shows parts of two different states at the same time.
 //
 // - `useSelect`, `useObject` and `useAllState` use the React team's `useSyncExternalStoreWithSelector`,
-//   whose snapshot is the whole (immutable) state, and whose selector picks a part of it. It
-//   keeps the last selected value, and compares the new one with it (`Object.is` for `useSelect`,
-//   value by value for `useObject`), so an unchanged selection doesn't render the component.
+//   whose snapshot is the whole (immutable) state (read through the context: the live state,
+//   or, inside a `StoreSlice` not committed yet, the live state with the slice merged into it),
+//   and whose selector picks a part of it. It keeps the last selected value, and compares the
+//   new one with it (`Object.is` for `useSelect`, value by value for `useObject`), so an
+//   unchanged selection doesn't render the component.
 //
 // - `useIsWaiting`, `useIsFailed` and `useExceptionFor` read a boolean or an exception from the
 //   store, and subscribe to the status changes of the actions. `useIsStoreReady` reads a boolean
@@ -56,8 +58,8 @@ import { Evt, EvtState } from './Evt';
  * Prefer `useSelect` because it's shorter.
  */
 export function useSelect<St, T>(selector: (state: St) => T): T {
-  const {store, getServerState} = useStoreContext<St>();
-  return useSyncExternalStoreWithSelector(store._subscribeState, store._getState, getServerState, selector, Object.is);
+  const {store, getState, getServerState} = useStoreContext<St>();
+  return useSyncExternalStoreWithSelector(store._subscribeState, getState, getServerState, selector, Object.is);
 }
 
 /**
@@ -112,8 +114,8 @@ export function useSelector<St, T>(selector: (state: St) => T): T {
  * so you can use it in the dependencies of an effect, or pass it to a memoized component.
  */
 export function useObject<St, T extends UseObjectValue>(selector: (state: St) => T): T {
-  const {store, getServerState} = useStoreContext<St>();
-  return useSyncExternalStoreWithSelector(store._subscribeState, store._getState, getServerState, selector, _shallowEqual);
+  const {store, getState, getServerState} = useStoreContext<St>();
+  return useSyncExternalStoreWithSelector(store._subscribeState, getState, getServerState, selector, _shallowEqual);
 }
 
 // What a `useObject` selector can return. A class instance is not assignable to a `Record`,
@@ -1085,12 +1087,12 @@ function useEventHandler<St, T>(
   }, [evt, store]);
 }
 
-function useStoreContext<St>(): { store: Store<St>, getServerState: () => St } {
+function useStoreContext<St>(): { store: Store<St>, getState: () => St, getServerState: () => St } {
   const context = useContext<StoreContextType<St>>(StoreContext) as StoreContextType<St>;
   if (!context?.store) {
     throw new StoreException('useStore must be used within a StoreProvider');
   }
-  return context as { store: Store<St>, getServerState: () => St };
+  return context as { store: Store<St>, getState: () => St, getServerState: () => St };
 }
 
 function useStoreFromContext<St>(): Store<St> {
