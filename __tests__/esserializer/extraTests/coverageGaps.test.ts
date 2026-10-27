@@ -178,13 +178,47 @@ describe('ESSerializer coverage gaps', () => {
       }
     }
 
-    test('keep primitive read-only values, and only copy writable nested fields', () => {
+    test('get the saved values, and stay read-only', () => {
       const text = '{"*type":"WithReadOnly","id":"saved","config":{"fixed":2,"free":3,"added":4}}';
       const result: any = ESSerializer.deserialize(text, [WithReadOnly]);
-      expect(result.id).toBe('orig');
-      expect(result.config.fixed).toBe(1);
+      expect(result).toBeInstanceOf(WithReadOnly);
+      expect(result.id).toBe('saved');
+      expect(result.config.fixed).toBe(2);
       expect(result.config.free).toBe(3);
       expect(result.config.added).toBe(4);
+      expect(Object.getOwnPropertyDescriptor(result, 'id')!.writable).toBe(false);
+      expect(Object.getOwnPropertyDescriptor(result, 'config')!.writable).toBe(false);
+      expect(Object.getOwnPropertyDescriptor(result.config, 'fixed')!.writable).toBe(false);
+      expect(Object.getOwnPropertyDescriptor(result.config, 'free')!.writable).toBe(true);
+    });
+
+    test('keep the constructor values, and their objects, when they are the saved values', () => {
+      class FrozenPair {
+        constructor(readonly a: number = 1, readonly b: object = Object.freeze({ c: 2 })) {
+          Object.freeze(this);
+        }
+      }
+      const text = '{"*type":"FrozenPair","a":1,"b":{"c":2}}';
+      const result: any = ESSerializer.deserialize(text, [FrozenPair]);
+      expect(result).toBeInstanceOf(FrozenPair);
+      expect({ a: result.a, c: result.b.c }).toEqual({ a: 1, c: 2 });
+      expect(Object.isFrozen(result)).toBe(true);
+      expect(Object.isFrozen(result.b)).toBe(true);
+    });
+
+    test('of a class that extends a built-in class keep the constructor values', () => {
+      class FrozenRegistry extends Map<string, number> {
+        constructor(readonly label: string = 'default') {
+          super();
+          Object.freeze(this);
+        }
+      }
+      const original = new FrozenRegistry('saved');
+      original.set('a', 1);
+      const result: any = ESSerializer.deserialize(ESSerializer.serialize(original), [FrozenRegistry]);
+      expect(result).toBeInstanceOf(FrozenRegistry);
+      expect(result.get('a')).toBe(1);
+      expect(result.label).toBe('default');
     });
   });
 });

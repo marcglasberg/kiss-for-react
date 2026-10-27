@@ -1195,7 +1195,7 @@ export class Store<St> {
     this._removeAllFreshKeys();
     this._removeAllThrottleLocks();
     this._removeAllDebounceLocks();
-    this._stopAllPolling();
+    this._stopAllPolling('The internal action props were cleared, so the action did not start polling.');
     this._discardAllSequentialQueues();
     this._removeAllOptimisticSyncKeys();
     this._clearCount++;
@@ -1375,6 +1375,14 @@ export class Store<St> {
   // cycle has no timer, but polling is still active.
   private _pollingCycles: Array<PollingCycle> = [];
 
+  // The actions with `Poll.start` or `Poll.runNowAndRestart` that were dispatched, but have not
+  // started polling yet (because they are still in an async `before()`, for example). If their
+  // polling key is stopped (`Poll.stop`), or all polling is stopped (`stopAllPolling()`,
+  // `clearInternalActionProps()`) before they start, they are aborted, so that they don't start
+  // polling later. An action leaves the set when it reaches the polling reducer, or when it's
+  // aborted. Actions that finish before that are collected, since this is a weak set.
+  private readonly _pendingPollingStarts = new WeakSet<KissAction<St>>();
+
   // The errors thrown by `dispatchSync` when the action is ASYNC. See `_notSyncError`.
   private readonly _notSyncErrors = new WeakSet<StoreException>();
 
@@ -1391,6 +1399,12 @@ export class Store<St> {
   // the ones that have one.
   private readonly _props = new Map<unknown, unknown>();
   private readonly _propDisposers = new Map<unknown, PropDispose>();
+
+  // The async disposals of props that are still running: the ones started by `disposeProp`,
+  // `disposeProps`, `logOut`, a `setProp` that replaced a value, and `dispose()` itself.
+  // `dispose()` waits for all of them, so that the dependencies and the configuration are
+  // closed only after the resources that may use them. Each one removes itself when it settles.
+  private readonly _pendingDisposals = new Set<Promise<void>>();
 
   // True after `dispose()` was called. A disposed store doesn't accept actions or props.
   private _disposed = false;
@@ -2251,6 +2265,7 @@ export class Store<St> {
 
     action._changeStatus({isDispatched: true});
     action._clearCountAtDispatch = this._clearCount;
+    if (this._startsPolling(action)) this._pendingPollingStarts.add(action);
 
     // Note the store was already injected into the action by `_mustAbortDispatch`.
 
@@ -2808,7 +2823,9 @@ export class Store<St> {
       async function _wrapReduceDebounceAsync(): AsyncReducer<St> {
         // In a server store, the debounce period is not waited: there is no user input to
         // merge on the server. The action is still ASYNC, as any debounced action.
-        const isLast = store._isServer || await store._waitDebounce(action['debounceLockBuilder'](), debounceMillis);
+        const isLast = store._isServer || await store._waitDebounce(action['debounceLockBuilder'](), debounceMillis, action.abortSignal);
+        // An action aborted during the debounce period doesn't run its reducer.
+        if (action.isAborted) throw store._abortError(action);
         if (!isLast) return null;
         if (store._mustAbortAfterDebounce(action))
           throw kissAbort('The non-reentrant key, throttle lock or fresh-key was taken when the debounce period ended.');
@@ -2828,27 +2845,29 @@ export class Store<St> {
   /**
    * Resolves with `true` after the debounce period, if no other action with the same lock was
    * dispatched meanwhile. Otherwise, resolves with `false` as soon as the other action is
-   * dispatched (or the locks are removed).
+   * dispatched (or the locks are removed), or as soon as the given `signal` of the waiting
+   * action is aborted. An aborted action also removes its lock, so that the next action with
+   * the same lock waits for its own debounce period.
    */
-  private _waitDebounce(lock: any, debounceMillis: number): Promise<boolean> {
+  private _waitDebounce(lock: any, debounceMillis: number, signal: AbortSignal): Promise<boolean> {
     const index = this._debounceLocks.findIndex(entry => _isSameNonReentrantKey(entry.lock, lock));
     if (index !== -1) this._debounceLocks.splice(index, 1)[0].cancel();
 
     return new Promise<boolean>(resolve => {
-      const timer = setTimeout(() => {
+      const end = (isLast: boolean) => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
         this._debounceLocks = this._debounceLocks.filter(other => other !== entry);
-        resolve(true);
-      }, capTimeoutMillis(debounceMillis));
-
-      const entry = {
-        lock,
-        cancel: () => {
-          clearTimeout(timer);
-          resolve(false);
-        },
+        resolve(isLast);
       };
+      const onAbort = () => end(false);
 
+      const timer = setTimeout(() => end(true), capTimeoutMillis(debounceMillis));
+      const entry = { lock, cancel: () => end(false) };
       this._debounceLocks.push(entry);
+
+      if (signal.aborted) end(false);
+      else signal.addEventListener('abort', onAbort);
     });
   }
 
@@ -2880,12 +2899,11 @@ export class Store<St> {
     function _wrapReducePolling(reduce: () => ReduxReducer<St>): () => ReduxReducer<St> {
 
       function _reducePolling(): ReduxReducer<St> {
-        // If all polling was stopped (by `clearInternalActionProps()`, `setShutDown(true)` or
-        // `logOut()`) after the action was dispatched, for example while it was in an async
-        // `before()`, it must not start polling again. It's aborted, like retry is.
-        if ((action.poll === Poll.start || action.poll === Poll.runNowAndRestart)
-          && store._wereInternalActionPropsCleared(action))
-          throw kissAbort('The internal action props were cleared, so the action did not start polling.');
+        // The action is about to start polling (or to find polling already active), so stopping
+        // the polling from now on must not abort it: its immediate run still finishes. Note that
+        // if the polling was stopped while the action was in an async `before()`, the action was
+        // aborted, and the store doesn't call this reducer (see `_getWrapReduce`).
+        store._pendingPollingStarts.delete(action);
 
         // In a server store, `Poll.start` and `Poll.runNowAndRestart` run the action once, like
         // `Poll.once`, and start no polling cycle: the server renders once, and nothing would
@@ -2905,6 +2923,10 @@ export class Store<St> {
 
           case Poll.stop:
             if (cycle !== undefined) store._stopPollingCycle(cycle);
+            // The actions of this key that were dispatched before, but had not started polling
+            // yet (they are in an async `before()`, for example) must not start polling later.
+            store._abortPendingPollingStarts(
+              'Polling was stopped with Poll.stop, so the action did not start polling.', key);
             return null;
 
           case Poll.runNowAndRestart:
@@ -3043,15 +3065,40 @@ export class Store<St> {
   /**
    * For Kiss internal use only. Use `stopAllPolling()` in the action instead.
    * Stops all polling cycles. Runs that are in progress still finish, but no new ticks start.
+   * The actions with `Poll.start` or `Poll.runNowAndRestart` that were dispatched before, but
+   * had not started polling yet (they are in an async `before()`, for example) are aborted, so
+   * that they don't start polling later. The `reason` is the message of their abort.
    * @internal
    */
-  _stopAllPolling(): void {
+  _stopAllPolling(reason = 'All polling was stopped, so the action did not start polling.'): void {
     const cycles = this._pollingCycles;
     this._pollingCycles = [];
     for (const cycle of cycles) {
       if (cycle.timer !== null) clearTimeout(cycle.timer);
       cycle.timer = null;
       cycle.cancelWait?.();
+    }
+    this._abortPendingPollingStarts(reason);
+  }
+
+  // True if the action starts polling when its reducer runs: it has `Poll.start` or
+  // `Poll.runNowAndRestart`, in a store that is not a server store (where they run once).
+  private _startsPolling(action: KissAction<St>): boolean {
+    return !this._isServer && (action.poll === Poll.start || action.poll === Poll.runNowAndRestart);
+  }
+
+  /**
+   * Aborts the actions in progress that would start polling when their reducer runs, but have
+   * not run it yet (see `_pendingPollingStarts`). With a `key`, only the actions of that polling
+   * key. Without it, all of them. The aborted action finishes silently, with
+   * `isDispatchAborted: true`, without running its reducer (see `_getWrapReduce`).
+   */
+  private _abortPendingPollingStarts(reason: string, key?: any): void {
+    for (const action of this._actionsInProgress) {
+      if (!this._pendingPollingStarts.has(action)) continue;
+      if (key !== undefined && !_isSameNonReentrantKey(action['computePollingKey'](), key)) continue;
+      this._pendingPollingStarts.delete(action);
+      action._abort(reason);
     }
   }
 
@@ -3124,6 +3171,10 @@ export class Store<St> {
 
             Store._logLazy(() => `${attempt} ${action}${attemptNumber}.`);
           }
+
+          // An action aborted while the internet was checked doesn't run its reducer. (The wait
+          // between attempts already stops when the action is aborted.)
+          if (action.isAborted) throw store._abortError(action);
 
           // With unlimitedRetryCheckInternet, `dispatchSync` throws before the reducer runs for
           // the first time (when the internet is checked). Since its result would be ignored,
@@ -4051,7 +4102,8 @@ export class Store<St> {
   /**
    * Internal: Disposes the value of a prop, as described in `setProp`. Returns a promise if the
    * disposal is async, or `null`. Neither throws nor rejects: the errors are reported with
-   * `_reportDisposeError`.
+   * `_reportDisposeError`. An async disposal is kept in `_pendingDisposals` until it settles,
+   * so that `dispose()` waits for it even if the caller discards the returned promise.
    */
   private _disposeValue(key: unknown, value: unknown, dispose: PropDispose | undefined): Promise<void> | null {
     const what = `Disposing the prop ${Store._describeKey(key)} threw an error`;
@@ -4066,10 +4118,13 @@ export class Store<St> {
 
     if (!Store._isPromiseLike(result)) return null;
 
-    return Promise.resolve(result).then(
+    const promise: Promise<void> = Promise.resolve(result).then(
       () => undefined,
       (error) => this._reportDisposeError(error, what),
     );
+    this._pendingDisposals.add(promise);
+    void promise.then(() => this._pendingDisposals.delete(promise));
+    return promise;
   }
 
   /**
@@ -4303,6 +4358,14 @@ export class Store<St> {
     this._focus.dispose();
     this._online.dispose();
     await this._disposeProps();
+
+    // Also waits for the async disposals that started before (a prop removed with
+    // `disposeProp`, `disposeProps` or `logOut`, or replaced with `setProp`) and are still
+    // running, and for the ones started meanwhile (a disposal may dispose other props, and a
+    // prop set during the disposal is disposed right away). The loop ends when no disposal is
+    // running, so that the dependencies are closed only after all the resources.
+    while (this._pendingDisposals.size > 0) await Promise.all([...this._pendingDisposals]);
+
     await this._disposeInjected(this._dependencies, 'the dependencies');
     await this._disposeInjected(this._configuration, 'the configuration');
   }

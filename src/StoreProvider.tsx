@@ -91,7 +91,9 @@ export interface StoreSliceProps {
    * The slice of state the server loaded for this route: a plain, serializable object (in
    * Next.js, it's a prop a server component gives to this client component). It's merged into
    * the store state once, when the component mounts; to merge it again, remount the component
-   * with a new `key`. A later change of this prop, without a new key, is ignored.
+   * with a new `key`. A later change of this prop, without a new key, is ignored. If the
+   * `StoreProvider` above switches to another store, the slice is merged into that store too,
+   * once, and the components inside it read that store.
    */
   state: object;
 
@@ -134,7 +136,9 @@ const useIsomorphicLayoutEffect = (typeof window === 'undefined') ? useEffect : 
  * or a shallow merge for plain-object states. The slice is merged once per mount: use `key`
  * (the entity id, for example) to merge again when the route's data changes. If the store is
  * not ready yet (a persistor still reading), the slice is merged again into the persisted
- * state when it arrives.
+ * state when it arrives. If the `StoreProvider` above switches to another store while the slice
+ * stays mounted, the slice is merged into that store too (once per store), and the components
+ * inside it read and change that store.
  */
 export function StoreSlice(props: StoreSliceProps): React.ReactElement {
   const { state: slice, children } = props;
@@ -142,10 +146,23 @@ export function StoreSlice(props: StoreSliceProps): React.ReactElement {
   const store = parent.store;
   if (store === null) throw new StoreException('StoreSlice must be used within a StoreProvider.');
 
-  // Once per mount. The server state of the subtree is the parent's server state with the slice:
-  // what the server HTML shows for this route. (React calls this initializer twice in
-  // StrictMode, and keeps one of the results.)
-  const [applied] = useState(() => new AppliedSlice(store, parent.getServerState(), slice));
+  // Once per mount and store. Usually there's only one store. If the provider switches to another
+  // store while this slice stays mounted, the components inside it must read the new store, and
+  // still find the route's data there, so the slice is merged into the new store too (its
+  // current `state` prop: the latest data of the route, and a new store has no local changes to
+  // keep). If the provider switches back to a store this slice already used, the slice is not
+  // merged into it again, so the changes made in that store since then are kept.
+  //
+  // The server state of the subtree is the parent's server state with the slice: what the
+  // server HTML shows for this route. (React calls the `useState` initializer twice in
+  // StrictMode, and keeps one of the results. An `AppliedSlice` created in a render that React
+  // throws away is harmless: on the client, only `CommitSlice` changes the store.)
+  const [appliedByStore] = useState(() => new WeakMap<Store<any>, AppliedSlice<any>>());
+  let applied = appliedByStore.get(store);
+  if (applied === undefined) {
+    applied = new AppliedSlice(store, parent.getServerState(), parent.getState, slice);
+    appliedByStore.set(store, applied);
+  }
 
   const value = useMemo<StoreContextType<any>>(
     () => ({ store, getServerState: applied.getServerState, getState: applied.getState }),
@@ -170,13 +187,20 @@ export function StoreSlice(props: StoreSliceProps): React.ReactElement {
  * On the client, the live store is not changed while React renders: React may throw the render
  * away (a cancelled transition, a route that suspends and never commits), and a change made in
  * it would stay in the store and show up in the other components later. Instead, until the
- * route commits, the components inside the slice read the live state with the slice merged
- * into it (`getState`, cached by the live state, since `useSyncExternalStore` needs the same
- * object while nothing changed), and the other components still read the live state. When the
- * route commits, `commit` merges the slice into the live store, in a layout effect that runs
- * before the effects of the route's components, and publishes the change, so that the other
- * components catch up before the browser paints. From then on, the components inside the
- * slice read the live state, which has the slice.
+ * route commits, the components inside the slice read the parent's state with the slice merged
+ * into it (`getState`, cached by the parent's state, since `useSyncExternalStore` needs the
+ * same object while nothing changed), and the other components still read the parent's state.
+ * When the route commits, `commit` merges the slice into the live store, in a layout effect
+ * that runs before the effects of the route's components, and publishes the change, so that the
+ * other components catch up before the browser paints. From then on, the components inside the
+ * slice read the parent's state, which has the slice.
+ *
+ * The parent's state is what the context above the slice gives: below a `StoreProvider`, the
+ * live state; below another `StoreSlice`, the `getState` of that slice. So, when nested slices
+ * mount in the same render (in the Next.js app router, a layout and its page, on client-side
+ * navigation), the components inside the inner slice read the data of both slices from their
+ * first render. The outer slice commits first (its `CommitSlice` comes before the inner slice),
+ * then the inner one, so the live store gets both, and the inner one wins for a key both have.
  */
 class AppliedSlice<St> {
   private readonly serverState: St;
@@ -187,6 +211,7 @@ class AppliedSlice<St> {
   constructor(
     private readonly store: Store<St>,
     parentServerState: St,
+    private readonly parentGetState: () => St,
     private readonly slice: object,
   ) {
     this.serverState = store._mergeSlice(parentServerState, slice);
@@ -199,7 +224,7 @@ class AppliedSlice<St> {
   readonly getServerState = (): St => this.serverState;
 
   readonly getState = (): St => {
-    const state = this.store._getState();
+    const state = this.parentGetState();
     if (this.isCommitted) return state;
     if (this.base !== state) {
       this.base = state;

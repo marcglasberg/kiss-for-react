@@ -183,13 +183,32 @@ function _tryToConstruct(classObj: any, isEs6Class: boolean, parameters: any[]):
 }
 
 /**
- * Copies the deserialized values of `parsedObj` into `instance`.
+ * Copies the deserialized values of `parsedObj` into `instance`, and returns it.
+ *
  * Properties with a getter or a setter (own or inherited from the class), and read-only
- * properties with primitive values, keep the value the constructor gave them. Own read-only
+ * properties inherited from the class, keep the value the constructor gave them. Own read-only
  * properties with object values are updated in place (see `_copyInPlace`).
+ *
+ * Some saved values can't be set in `instance`: a primitive value in an own read-only property
+ * (for example, when the constructor calls `Object.freeze(this)`), or a new property in an
+ * object that can't get new properties. Then a copy of `instance` with these values is returned
+ * instead (see `_copyWithValues`).
  */
-function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: ClassMapping, options: DeserializeOptions) {
+function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: ClassMapping, options: DeserializeOptions): any {
   const { ignoreProperties, rawProperties } = options;
+
+  // The values that can't be set in `instance`.
+  const valuesForCopy = new Map<string, any>();
+
+  const setValue = (key: string, value: any) => {
+    const own = Object.getOwnPropertyDescriptor(instance, key);
+    const canSet = own ? own.writable !== false : Object.isExtensible(instance);
+    if (canSet) {
+      setOwnProperty(instance, key, value);
+    } else if (!own || !Object.is(own.value, value)) {
+      valuesForCopy.set(key, value);
+    }
+  };
 
   for (const savedKey in parsedObj) {
     if (savedKey === TYPE_FIELD || savedKey === VALUE_FIELD) {
@@ -203,7 +222,7 @@ function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: Cl
 
     const value = parsedObj[savedKey];
     if (rawProperties?.includes(key)) {
-      setOwnProperty(instance, key, JSON.stringify(value));
+      setValue(key, JSON.stringify(value));
       continue;
     }
 
@@ -214,35 +233,89 @@ function _copyDeserializedValues(instance: any, parsedObj: any, classMapping: Cl
         continue;
       }
       if (descriptor.writable === false) {
-        // An inherited object is shared by all instances, so it's not changed.
-        if (!notObject(value) && Object.prototype.hasOwnProperty.call(instance, key)) {
-          _copyInPlace(instance[key], value, classMapping);
+        // An inherited value is shared by all instances, so it's not changed.
+        if (Object.prototype.hasOwnProperty.call(instance, key)) {
+          const current = instance[key];
+          setValue(key, notObject(current) || _isSavedPrimitive(value)
+            ? deserializeFromParsedObjWithClassMapping(value, classMapping)
+            : _copyInPlace(current, value, classMapping));
         }
         continue;
       }
     }
 
-    setOwnProperty(instance, key, deserializeFromParsedObjWithClassMapping(value, classMapping));
+    setValue(key, deserializeFromParsedObjWithClassMapping(value, classMapping));
   }
-  return instance;
+
+  return valuesForCopy.size === 0 ? instance : _copyWithValues(instance, valuesForCopy);
+}
+
+/** Returns true if the saved `value` is a primitive, or a primitive JSON can't represent, like `NaN`. */
+function _isSavedPrimitive(value: any): boolean {
+  if (notObject(value)) {
+    return true;
+  }
+  const type = value[TYPE_FIELD];
+  return type === TYPE_UNDEFINED || type === TYPE_NUMBER || type === TYPE_BIGINT;
 }
 
 /**
- * Copies the saved `source` into the existing `target`, in place: the built-in data (like the
- * entries of a Map), and the fields, like `_copyDeserializedValues` does.
- * If `target` is a primitive, it's kept as is.
+ * Copies the saved `source` into the existing object `target`, in place: the built-in data
+ * (like the entries of a Map), and the fields, like `_copyDeserializedValues` does.
+ * Returns `target`, or a copy of it, if some saved values can't be set in it
+ * (see `_copyDeserializedValues`).
  */
-function _copyInPlace(target: any, source: any, classMapping: ClassMapping) {
-  if (notObject(target)) {
-    return;
-  }
-
+function _copyInPlace(target: object, source: any, classMapping: ClassMapping): any {
   if (VALUE_FIELD in source) {
     const deserializeNested = (value: any) => deserializeFromParsedObjWithClassMapping(value, classMapping);
     findInheritedBuiltinType(target)?.fill?.(target, source[VALUE_FIELD], deserializeNested);
   }
 
-  _copyDeserializedValues(target, source, classMapping, {});
+  return _copyDeserializedValues(target, source, classMapping, {});
+}
+
+/**
+ * Returns a copy of `instance`, with the given `values` in place of its own properties, or as
+ * new properties. The copy has the same prototype and the same property attributes, and it's
+ * frozen, sealed, or can't get new properties, if `instance` is.
+ *
+ * The copy is created without calling the constructor, as `_createInstance` does when the
+ * constructor throws. So it doesn't have the private fields (`#field`) of the class.
+ *
+ * An instance of a class that extends a built-in class (like a Map) keeps its built-in data
+ * where a copy can't have it. So it is returned as is, without the `values`.
+ */
+function _copyWithValues(instance: object, values: Map<string, any>): object {
+  if (findInheritedBuiltinType(instance)) {
+    return instance;
+  }
+
+  const copy = Object.create(Object.getPrototypeOf(instance));
+  const descriptors: Record<PropertyKey, PropertyDescriptor> = Object.getOwnPropertyDescriptors(instance);
+
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptors[key];
+    if (typeof key === 'string' && values.has(key)) {
+      descriptor.value = values.get(key);
+    }
+    Object.defineProperty(copy, key, descriptor);
+  }
+
+  for (const [key, value] of values) {
+    if (!Object.prototype.hasOwnProperty.call(descriptors, key)) {
+      Object.defineProperty(copy, key, { value, writable: true, enumerable: true, configurable: true });
+    }
+  }
+
+  if (Object.isFrozen(instance)) {
+    Object.freeze(copy);
+  } else if (Object.isSealed(instance)) {
+    Object.seal(copy);
+  } else if (!Object.isExtensible(instance)) {
+    Object.preventExtensions(copy);
+  }
+
+  return copy;
 }
 
 /**

@@ -59,7 +59,12 @@ export enum Poll {
    */
   start = 'start',
 
-  /** Stop polling (cancels the timer and does not run the action). */
+  /**
+   * Stop polling (cancels the timer and does not run the action).
+   * Also aborts the actions of the same polling key that were dispatched with `Poll.start` or
+   * `Poll.runNowAndRestart`, but had not started polling yet (for example, because they were
+   * still in an async `before()`), so that they don't start polling later.
+   */
   stop = 'stop',
 
   /**
@@ -2394,9 +2399,13 @@ export abstract class KissAction<St> {
    * each key, call `stopAllPolling()` from any action. Polling also stops when you call
    * `store.clearInternalActionProps()`, or `store.logOut()`, or when the store is shut down
    * with `store.setShutDown(true)`, and is not restarted if you later turn the shutdown off.
-   * This includes the actions with `Poll.start` or `Poll.runNowAndRestart` that were
-   * dispatched before, but had not started polling yet (for example, because they were still
-   * in an async `before()`). They don't start polling, and are aborted.
+   *
+   * Stopping polling, in any of these ways or with `Poll.stop`, also stops the actions with
+   * `Poll.start` or `Poll.runNowAndRestart` that were dispatched before, but had not started
+   * polling yet (for example, because they were still in an async `before()`). They don't start
+   * polling, and are aborted (`Poll.stop` only aborts the ones of its own polling key). This
+   * way, a component that stops polling when it unmounts doesn't leave polling running when its
+   * start was still pending.
    *
    * You can display loading states and errors in your components by tracking the action
    * class that does the work:
@@ -2548,7 +2557,8 @@ export abstract class KissAction<St> {
    * - `Poll.start`: Starts polling and runs `reduce` immediately.
    *   If polling is already active for this key, does nothing.
    *
-   * - `Poll.stop`: Cancels the polling for this key and skips `reduce`.
+   * - `Poll.stop`: Cancels the polling for this key and skips `reduce`. Also aborts the actions
+   *   of this key that would start polling, but had not started it yet.
    *
    * - `Poll.runNowAndRestart`: Runs `reduce` immediately and restarts the polling timer from
    *   that moment. If polling is not active, behaves like `Poll.start`.
@@ -2800,7 +2810,10 @@ export abstract class KissAction<St> {
   /**
    * Stops all polling at once, for all polling keys, as if `Poll.stop` was dispatched for each
    * of them. This is probably useful during logout or similar scenarios. Runs that are already
-   * in progress still finish, but no new ticks are dispatched.
+   * in progress still finish, but no new ticks are dispatched. The actions with `Poll.start` or
+   * `Poll.runNowAndRestart` that were dispatched before, but had not started polling yet (for
+   * example, because they were still in an async `before()`) are aborted, so that they don't
+   * start polling later.
    */
   stopAllPolling(): void {
     this.store._stopAllPolling();
@@ -4525,6 +4538,14 @@ export class ActionStatus {
  * doesn't fail, and doesn't show errors. It also doesn't roll back the optimistic value, and
  * doesn't reload, since that would change the state of the next user.
  *
+ * ## Aborting
+ *
+ * When the command is aborted (by `abort()`, or by `store.abort(ActionType)`) while its server
+ * call runs, its result is ignored. When the call finishes, the server response is not applied,
+ * the optimistic value is not rolled back, nothing is reloaded, and the call is not retried. The
+ * optimistic value stays in the state. The command finishes silently, with
+ * `isDispatchAborted: true`.
+ *
  * ## CheckInternet
  *
  * When combined with `checkInternet`, if there is no internet: no optimistic state is
@@ -4818,6 +4839,10 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
       // the state of the next user. It's aborted, so it doesn't fail, and doesn't show errors.
       if (this._hasStoppedRetrying) throw error;
 
+      // When the command was aborted, its result is ignored, so it doesn't roll back and
+      // doesn't reload. The store finishes it silently.
+      if (this.isAborted) throw error;
+
       commandFailed = true;
       commandError = error;
 
@@ -4837,6 +4862,10 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
         }
       }
     }
+
+    // When the command was aborted while its server call ran, its result is ignored, so it
+    // doesn't apply the server response, and doesn't reload. The store finishes it silently.
+    this.abortSignal.throwIfAborted();
 
     // Applies the server response, if any. This is outside the `try` above, because the command
     // succeeded: if applying the response throws, the action fails with that error, but there
@@ -4862,6 +4891,9 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
 
         if (doReload) {
           const reloadResult = await this.reloadFromServer();
+
+          // The command was aborted while reloading, so the reload result is ignored.
+          this.abortSignal.throwIfAborted();
 
           // Reads the current value again, because the state may have changed while reloading.
           const apply = this.shouldApplyReload({
@@ -4909,6 +4941,8 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
       } catch (error) {
         // An aborted command is not retried.
         if (error instanceof AbortDispatchException) throw error;
+        // A command aborted with `abort()` or `store.abort()` is not retried either.
+        if (this.isAborted) throw error;
         // When `dispatchSync` threw because the command is ASYNC, its result is ignored, so
         // there's no point retrying.
         if (this._isDiscardedByDispatchSync) throw error;
@@ -4920,8 +4954,10 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
         if (!this.shouldRetry(error, this._retry.attempts)) throw error;
         try {
           // It also stops waiting right away when `clearInternalActionProps()` is called.
+          // And when the command is aborted, in which case it keeps the abort error.
           await this.store._waitRetryDelay(this, this._nextRetryDelay());
-        } catch {
+        } catch (waitError) {
+          if (this.isAborted && !this.store._wereInternalActionPropsCleared(this)) throw waitError;
           throw this._stopRetrying();
         }
       }
@@ -5211,6 +5247,10 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
  * `true` meanwhile. The dispatches made while the key is taken apply their optimistic value,
  * and then finish right away.
  *
+ * This includes a dispatch made while the server response is applied (for example, by
+ * `store.dispatchWhen`, when the state with the response meets its condition). If that dispatch
+ * changed the value, the dispatch that took the key sends one more request, with the new value.
+ *
  * ## Clearing
  *
  * `store.clearInternalActionProps()` (which is also called by `store.setShutDown(true)`)
@@ -5219,6 +5259,16 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
  * keys were released stops when that request finishes: it doesn't send follow-up requests,
  * doesn't apply the server response, and doesn't call `onFinish`. It's aborted with an
  * `AbortDispatchException`, so it doesn't fail, and doesn't show errors.
+ *
+ * ## Aborting
+ *
+ * When the dispatch that sends the requests is aborted (by `abort()`, or by
+ * `store.abort(ActionType)`) while a request is in flight, it stops when that request finishes,
+ * or when the request rejects because of the `abortSignal`. It releases the key, doesn't send
+ * follow-up requests, doesn't apply the server response, and doesn't call `onFinish`. It
+ * finishes silently, with `isDispatchAborted: true`. The value in the state is not changed, so
+ * a local change made while the request was in flight may not reach the server. The next
+ * dispatch of the key takes the key, and sends its own value.
  *
  * Notes:
  * - It can be combined with `checkInternet`, both `{ dialog: true | false }` and
@@ -5403,7 +5453,8 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    *
    * Note `onFinish` is called in both success and failure scenarios. On success, it runs only
    * after the state is stable for this key. On failure, it runs immediately after the request
-   * fails (there is no further stabilization or follow-up).
+   * fails (there is no further stabilization or follow-up). It's not called when the action is
+   * aborted, or when `store.clearInternalActionProps()` released the key.
    *
    * Important: The key is released *before* `onFinish` runs. This means new dispatches for the
    * same key may start a new request while `onFinish` is still running.
@@ -5487,6 +5538,10 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    * If they are different, it means the state was changed after we sent the request, so we
    * should send another request with the new value.
    *
+   * It's also called after the server response is applied, if applying it caused another
+   * change of the state (for example, a save dispatched by `store.dispatchWhen`). Then, the
+   * `sentValue` is the value that the server response put in the state.
+   *
    * Values are compared with `Object.is` (which is the same as `===`, except that `NaN` is equal
    * to `NaN`). So, make sure `getValueFromState` returns the same object you applied, or
    * override this method if you need custom equality logic.
@@ -5544,28 +5599,53 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
         // in flight (for example, on logout). So, stop here.
         if (!this.store._hasOptimisticSyncKey(this)) throw this._clearedError();
 
-        const stateValue = this.getValueFromState(this.state);
+        // The action was aborted while the request was in flight, so its result is ignored: it
+        // doesn't apply the server response, and doesn't send follow-up requests.
+        this.abortSignal.throwIfAborted();
+
+        let stateValue = this.getValueFromState(this.state);
 
         // If the state changed while the request was in flight, sends a follow-up request with
         // the current value, without applying the server response, since the state isn't stable.
-        if (this.ifShouldSendAnotherRequest({ stateValue, sentValue, requestCount })) {
-          if ((this.maxFollowUpRequests !== -1) && (requestCount > this.maxFollowUpRequests))
-            throw new StoreException(
-              `Too many follow-up requests in action ${this.constructor.name} (> ${this.maxFollowUpRequests}).`);
-          sentValue = stateValue;
-          continue;
-        }
+        let sendAnother = this.ifShouldSendAnotherRequest({ stateValue, sentValue, requestCount });
 
         // The state is stable for this key, so we apply the server response, if any.
-        if (serverResponse !== null && serverResponse !== undefined) {
+        if (!sendAnother && serverResponse !== null && serverResponse !== undefined) {
           const newState = this.applyServerResponseToState(this.state, serverResponse);
-          if (newState !== null) this._applyState(newState);
+          if (newState !== null) {
+            this._applyState(newState);
+
+            // Applying the response may have changed the state again (for example, by a save of
+            // this key dispatched by `store.dispatchWhen`). That save didn't send its value,
+            // since this dispatch holds the key. So, if the value changed, sends a follow-up.
+            if (this.state !== newState) {
+              stateValue = this.getValueFromState(this.state);
+              sendAnother = this.ifShouldSendAnotherRequest({
+                stateValue,
+                sentValue: this.getValueFromState(newState),
+                requestCount,
+              });
+            }
+          }
         }
 
-        break;
+        if (!sendAnother) break;
+
+        if ((this.maxFollowUpRequests !== -1) && (requestCount > this.maxFollowUpRequests))
+          throw new StoreException(
+            `Too many follow-up requests in action ${this.constructor.name} (> ${this.maxFollowUpRequests}).`);
+        sentValue = stateValue;
       }
     } catch (error) {
       if (!this.store._hasOptimisticSyncKey(this)) throw this._clearedError();
+
+      // An aborted action releases the key, but doesn't call `onFinish`, since its result is
+      // ignored. The store finishes it silently.
+      if (this.isAborted) {
+        this.store._releaseOptimisticSyncKey(this);
+        throw error;
+      }
+
       finishError = error;
     }
 
@@ -5803,6 +5883,13 @@ let _deviceId: number | undefined = undefined;
  * `onFinish`. It's aborted with an `AbortDispatchException`, so it doesn't fail, and doesn't
  * show errors.
  *
+ * ## Aborting
+ *
+ * As in `OptimisticSync`, when the dispatch that sends the requests is aborted (by `abort()`, or
+ * by `store.abort(ActionType)`) while a request is in flight, it stops when that request
+ * finishes. It releases the key, doesn't send follow-up requests, doesn't apply the server
+ * response, and doesn't call `onFinish`. It finishes silently, with `isDispatchAborted: true`.
+ *
  * Notes:
  * - It can be combined with `checkInternet`, both `{ dialog: true | false }` and
  *   `{ abort: true }`. If there is no internet, the optimistic value is not applied, and no
@@ -5862,10 +5949,6 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
   // The server revision informed by `informServerRevision()` during the current request, or
   // `null` if it was not informed. It's reset before each request.
   private _informedServerRevision: number | null = null;
-
-  // True if `informServerRevision()`, during the current request, found that the push applied
-  // while the request was in flight is older than the request. It's reset before each request.
-  private _wasPushStale = false;
 
   /**
    * Optionally, override `optimisticSyncKeyParams()` to differentiate the coalescing by the
@@ -6087,8 +6170,12 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
     // longer from a push. If a push was applied while the request was in flight, the server
     // applied it before this request, so the pushed value is stale.
     if (value > known.serverRevision) {
-      if (known.isPush) this._wasPushStale = true;
-      this.store._setOptimisticSyncRevision(this._key, { ...known, serverRevision: value, isPush: false });
+      this.store._setOptimisticSyncRevision(this._key, {
+        ...known,
+        serverRevision: value,
+        isPush: false,
+        hasStalePushValue: known.isPush || known.hasStalePushValue,
+      });
     }
   }
 
@@ -6099,7 +6186,8 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    *
    * Note `onFinish` is called in both success and failure scenarios. On success, it runs only
    * after the state is stable for this key. On failure, it runs immediately after the request
-   * fails (there is no further stabilization or follow-up).
+   * fails (there is no further stabilization or follow-up). It's not called when the action is
+   * aborted, or when `store.clearInternalActionProps()` released the key.
    *
    * Important: The key is released *before* `onFinish` runs. This means new dispatches for the
    * same key may start a new request while `onFinish` is still running.
@@ -6154,6 +6242,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
       localRevision,
       serverRevision: known.serverRevision,
       isPush: false,
+      hasStalePushValue: false,
       localValue: this.getValueFromState(newState),
     });
 
@@ -6186,7 +6275,6 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
 
         // Reset before each request, to detect if `informServerRevision()` was called.
         this._informedServerRevision = null;
-        this._wasPushStale = false;
 
         // Sends the value, and gets the server response (may be null or undefined).
         const serverResponse = await this.sendValueToServer(
@@ -6203,41 +6291,60 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
             '`informServerRevision()` inside `sendValueToServer()`. ' +
             'If you don\'t need server-push handling, use `OptimisticSync` instead.');
 
-        const known = this._revisionOf(this._key);
+        // The action was aborted while the request was in flight, so its result is ignored: it
+        // doesn't apply the server response, and doesn't send follow-up requests.
+        this.abortSignal.throwIfAborted();
 
-        // A push applied while the request was in flight is older than the request, so it
-        // overwrote the latest local value with a stale value. Unless a newer push arrived since
-        // then, puts the latest local value back in the state. It's then sent by the follow-up
-        // request, if any, and otherwise it's the value the server has.
-        if (this._wasPushStale && !known.isPush &&
-          !Object.is(this.getValueFromState(this.state), known.localValue))
-          this._applyState(this.applyOptimisticValueToState(this.state, known.localValue));
+        // A push applied while a request was in flight turned out to be older than that request
+        // (because of `informServerRevision()`, or of the echo of that request). So, the pushed
+        // value in the state is stale, and the latest local value is put back in the state. It's
+        // then sent by the follow-up request, if any, and otherwise it's the value the server has.
+        const known = this._revisionOf(this._key);
+        if (known.hasStalePushValue) {
+          this.store._setOptimisticSyncRevision(this._key, { ...known, hasStalePushValue: false });
+          if (!Object.is(this.getValueFromState(this.state), known.localValue))
+            this._applyState(this.applyOptimisticValueToState(this.state, known.localValue));
+        }
 
         // If the latest change was made locally (not by a push), and the local-revision advanced
         // since this request was sent, the user changed the value while the request was in
         // flight. So, sends a follow-up request with the current value, without applying the
         // server response, since the state isn't stable.
-        if (!known.isPush && (known.localRevision > sentLocalRevision)) {
-          if ((this.maxFollowUpRequests !== -1) && (requestCount > this.maxFollowUpRequests))
-            throw new StoreException(
-              `Too many follow-up requests in action ${this.constructor.name} (> ${this.maxFollowUpRequests}).`);
-          sentValue = this.getValueFromState(this.state);
-          sentLocalRevision = known.localRevision;
-          continue;
-        }
+        let sendAnother = this._hasLocalChangeAfter(sentLocalRevision);
 
         // The state is stable for this key, so we apply the server response, if any, but only
         // if it's not stale (no newer server revision is known, for example from a push).
-        if (serverResponse !== null && serverResponse !== undefined &&
-          informedServerRevision >= known.serverRevision) {
+        if (!sendAnother && serverResponse !== null && serverResponse !== undefined &&
+          informedServerRevision >= this._revisionOf(this._key).serverRevision) {
           const newState = this.applyServerResponseToState(this.state, serverResponse);
-          if (newState !== null) this._applyState(newState);
+          if (newState !== null) {
+            this._applyState(newState);
+
+            // Applying the response may have dispatched a save of this key (for example, by
+            // `store.dispatchWhen`). That save didn't send its value, since this dispatch holds
+            // the key. So, sends it in a follow-up request.
+            sendAnother = this._hasLocalChangeAfter(sentLocalRevision);
+          }
         }
 
-        break;
+        if (!sendAnother) break;
+
+        if ((this.maxFollowUpRequests !== -1) && (requestCount > this.maxFollowUpRequests))
+          throw new StoreException(
+            `Too many follow-up requests in action ${this.constructor.name} (> ${this.maxFollowUpRequests}).`);
+        sentValue = this.getValueFromState(this.state);
+        sentLocalRevision = this._revisionOf(this._key).localRevision;
       }
     } catch (error) {
       if (!this.store._hasOptimisticSyncKey(this)) throw this._clearedError();
+
+      // An aborted action releases the key, but doesn't call `onFinish`, since its result is
+      // ignored. The store finishes it silently.
+      if (this.isAborted) {
+        this.store._releaseOptimisticSyncKey(this);
+        throw error;
+      }
+
       finishError = error;
     }
 
@@ -6257,6 +6364,15 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    */
   private _revisionOf(key: any): _OptimisticSyncRevision {
     return _revisionOf(this.store, key, this.getServerRevisionFromState(this.state, key));
+  }
+
+  /**
+   * True if the latest change of the key of this dispatch was made locally (not by a push), and
+   * is newer than the given local-revision.
+   */
+  private _hasLocalChangeAfter(localRevision: number): boolean {
+    const known = this._revisionOf(this._key);
+    return !known.isPush && (known.localRevision > localRevision);
   }
 
   private _clearedError(): AbortDispatchException {
@@ -6305,6 +6421,10 @@ export type _OptimisticSyncRevision = {
   serverRevision: number,
   // True if the latest change of the key came from a push.
   isPush: boolean,
+  // True if the value in the state came from a push that turned out to be older than a request
+  // of this device (the server applied that request after the push). Then, the request that is
+  // in flight puts `localValue` back in the state when it finishes.
+  hasStalePushValue: boolean,
   // The value of the latest local change (read with `getValueFromState`), or `undefined` if
   // there was none. It's put back in the state when a push applied while a request was in
   // flight turns out to be older than that request.
@@ -6321,6 +6441,7 @@ function _revisionOf(store: Store<any>, key: any, serverRevisionFromState: numbe
     localRevision: kept?.localRevision ?? 0,
     serverRevision: Math.max(kept?.serverRevision ?? -1, serverRevisionFromState),
     isPush: kept?.isPush ?? false,
+    hasStalePushValue: kept?.hasStalePushValue ?? false,
     localValue: kept?.localValue,
   };
 }
@@ -6340,12 +6461,18 @@ function _revisionOf(store: Store<any>, key: any, serverRevisionFromState: numbe
  *
  * 1. If the push is not newer than the newest known server revision for the key (considering
  *    both the revision kept by Kiss, and `getServerRevisionFromState()`), it's stale or out of
- *    order, so it's ignored.
+ *    order, so it's ignored. There is one exception: the echo of the latest request of this
+ *    device, when the server response already informed its server revision (with
+ *    `informServerRevision`), but the state doesn't have that revision yet. It's applied as in
+ *    step 3, so that `applyServerPushToState` saves the server revision in the state.
  *
  * 2. If the push is the echo of an older request of this same device (the user changed the
  *    value again after that request was sent), it's not applied, since the state already has a
  *    newer local value. Its server revision is still recorded, but it doesn't count as a push,
- *    so the newer local value is still sent in a follow-up request.
+ *    so the newer local value is still sent in a follow-up request. If a push from another
+ *    device was applied before this echo, that push is older than the request, so its value is
+ *    stale: the request in flight puts the latest local value back in the state when it
+ *    finishes, and sends it in the follow-up request.
  *
  * 3. Otherwise (a push from another device, or the echo of the latest request of this device),
  *    it's applied with `applyServerPushToState`, and recorded as the latest change of the key.
@@ -6500,18 +6627,35 @@ export abstract class ServerPush<St> extends KissAction<St> {
         `Action ${this.constructor.name} pushed an invalid server revision: ` +
         `it must be a finite number, but got ${String(serverRevision)}.`);
 
-    const known = _revisionOf(this.store, key, this.getServerRevisionFromState(this.state, key));
+    const serverRevisionFromState = this.getServerRevisionFromState(this.state, key);
+    const known = _revisionOf(this.store, key, serverRevisionFromState);
+    const isSelf = (deviceId === OptimisticSyncWithPush.deviceId());
+
+    // The echo of the latest request of this device, whose server revision is already known,
+    // because the server response came first, and informed it with `informServerRevision`. But
+    // that revision is not in the state yet. So, the echo is applied, which lets
+    // `applyServerPushToState` save the revision in the state. Otherwise, a stale push could
+    // overwrite the value after the app restarts with the persisted state.
+    const isEchoOfInformedRevision = isSelf &&
+      (serverRevision === known.serverRevision) &&
+      (serverRevisionFromState < serverRevision) &&
+      (localRevision >= known.localRevision);
 
     // Ignores stale and out-of-order pushes.
-    if (serverRevision <= known.serverRevision) return null;
-
-    const isSelf = (deviceId === OptimisticSyncWithPush.deviceId());
+    if (serverRevision <= known.serverRevision && !isEchoOfInformedRevision) return null;
 
     // The echo of an older request of this device: the state already has a newer local value.
     // So, it only records the server revision. It does NOT apply the push, and does NOT count
     // as a push, since then the newer local value would not be sent in a follow-up request.
+    // If the value in the state came from a push, that push is older than this echo, so the
+    // pushed value is stale. Then, the request in flight puts the latest local value back.
     if (isSelf && (localRevision < known.localRevision)) {
-      this.store._setOptimisticSyncRevision(key, { ...known, serverRevision, isPush: false });
+      this.store._setOptimisticSyncRevision(key, {
+        ...known,
+        serverRevision,
+        isPush: false,
+        hasStalePushValue: known.isPush || known.hasStalePushValue,
+      });
       return null;
     }
 
@@ -6527,6 +6671,8 @@ export abstract class ServerPush<St> extends KissAction<St> {
       localRevision: isSelf ? Math.max(known.localRevision, localRevision) : known.localRevision,
       serverRevision,
       isPush: (newState === null) ? known.isPush : true,
+      // An applied push replaces the stale pushed value in the state, if any.
+      hasStalePushValue: (newState === null) ? known.hasStalePushValue : false,
     });
 
     return newState;

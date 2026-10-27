@@ -4,12 +4,81 @@
 
 ### Bug fixes
 
+* **`store.dispose()` now waits for the async prop disposals that started before it.** When a
+  prop with an async `dispose` was removed with `disposeProp`, `disposeProps` or
+  `logOut({ disposeProps: true })`, or replaced with `setProp`, and `store.dispose()` was
+  called before that disposal finished, the dependencies and the configuration were disposed
+  while the resource was still closing, and `store.dispose()` resolved before it closed. Now
+  `store.dispose()` waits until no prop disposal is running (including the ones a disposal
+  starts, and a prop set during the disposal), and only then disposes the dependencies and the
+  configuration.
+
+* **Stopping polling now also stops a start that was still pending.** When an action with
+  `Poll.start` or `Poll.runNowAndRestart` was in an async `before()`, and meanwhile polling was
+  stopped with `Poll.stop` or `stopAllPolling()`, the action still started polling when its
+  `before()` finished. So a component that stopped polling when it unmounted could leave the
+  polling running. Now the pending action is aborted (its status has `isDispatchAborted: true`),
+  it doesn't run its reducer, and no polling starts. `Poll.stop` only aborts the pending starts
+  of its own polling key. This already worked for `store.clearInternalActionProps()`,
+  `store.setShutDown(true)` and `store.logOut()`.
+
 * **`StoreSlice` no longer changes the live store while React renders.** It merged the slice
   during the render, so a render React threw away (a transition to a route that suspends, then
   cancelled) left the slice in the store, and the next state change showed it in the route
   still on screen. Now the components inside the slice read the merged state from their first
-  render, and the store is only changed when the route commits. On the server (no `window`,
-  or a store created with `server: true`), the slice is still merged during the render.
+  render, and the store is only changed when the route commits. With nested slices (a layout
+  and its page, each with a `StoreSlice`), the components inside the inner slice also read the
+  data of the outer slices from their first render. On the server (no `window`, or a store
+  created with `server: true`), the slice is still merged during the render.
+
+* **`StoreSlice` now follows its `StoreProvider` when the provider switches stores.** When the
+  `store` prop of `StoreProvider` changed while a `StoreSlice` below it stayed mounted, the
+  components inside the slice still read the old store, but their actions changed the new
+  store. Now they read and change the new store, and the slice (its current `state` prop) is
+  merged into the new store, once, so the route still finds its data there. If the provider
+  switches back to a store that the slice already used, the slice is not merged into it again.
+
+* **`OptimisticSyncWithPush` no longer sends another device's old value instead of the latest
+  local value.** When a push from another device arrived while a request was in flight, and
+  then the echo of that request arrived before its response, the follow-up request sent the
+  pushed value, and the local edit was lost. Now the echo marks the pushed value as stale, and
+  the latest local value is put back in the state and sent.
+
+* **`OptimisticSync` and `OptimisticSyncWithPush` no longer lose a save dispatched while the
+  server response is applied.** For example, a save dispatched by `store.dispatchWhen` when the
+  state with the server response meets its condition. That save changed the state, but no
+  request sent its value. Now the dispatch that sends the requests sends one more request with
+  the new value.
+
+* **The optimistic actions no longer change the state or send requests after they are
+  aborted.** When `action.abort()` or `store.abort(ActionType)` aborted an `OptimisticCommand`
+  while its server call ran, the server response was still applied (or the value was rolled
+  back and reloaded, if the call failed), and with `retry` the abort was reported as
+  `store.clearInternalActionProps()`. An aborted `OptimisticSync` or `OptimisticSyncWithPush`
+  still sent follow-up requests, applied the server response, and called `onFinish`. Now an
+  aborted optimistic action stops when its request finishes, and changes nothing.
+
+* **`ServerPush` now saves the server revision of the device's own latest request in the
+  state, when the server response arrives before its echo.** The response informed the
+  revision, so the echo was ignored as not newer, and `applyServerPushToState` didn't save the
+  revision in the state. After a restart with the persisted state, an older push could then
+  overwrite the confirmed value. Now that echo is applied.
+
+* **An action aborted during its `debounce` period, or while `unlimitedRetryCheckInternet`
+  checks the internet, no longer runs its reducer.** When `action.abort()` or
+  `store.abort(ActionType)` aborted it, the reducer still ran when the wait ended (and its
+  result was then discarded), so a request could reach the server after the abort. Now the
+  action finishes as aborted without running its reducer. An action aborted during its
+  `debounce` period also stops waiting right away, as it already did while waiting to retry.
+
+* **`ClassPersistor` now restores the saved values of read-only fields.** When the constructor
+  of a state class called `Object.freeze(this)`, or made a field read-only with
+  `Object.defineProperty`, the restored state kept the constructor's default values instead of
+  the saved values, and no error was reported. A saved field that the constructor of a frozen
+  class doesn't create made the store report an error and delete the saved state. Now the
+  restored state has all the saved values, and its fields are still read-only (and the state is
+  still frozen). The only exception is a class that extends a built-in class, like `Map`: its
+  read-only fields still keep the constructor's values.
 
 ## 2.0.0
 
