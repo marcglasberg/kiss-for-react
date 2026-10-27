@@ -1,6 +1,11 @@
 <img src="https://kissforreact.org/img/KISS_outline.svg" alt="Kiss for React Image" width="150" />
 
-**State management for React, built for AI agents:**
+## React state management for AI agents
+
+Kiss helps AI agents stay on track, session after session, while spending fewer tokens.
+
+* <img src="http://localhost:3001/img/claude.svg" alt="Claude" width="20" height="20" style={{verticalAlign: 'middle', marginRight: '0.4rem'}} />[Read Claude's opinion about Kiss](https://kissforreact.org/react/getting-started/claude-opinion-kiss)
+* <img src="http://localhost:3001/img/openai.svg" alt="OpenAI" width="20" height="20" className="invert-in-dark" style={{verticalAlign: 'middle', marginRight: '0.4rem'}} />[Read Codex's opinion about Kiss](https://kissforreact.org/react/getting-started/codex-opinion-kiss)
 
 - Helps the AI write well-structured code, separating business logic and UI
 - Forces the AI to write predictable, testable, maintainable code
@@ -20,18 +25,6 @@ npm install kiss-for-react
   Just copy the link and paste it into any AI.
 
 ### Linter and Quick fixes → [eslint-plugin-kiss-for-react](https://www.npmjs.com/package/eslint-plugin-kiss-for-react)
-
-## Why it helps AI agents
-
-Kiss improves AI-driven code generation by giving the AI strong guardrails
-that force it to do the right thing while saving tokens.
-[Read about it here](https://kissforreact.org/react/category/ai).
-
-## For the human
-
-AI can sometimes create code that works but seems alien when you read it.
-With Kiss the code remains human-readable the whole time.
-[Read about it here](https://kissforreact.org/react/category/ai).
 
 ---
 
