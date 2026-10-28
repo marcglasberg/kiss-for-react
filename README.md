@@ -4,14 +4,8 @@
 
 Kiss helps AI agents stay on track, session after session, while spending fewer tokens.
 
-* <img src="http://localhost:3001/img/claude.svg" alt="Claude" width="20" height="20" style={{verticalAlign: 'middle', marginRight: '0.4rem'}} />[Read Claude's opinion about Kiss](https://kissforreact.org/react/getting-started/claude-opinion-kiss)
-* <img src="http://localhost:3001/img/openai.svg" alt="OpenAI" width="20" height="20" className="invert-in-dark" style={{verticalAlign: 'middle', marginRight: '0.4rem'}} />[Read Codex's opinion about Kiss](https://kissforreact.org/react/getting-started/codex-opinion-kiss)
-
-- Helps the AI write well-structured code, separating business logic and UI
-- Forces the AI to write predictable, testable, maintainable code
-- Promotes less token usage, saving money!
-- Comes with a linter that enforces good practices without spending tokens
-- For the human: Final code is easy to read and understand
+* <img src="https://kissforreact.org/img/claude.svg" alt="Claude" width="20" height="20" align="top" /> [Read Claude's opinion about Kiss](https://kissforreact.org/react/getting-started/claude-opinion-kiss)
+* <img src="https://kissforreact.org/img/openai-readme.svg" alt="OpenAI" width="20" height="20" align="top" /> [Read Codex's opinion about Kiss](https://kissforreact.org/react/getting-started/codex-opinion-kiss)
 
 ```bash
 npm install kiss-for-react
@@ -19,18 +13,9 @@ npm install kiss-for-react
 
 ## Complete docs → **[https://kissforreact.org](https://kissforreact.org)**
 
-* [Getting Started](https://kissforreact.org/react/intro) / [Tutorial: A simple Todo List app](https://kissforreact.org/react/tutorial/setting-up-the-store) / [The Basics](https://kissforreact.org/react/basics/store-and-state)
-* [Complete AI Docs](https://kissforreact.org/kiss-state-management-docs.md): Single file
-  with all Kiss docs, optimized for AI agents.
-  Just copy the link and paste it into any AI.
-
-### Linter and Quick fixes → [eslint-plugin-kiss-for-react](https://www.npmjs.com/package/eslint-plugin-kiss-for-react)
+# Linter and Quick fixes → **[eslint-plugin-kiss-for-react](https://www.npmjs.com/package/eslint-plugin-kiss-for-react)**
 
 ---
-
-# Overview
-
-Here are the main concepts:
 
 ## Store and state
 
