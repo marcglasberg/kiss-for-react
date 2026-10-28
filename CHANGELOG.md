@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.2
+## 2.0.4
 
 ### Bug fixes
 

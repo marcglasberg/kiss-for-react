@@ -3,7 +3,7 @@
 This is an ESLint plugin for [Kiss](https://www.npmjs.com/package/kiss-for-react)
 ([kissforreact.org](https://kissforreact.org)).
 It checks for mistakes that compile fine but are wrong at runtime, and for style issues.
-See also the [Linter page](https://kissforreact.org/react/linter) of the Kiss docs.
+See also the [Install the linter](https://kissforreact.org/react/intro#linter) section of the Kiss docs.
 
 * Meant primarily for **AI agents**, like **Claude Code** and **Codex**
 * Shows lint errors as you type in the IDE: VS Code, WebStorm, and any editor with ESLint support

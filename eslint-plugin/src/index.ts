@@ -120,7 +120,7 @@ const rules = {
 const plugin = {
   meta: {
     name: 'eslint-plugin-kiss-for-react',
-    version: '1.0.0',
+    version: '1.0.1',
   },
   rules,
   configs: {} as Record<string, TSESLint.FlatConfig.Config>,

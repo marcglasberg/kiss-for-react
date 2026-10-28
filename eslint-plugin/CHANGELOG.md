@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+
+* Fixed the link to the Kiss docs in the README.
+
 ## 1.0.0
 
 * First version, for Kiss 2.0.0, with 57 rules:

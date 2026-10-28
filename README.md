@@ -13,9 +13,11 @@ npm install kiss-for-react
 
 ## Complete docs → **[https://kissforreact.org](https://kissforreact.org)**
 
-# Linter and Quick fixes → **[eslint-plugin-kiss-for-react](https://www.npmjs.com/package/eslint-plugin-kiss-for-react)**
+## Linter → **[eslint-plugin-kiss-for-react](https://www.npmjs.com/package/eslint-plugin-kiss-for-react)**
 
 ---
+      
+# Overview
 
 ## Store and state
 

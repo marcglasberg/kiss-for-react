@@ -1,6 +1,6 @@
 {
   "name": "eslint-plugin-kiss-for-react",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ESLint rules for Kiss state management (kiss-for-react). Finds mistakes that compile fine but are wrong, with quick fixes.",
   "type": "module",
   "exports": {
