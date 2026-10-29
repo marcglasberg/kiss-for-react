@@ -101,12 +101,6 @@ export function setsCheckInternet(classNode: ClassNode, context: Context, typeIn
   return !!property && !isUnsetValue(property.value);
 }
 
-/** True if the class itself declares `checkInternet` with a value (not `null` or `undefined`). */
-export function declaresCheckInternet(classNode: ClassNode): TSESTree.PropertyDefinition | null {
-  const property = findProperty(classNode, 'checkInternet');
-  return property && !isUnsetValue(property.value) ? property : null;
-}
-
 /**
  * True if retry may be on: the action sets `retry` (in the class, or inherited), to something
  * other than `{ on: false }`, `null` or `undefined`, or sets `unlimitedRetryCheckInternet` to
@@ -132,25 +126,25 @@ export function overridesMethod(classNode: ClassNode, name: string, context: Con
 }
 
 /**
- * True if the action's `before` is (or may be) async: its own or inherited `before` returns a
- * promise, or the default `before` checks the internet because `checkInternet` is set.
+ * True if the action is (or may be) async before its reducer: its own or inherited `before`
+ * returns a promise, or it sets `checkInternet`, since the store then checks the internet
+ * asynchronously before `before`.
  */
 export function hasAsyncBefore(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  if (setsCheckInternet(classNode, context, typeInfo)) return true;
   if (typeInfo) {
     const type = instanceTypeOf(classNode, typeInfo);
     const symbol = type.getProperty('before');
-    if (isOverridden(symbol)) {
-      const declaration = symbol!.getDeclarations()![0];
-      const signatures = typeInfo.checker.getTypeOfSymbolAtLocation(symbol!, declaration).getCallSignatures();
-      return signatures.some((signature) => mayBeThenable(typeInfo.checker.getReturnTypeOfSignature(signature)));
-    }
-    return setsCheckInternet(classNode, context, typeInfo);
+    if (!isOverridden(symbol)) return false;
+    const declaration = symbol!.getDeclarations()![0];
+    const signatures = typeInfo.checker.getTypeOfSymbolAtLocation(symbol!, declaration).getCallSignatures();
+    return signatures.some((signature) => mayBeThenable(typeInfo.checker.getReturnTypeOfSignature(signature)));
   }
   for (const node of sameFileClassChain(classNode, context)) {
     const before = findMethod(node, 'before');
     if (before) return isAsyncMethod(before, context, null);
   }
-  return setsCheckInternet(classNode, context, null);
+  return false;
 }
 
 /**
@@ -187,60 +181,6 @@ export function callsSuper(method: TSESTree.MethodDefinition, name: string): boo
       !node.computed && node.property.type === AST_NODE_TYPES.Identifier && node.property.name === name) found = true;
   }, true);
   return found;
-}
-
-/** The method body reads `this.<name>`, anywhere (also inside arrow functions). */
-export function readsThisMember(method: TSESTree.MethodDefinition, name: string): boolean {
-  let found = false;
-  if (!method.value.body) return false;
-  walk(method.value.body, (node) => {
-    if (node.type === AST_NODE_TYPES.MemberExpression && node.object.type === AST_NODE_TYPES.ThisExpression &&
-      !node.computed && node.property.type === AST_NODE_TYPES.Identifier && node.property.name === name) found = true;
-  }, true);
-  return found;
-}
-
-/**
- * If an action that sets `checkInternet` inherits a `before` (from a superclass) that doesn't call
- * `super.before()`, returns the name of that superclass. A `before` that reads `this.checkInternet`
- * is assumed to check the internet by itself. Returns null if the chain is fine, or not known.
- */
-export function inheritedBeforeWithoutSuper(classNode: ClassNode, context: Context, typeInfo: TypeInfo | null): string | null {
-  if (typeInfo) {
-    const {checker} = typeInfo;
-    let type: ts.Type | undefined = instanceTypeOf(classNode, typeInfo);
-    const seen = new Set<ts.Symbol>();
-    let first = true;
-    while (type) {
-      const symbol = type.getProperty('before');
-      if (!symbol || !isOverridden(symbol) || seen.has(symbol)) return null;
-      seen.add(symbol);
-      const declaration = symbol.getDeclarations()![0];
-      // Only methods (not, for example, properties with a function).
-      const body = (declaration as ts.MethodDeclaration).body;
-      if (!body || !('parameters' in declaration)) return null;
-      const owner = declaration.parent as ts.ClassLikeDeclaration;
-      // The class itself is checked by the caller.
-      if (!(first && owner === typeInfo.services.esTreeNodeToTSNodeMap.get(classNode))) {
-        const text = body.getText();
-        if (/\bthis\s*\.\s*checkInternet\b/.test(text)) return null;
-        if (!/\bsuper\s*\.\s*before\b/.test(text)) return owner.name?.text ?? null;
-      }
-      first = false;
-      const ownerType = checker.getTypeAtLocation(owner);
-      const bases = ownerType.isClassOrInterface() ? checker.getBaseTypes(ownerType) : [];
-      type = bases[0];
-    }
-    return null;
-  }
-
-  for (const node of sameFileClassChain(classNode, context).slice(1)) {
-    const before = findMethod(node, 'before');
-    if (!before) continue;
-    if (readsThisMember(before, 'checkInternet')) return null;
-    if (!callsSuper(before, 'before')) return node.id?.name ?? null;
-  }
-  return null;
 }
 
 /** True if the class extends Kiss's `OptimisticCommand`, directly or not. */

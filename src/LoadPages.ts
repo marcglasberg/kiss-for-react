@@ -1,4 +1,4 @@
-import { _isSameNonReentrantKey, AsyncReducerResult, KissAction } from './KissAction';
+import { _checkNotOverridden, _isSameNonReentrantKey, AsyncReducerResult, KissAction } from './KissAction';
 import { Store } from './Store';
 import { kissAbort, StoreException } from './StoreException';
 
@@ -186,7 +186,8 @@ export type PageDirection = 'forward' | 'backward';
  * - It should not be combined with `nonReentrant` or `ignoreOld`, since it already decides
  *   which loads run. Dispatching it with those throws a `StoreException`.
  * - To poll a list, override `createPollingAction()` to return a `'refresh'`.
- * - Do not override `reduce`, `abortDispatch` or `statusKey`.
+ * - Do not override `reduce` or `statusKey` (the dispatch throws a `StoreException`), and an
+ *   `abortDispatch` override must call `super.abortDispatch()`.
  */
 export abstract class LoadPages<St, Page, PageParam = unknown> extends KissAction<St> {
 
@@ -310,7 +311,7 @@ export abstract class LoadPages<St, Page, PageParam = unknown> extends KissActio
     return null;
   }
 
-  /** The `statusKey` is `pagesKeyParams()`. Do NOT override this; override `pagesKeyParams()`. */
+  /** The `statusKey` is `pagesKeyParams()`. Do NOT override this (the dispatch throws a `StoreException`); override `pagesKeyParams()`. */
   get statusKey(): unknown {
     return this.pagesKeyParams();
   }
@@ -350,6 +351,7 @@ export abstract class LoadPages<St, Page, PageParam = unknown> extends KissActio
   /**
    * Do NOT override this method. Implement `getPagesFromState`, `applyPagesToState`,
    * `initialPageParam`, `loadPage` and `nextPageParam` instead.
+   * If you override it, the dispatch throws a `StoreException`.
    */
   protected async reduce(): Promise<AsyncReducerResult<St>> {
     // A `'first'` or `'refresh'` aborts the other loads of the same list, so that the newest
@@ -453,6 +455,11 @@ export abstract class LoadPages<St, Page, PageParam = unknown> extends KissActio
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
+
+    _checkNotOverridden(this, LoadPages, 'a LoadPages', 'reduce',
+      'Implement `getPagesFromState`, `applyPagesToState`, `initialPageParam`, `loadPage` and `nextPageParam` instead.');
+    _checkNotOverridden(this, LoadPages, 'a LoadPages', 'statusKey',
+      'Override `pagesKeyParams()` instead, which is also the `statusKey`.');
 
     if (!['first', 'next', 'previous', 'refresh'].includes(this.which))
       throw new StoreException(

@@ -16,12 +16,12 @@ export type ActionKind =
 
 export const REDUCE_REASON = '`reduce` returns a promise';
 export const BEFORE_REASON = '`before` returns a promise';
-export const CHECK_INTERNET_REASON = 'it sets `checkInternet`, so its `before` returns a promise';
+export const CHECK_INTERNET_REASON = 'it sets `checkInternet`, and the store checks the internet asynchronously';
 
 /**
  * Sync or async, for an expression that is an action, like `new LoadUser()` or `action`.
- * An action is async if its `reduce` or `before` returns a promise. This includes the default
- * `before`, when the action sets `checkInternet`.
+ * An action is async if its `reduce` or `before` returns a promise, or if it sets
+ * `checkInternet`, since the store then checks the internet asynchronously before `before`.
  */
 export function actionKindOfExpression(action: TSESTree.Expression, context: Context, typeInfo: TypeInfo | null): ActionKind {
   if (typeInfo) {
@@ -98,10 +98,10 @@ function actionKindOfType(type: ts.Type, location: ts.Node, {checker}: TypeInfo)
   const beforeIsAsync = returnsPromise('before');
   if (beforeIsAsync) return {kind: 'async', className, reason: BEFORE_REASON};
 
-  // The default `before` is async when `checkInternet` is set.
-  const before = type.getProperty('before');
+  // The store checks the internet asynchronously when `checkInternet` is set, even if `before`
+  // is overridden.
   const checkInternet = type.getProperty('checkInternet');
-  if (before && !isOwnMember(before) && isOwnMember(checkInternet)) {
+  if (isOwnMember(checkInternet)) {
     const declaration = checkInternet!.getDeclarations()!.find((d) => (d as ts.PropertyDeclaration).initializer);
     const initializer = (declaration as ts.PropertyDeclaration | undefined)?.initializer;
     const isUnset = !initializer || ['null', 'undefined'].includes(initializer.getText());
@@ -149,7 +149,7 @@ function actionKindOfClassNode(
     classNode = superClass?.type === AST_NODE_TYPES.Identifier ? classDeclarationOf(superClass, context) : null;
   }
 
-  if (setsCheckInternet && !decidedBefore) return {kind: 'async', className, reason: CHECK_INTERNET_REASON};
+  if (setsCheckInternet) return {kind: 'async', className, reason: CHECK_INTERNET_REASON};
 
   // Sync only if all the classes are known, up to `KissAction`.
   if (decidedReduce && reachedKissAction) return {kind: 'sync', className};

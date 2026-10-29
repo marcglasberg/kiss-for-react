@@ -91,8 +91,8 @@ function dispatchSyncDemo(action: KissAction<State>) {
   store.dispatchSync(new SaveCounter());
 
   // kiss-for-react/dispatch-sync-async-action
-  // (It sets `checkInternet`, inherited from `OnlineAction`, so its default `before` returns
-  // a promise)
+  // (It sets `checkInternet`, inherited from `OnlineAction`, so the store checks the internet
+  // asynchronously)
   // Fix (suggestion): Will replace `dispatchSync` with `dispatch`.
   // Fix (suggestion): Will replace `dispatchSync` with `dispatchAndWait`.
   store.dispatchSync(new ClearItems());

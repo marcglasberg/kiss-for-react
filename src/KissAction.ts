@@ -114,33 +114,45 @@ export abstract class KissAction<St> {
    *
    * This method is useful for actions that need to perform some checks before executing the
    * reducer. If necessary, it can prevent the reducer from running by throwing an exception.
-   * 
-   * For example, the default `before()` method checks if the `checkInternet` property was set.
-   * If it was set, it checks if the device has an internet connection. If the connection is not
-   * present, it throws a `UserException` (or an `AbortDispatchException`, with
-   * `checkInternet = { abort: true }`), preventing the reducer from running.
+   *
+   * The default `before()` does nothing, and no Kiss feature uses it. So you don't need to call
+   * `super.before()` when you override it. For example, the internet check of `checkInternet`
+   * is done by the store, before it calls `before()`.
    *
    * Note the `after()` method always runs, even if the `before()` method throws an exception.
    */
   protected before(): void | Promise<void> {
-    if (this.checkInternet) {
-      const { dialog, abort } = this.checkInternet;
+  }
 
-      return this._hasInternet().then((isConnected: boolean) => {
-        if (!isConnected) {
-          if (abort) {
-            throw kissAbort('No Internet');
-          } else if (dialog) {
-            throw new UserException("Please, verify your connection.").withTitle("There is no Internet");
-          } else {
-            throw new UserException("No Internet").withDialog(false);
-          }
-        }
-      });
-    }
-
-    // Return void (not a Promise) when we don't need to check internet.
-    else return;
+  /**
+   * Returns the error of an action with `checkInternet`, when there is no internet. Override it
+   * to show a different error. For example:
+   *
+   * ```ts
+   * class LoadPrices extends Action {
+   *   checkInternet = { dialog: true };
+   *
+   *   protected noInternetException() {
+   *     return new UserException('You are offline. The prices could not be loaded.');
+   *   }
+   *
+   *   async reduce() { ... }
+   * }
+   * ```
+   *
+   * The store calls it only when there is no internet, and the `dialog` option of
+   * `checkInternet` decides if the returned exception opens a dialog: the store calls
+   * `withDialog(dialog)` on it. It's not called with `checkInternet = { abort: true }`, since
+   * the action is then aborted silently.
+   *
+   * By default, it returns a `UserException` with the message "Please, verify your connection."
+   * and the title "There is no Internet" (with `dialog: true`), or with the message
+   * "No Internet" (with `dialog: false`).
+   */
+  protected noInternetException(): UserException {
+    return this.checkInternet?.dialog
+      ? new UserException('Please, verify your connection.').withTitle('There is no Internet')
+      : new UserException('No Internet');
   }
 
   /**
@@ -314,14 +326,20 @@ export abstract class KissAction<St> {
    * By default, the `hasInternet()` method uses `navigator.onLine` in web environments 
    * and returns true for other environments.
    *
+   * To show a different error when there is no internet, override `noInternetException()`.
+   *
    * Notes:
-   * - The internet check runs in the default `before()` method. If you override `before()`,
-   *   you must call `super.before()` (and await it), or the internet won't be checked.
+   * - The store checks the internet before it calls the action's `before()`. So you can
+   *   override `before()` without calling `super.before()`, and the internet is still
+   *   checked. If there is no internet, `before()` and `reduce()` don't run, but `wrapError()`
+   *   and `after()` do, the same as when `before()` throws an error.
+   * - It makes the action ASYNC, even if its `before()` and `reduce()` are SYNC, since the
+   *   internet check is async. So `dispatchSync` throws a `StoreException` for it.
    * - It can be combined with `sequential`. The internet check then happens when the action
    *   gets its turn in the queue. Note that with `{ abort: true }`, aborting the action releases
    *   the queue, so the next action runs normally (unless `discardQueueOnError()` returns
    *   `true` for the `AbortDispatchException`).
-   * - With `retry`, the internet is only checked once, since `before()` is not retried. So,
+   * - With `retry`, the internet is only checked once, since only `reduce()` is retried. So,
    *   `retry` plus `checkInternet` doesn't retry when there is no internet. It only retries if
    *   there IS internet but the action fails for some other reason. To retry indefinitely until
    *   internet is available, use `unlimitedRetryCheckInternet` instead.
@@ -1297,8 +1315,8 @@ export abstract class KissAction<St> {
    *
    * Other notes:
    * - It works with both SYNC and ASYNC reducers. Even SYNC reducers can be affected, when an
-   *   ASYNC `before` (for example, the one of `checkInternet`) makes an older action reach its
-   *   reducer after a newer one was dispatched.
+   *   ASYNC `before` (or the internet check of `checkInternet`) makes an older action reach
+   *   its reducer after a newer one was dispatched.
    * - `store.clearInternalActionProps()` forgets the keys. The actions dispatched after it
    *   don't make the ones dispatched before it old.
    */
@@ -4812,6 +4830,7 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
   /**
    * Do NOT override this method. Implement `optimisticValue`, `getValueFromState`,
    * `applyValueToState` and `sendCommandToServer` instead.
+   * If you override it, the dispatch throws a `StoreException`.
    */
   protected async reduce(): Promise<null> {
     // The value to roll back to. It's read now, and not from `initialState`, because the action
@@ -4979,6 +4998,9 @@ export abstract class OptimisticCommand<St, T = any> extends KissAction<St> {
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
+
+    _checkNotOverridden(this, OptimisticCommand, 'an OptimisticCommand', 'reduce',
+      'Implement `optimisticValue`, `getValueFromState`, `applyValueToState` and `sendCommandToServer` instead.');
 
     if (this.nonReentrant)
       throw new StoreException(
@@ -5561,6 +5583,7 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
   /**
    * Do NOT override this method. Implement `valueToApply`, `applyOptimisticValueToState`,
    * `getValueFromState` and `sendValueToServer` instead.
+   * If you override it, the dispatch throws a `StoreException`.
    */
   protected async reduce(): Promise<null> {
     const value = this.valueToApply();
@@ -5674,6 +5697,8 @@ export abstract class OptimisticSync<St, T = any> extends KissAction<St> {
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
+    _checkNotOverridden(this, OptimisticSync, 'an OptimisticSync', 'reduce',
+      'Implement `valueToApply`, `applyOptimisticValueToState`, `getValueFromState` and `sendValueToServer` instead.');
     _checkIncompatibleFeatures(this, 'an OptimisticSync', false);
   }
 }
@@ -6226,6 +6251,7 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
   /**
    * Do NOT override this method. Implement `valueToApply`, `applyOptimisticValueToState`,
    * `getValueFromState`, `sendValueToServer` and `getServerRevisionFromState` instead.
+   * If you override it, the dispatch throws a `StoreException`.
    */
   protected async reduce(): Promise<null> {
     const key = this._key = this.computeOptimisticSyncKey();
@@ -6390,6 +6416,9 @@ export abstract class OptimisticSyncWithPush<St, T = any> extends KissAction<St>
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
+    _checkNotOverridden(this, OptimisticSyncWithPush, 'an OptimisticSyncWithPush', 'reduce',
+      'Implement `valueToApply`, `applyOptimisticValueToState`, `getValueFromState`, `sendValueToServer` ' +
+      'and `getServerRevisionFromState` instead.');
     _checkIncompatibleFeatures(this, 'an OptimisticSyncWithPush', false);
   }
 }
@@ -6615,6 +6644,7 @@ export abstract class ServerPush<St> extends KissAction<St> {
   /**
    * Do NOT override this method. Implement `associatedAction`, `pushMetadata`,
    * `applyServerPushToState` and `getServerRevisionFromState` instead.
+   * If you override it, the dispatch throws a `StoreException`.
    */
   protected reduce(): St | null {
     const key = this.computeOptimisticSyncKey();
@@ -6684,8 +6714,38 @@ export abstract class ServerPush<St> extends KissAction<St> {
    */
   _injectStore(_store: Store<St>) {
     super._injectStore(_store);
+    _checkNotOverridden(this, ServerPush, 'a ServerPush', 'reduce',
+      'Implement `associatedAction`, `pushMetadata`, `applyServerPushToState` and `getServerRevisionFromState` instead.');
     _checkIncompatibleFeatures(this, 'a ServerPush', true);
   }
+}
+
+/**
+ * Throws a `StoreException` if the given action overrides `member` of the Kiss base class
+ * `base` (for example, the `reduce` of an `OptimisticCommand`). The base class uses that member
+ * to do its work, so overriding it would turn the feature off with no error. The `description`
+ * describes the base class (for example, "an OptimisticCommand"), and `hint` says what to do.
+ * For Kiss internal use only.
+ * @internal
+ */
+export function _checkNotOverridden(
+  action: KissAction<any>,
+  base: abstract new (...args: any[]) => KissAction<any>,
+  description: string,
+  member: string,
+  hint: string,
+): void {
+  const has = (obj: object) => Object.prototype.hasOwnProperty.call(obj, member);
+
+  // An arrow function property is in the action itself. A method or getter is in the prototype
+  // of the action's class, or of one of its superclasses that extend the base class.
+  let isOverridden = has(action);
+  for (let proto = Object.getPrototypeOf(action); !isOverridden && proto && proto !== base.prototype; proto = Object.getPrototypeOf(proto))
+    isOverridden = has(proto);
+
+  if (isOverridden)
+    throw new StoreException(
+      `Action ${action.constructor.name} is ${description}, which must not override \`${member}\`. ${hint}`);
 }
 
 /**

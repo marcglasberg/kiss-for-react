@@ -168,84 +168,14 @@ class AfterThrowsOk extends Action {
 // ---------------------------------------------------------------------------------------------
 // missing-super-in-override
 
-class BeforeWithoutSuper extends Action {
+class BeforeWithoutSuperOk extends Action {
   checkInternet = { dialog: true };
 
-  // kiss-for-react/missing-super-in-override
-  // (The default `before` checks the internet. Without `super.before()`, nothing checks it)
-  // Fix (suggestion): Will add `await super.before();` as the first statement.
+  // OK: the store checks the internet before it calls `before()`, so `before()` doesn't need
+  // to call `super.before()`.
   async before() {
     await saveName('');
   }
-
-  async reduce() {
-    const name = await fetchName();
-    return (state: State) => state.copy({ name });
-  }
-}
-
-class SyncBeforeWithoutSuper extends Action {
-  checkInternet = { dialog: false };
-
-  // kiss-for-react/missing-super-in-override
-  // (A sync `before`)
-  // Fix (suggestion): Will add `await super.before();` as the first statement, and make `before`
-  // async.
-  before() {
-    console.log('Before');
-  }
-
-  async reduce() {
-    const name = await fetchName();
-    return (state: State) => state.copy({ name });
-  }
-}
-
-class BeforeWithoutSuperTyped extends Action {
-  checkInternet = { dialog: true };
-
-  // kiss-for-react/missing-super-in-override
-  // (No suggestion, since the declared return type `void` is not a `Promise`)
-  before(): void {
-    console.log('Before');
-  }
-
-  async reduce() {
-    const name = await fetchName();
-    return (state: State) => state.copy({ name });
-  }
-}
-
-/** A base action that sets `checkInternet`. */
-abstract class OnlineAction extends Action {
-  checkInternet = { dialog: true };
-}
-
-class BeforeWithoutSuperInherited extends OnlineAction {
-  // kiss-for-react/missing-super-in-override
-  // (`checkInternet` is inherited from `OnlineAction`)
-  // Fix (suggestion): Will add `await super.before();` as the first statement.
-  async before() {
-    await saveName('');
-  }
-
-  async reduce() {
-    const name = await fetchName();
-    return (state: State) => state.copy({ name });
-  }
-}
-
-/** A base action whose `before` doesn't call `super.before()`. */
-abstract class PreparingAction extends Action {
-  async before() {
-    await saveName('');
-  }
-}
-
-class InheritsBeforeWithoutSuper extends PreparingAction {
-  // kiss-for-react/missing-super-in-override
-  // (The `before` of `PreparingAction` doesn't call `super.before()`)
-  checkInternet = { dialog: true };
 
   async reduce() {
     const name = await fetchName();
@@ -275,33 +205,6 @@ class OptimisticWithReduce extends OptimisticCommand<State, string> {
   async reduce() {
     await saveName(this.state.name);
     return null;
-  }
-}
-
-class BeforeWithSuperOk extends Action {
-  checkInternet = { dialog: true };
-
-  async before() { // OK: calls `super.before()`.
-    await super.before();
-    await saveName('');
-  }
-
-  async reduce() {
-    const name = await fetchName();
-    return (state: State) => state.copy({ name });
-  }
-}
-
-class BeforeReadsCheckInternetOk extends Action {
-  checkInternet = { dialog: true };
-
-  async before() { // OK: it reads `this.checkInternet`, so it probably checks the internet itself.
-    if (this.checkInternet.dialog) await saveName('');
-  }
-
-  async reduce() {
-    const name = await fetchName();
-    return (state: State) => state.copy({ name });
   }
 }
 

@@ -36,6 +36,7 @@ const kissActionMethods = notPublic<KissAction<State>>()({
   abortDispatch: false,
   abortReduce: false,
   hasInternet: false,
+  noInternetException: false,
   nonReentrantKeyParams: false,
   computeNonReentrantKey: false,
   debounceLockBuilder: false,

@@ -6,15 +6,17 @@ Feature: Lint: dispatch-sync-async-action
     Then There is an error, saying why the action is async.
     And The suggestions replace dispatchSync with dispatch or dispatchAndWait.
     Examples: 
-      | Reason                             | Action            | Message                    | Type information |
-      | its reduce is async                | AsyncReduce       | `reduce` returns a promise | true             |
-      | its reduce is async                | AsyncReduce       | `reduce` returns a promise | false            |
-      | its before is async                | AsyncBefore       | `before` returns a promise | true             |
-      | its before is async                | AsyncBefore       | `before` returns a promise | false            |
-      | it sets checkInternet              | WithCheckInternet | sets `checkInternet`       | true             |
-      | it sets checkInternet              | WithCheckInternet | sets `checkInternet`       | false            |
-      | its superclass has an async before | SubclassOfAsync   | `before` returns a promise | true             |
-      | its superclass has an async before | SubclassOfAsync   | `before` returns a promise | false            |
+      | Reason                                         | Action                         | Message                    | Type information |
+      | its reduce is async                            | AsyncReduce                    | `reduce` returns a promise | true             |
+      | its reduce is async                            | AsyncReduce                    | `reduce` returns a promise | false            |
+      | its before is async                            | AsyncBefore                    | `before` returns a promise | true             |
+      | its before is async                            | AsyncBefore                    | `before` returns a promise | false            |
+      | it sets checkInternet                          | WithCheckInternet              | sets `checkInternet`       | true             |
+      | it sets checkInternet                          | WithCheckInternet              | sets `checkInternet`       | false            |
+      | its superclass has an async before             | SubclassOfAsync                | `before` returns a promise | true             |
+      | its superclass has an async before             | SubclassOfAsync                | `before` returns a promise | false            |
+      | it sets checkInternet, even with a sync before | WithCheckInternetAndSyncBefore | sets `checkInternet`       | true             |
+      | it sets checkInternet, even with a sync before | WithCheckInternetAndSyncBefore | sets `checkInternet`       | false            |
 
   Scenario: dispatchSync of a sync action is fine.
     Given A sync action.

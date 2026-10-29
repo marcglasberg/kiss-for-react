@@ -742,31 +742,7 @@ somewhere else.
 ### missing-super-in-override
 
 An error for an override that silently turns off a Kiss feature, because it doesn't call
-`super`:
-
-- `before()` without `super.before()`, in an action that sets `checkInternet` (or inherits
-  it). The default `before` is what checks the internet, so the check stops working:
-
-  ```ts
-  class LoadUser extends Action {
-    checkInternet = { dialog: true };
-    async before() { await this.prepare(); }                      // Error
-    async before() { await super.before(); await this.prepare(); } // OK
-  }
-  ```
-
-  It's also reported in `checkInternet`, when the action inherits a `before` that doesn't
-  call `super.before()`:
-
-  ```ts
-  abstract class Action extends KissAction<State> {
-    async before() { await prepare(); }
-  }
-
-  class LoadUser extends Action {
-    checkInternet = { dialog: true }; // Error
-  }
-  ```
+`super`, or because it overrides a method that must not be overridden:
 
 - `reduce()` in a subclass of `OptimisticCommand`. Its `reduce` does the optimistic update,
   so overriding it turns that off. Implement `optimisticValue`, `getValueFromState`,
@@ -806,14 +782,14 @@ An error for an override that silently turns off a Kiss feature, because it does
   the server revisions, so overriding it turns that off. Implement `associatedAction`,
   `pushMetadata`, `applyServerPushToState` and `getServerRevisionFromState` instead.
 
-A `before` that reads `this.checkInternet` is not reported, since it probably checks the
-internet by itself. Without type information, only `checkInternet` and superclasses declared
-in the same file are found. With [type information](#type-information), also the ones in
-other files.
+At runtime, Kiss also checks the overridden `reduce()` (and the `statusKey` of a `LoadPages`):
+the dispatch throws a `StoreException`. This rule finds the mistake earlier, in the editor.
+Without type information, only the superclasses declared in the same file are found. With
+[type information](#type-information), also the ones in other files.
 
-Quick fix (suggestion), for `before`: add `await super.before();` as the first statement, and
-make `before` async if it isn't. Not offered when `before` has a declared return type that is
-not a `Promise`.
+Note: `before()` doesn't need to call `super.before()`, and this rule doesn't report it. The
+default `before()` does nothing, and the internet check of `checkInternet` is done by the
+store, before it calls `before()`.
 
 ---
 
@@ -1353,8 +1329,9 @@ Quick fix (suggestion): override `nonReentrantKeyParams()` (or `optimisticSyncKe
 ### dispatch-sync-async-action
 
 An error for `dispatchSync` of an async action, since `dispatchSync` only accepts sync
-actions. An action is async if its `reduce` or `before` returns a promise. This includes
-the default `before`, when the action sets `checkInternet` (or inherits it):
+actions. An action is async if its `reduce` or `before` returns a promise, or if it sets
+`checkInternet` (or inherits it), since the store then checks the internet asynchronously,
+even if `before` is sync:
 
 ```ts
 class LoadUser extends Action {

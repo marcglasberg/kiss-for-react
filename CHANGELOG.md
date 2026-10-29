@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.0.5
+
+### Changes
+
+* **`checkInternet` no longer needs `super.before()`.** Note:
+  * The internet is now checked before your `before()` runs. If there is no internet,
+    `before()` and `reduce()` don't run, but `wrapError()` and `after()` do, as before.
+  * `dispatchSync` of an action with `checkInternet` now throws a `StoreException` that says
+    the action uses `checkInternet`, even if the action overrides `before()` with a sync
+    method.
+
+* **New `noInternetException()` method, to change the no-internet error of `checkInternet`.**
+  Override it in the action to return your own `UserException`. Before, you had to override
+  `before()`, call `super.before()` inside a `try`/`catch`, and throw your own error. That
+  code doesn't work anymore, since `super.before()` doesn't check the internet now. Move your
+  error to `noInternetException()`:
+
+  ```ts
+  protected noInternetException() {
+    return new UserException('You are offline. The prices could not be loaded.');
+  }
+  ```
+
+  The `dialog` option of `checkInternet` still decides if the error opens a dialog.
+
+* **Overriding `reduce()` in a subclass of these Kiss base classes now throws a `StoreException`: 
+  `OptimisticCommand`, `OptimisticSync`, `OptimisticSyncWithPush`, `ServerPush` or `LoadPages`
+  that overrides `reduce()` (or, in a `LoadPages`, the `statusKey` getter). Before, only 
+  the docs and the ESLint rule `missing-super-in-override` warned about it.
+
 ## 2.0.4
 
 ### Bug fixes

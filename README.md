@@ -545,8 +545,24 @@ class LoadPrices extends Action {
 
 Use `checkInternet = { dialog: false }` to fail without a dialog, so you can show the
 error in your components with `isFailed`. Or use `checkInternet = { abort: true }` to
-abort the
-action silently, as if it had never been dispatched, without any errors.
+abort the action silently, as if it had never been dispatched, without any errors.
+
+To show a different error, override `noInternetException()`:
+
+```tsx
+class LoadPrices extends Action {    
+  checkInternet = { dialog: true }
+
+  noInternetException() {
+    return new UserException('You are offline. The prices could not be loaded.');
+  }
+   
+  async reduce() { ... } 
+}
+```
+
+The store checks the internet before it calls the action's `before()` method. So you can
+override `before()` without calling `super.before()`.
 
 ### UnlimitedRetryCheckInternet
 

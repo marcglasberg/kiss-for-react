@@ -2172,7 +2172,7 @@ export class Store<St> {
       action._wasDiscardedFromSequentialQueue = discarded;
       const beforeResult = (async () => {
         if (discarded) throw kissAbort('Discarded from the sequential queue.');
-        return action['before']();
+        return this._runBefore(action);
       })();
       this._runAsyncBeforeOnwards(action, beforeResult).then();
     });
@@ -2619,11 +2619,33 @@ export class Store<St> {
     return error;
   }
 
+  // Runs the internet check of `checkInternet`, if the action has it, and then the action's
+  // `before`. The check is done here, and not in the default `before`, so that it still works
+  // when the action overrides `before` without calling `super.before()`. If there is no
+  // internet, it throws, and `before` doesn't run. Returns a Promise only if there is an
+  // internet check, or if `before` is async, so that the other actions stay SYNC.
+  private _runBefore(action: KissAction<St>): void | Promise<void> {
+    const options = action.checkInternet;
+    if (!options) return action['before']();
+
+    return action._hasInternet().then((isConnected: boolean) => {
+      if (!isConnected) {
+        if (options.abort) throw kissAbort('No Internet');
+        throw action['noInternetException']().withDialog(!!options.dialog);
+      }
+      return action['before']();
+    });
+  }
+
   private _runFromStart(action: KissAction<St>, mustBeSync: boolean): boolean {
 
     // A debounced action always waits for its debounce period, so it can't be SYNC.
     if (mustBeSync && action._debounceMillis !== null)
       throw this._notSyncError(`You called dispatchSync(${action.constructor.name}), but the action uses debounce, which makes it ASYNC.`);
+
+    // The internet check of `checkInternet` is async, so the action can't be SYNC.
+    if (mustBeSync && action.checkInternet)
+      throw this._notSyncError(`You called dispatchSync(${action.constructor.name}), but the action uses checkInternet, which makes it ASYNC.`);
 
     // A sequential action always waits for its turn in the queue, so it can't be SYNC.
     if (action.sequential) {
@@ -2640,9 +2662,9 @@ export class Store<St> {
 
     // BEFORE
 
-    // 1) Runs the `before` method.
+    // 1) Runs the `before` method (after the internet check of `checkInternet`, if any).
     // It may be sync or async, but it doesn't return anything.
-    const beforeResult: void | Promise<void> = action['before']();
+    const beforeResult: void | Promise<void> = this._runBefore(action);
 
     // 2) If it's async, wait for the `before` method to finish.
     if (beforeResult instanceof Promise) {

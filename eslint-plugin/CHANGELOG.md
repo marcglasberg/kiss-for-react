@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.2
+
+* For Kiss 2.0.5, where the store checks the internet of `checkInternet` before it calls
+  `before()`, so `before()` doesn't need to call `super.before()`:
+  * `missing-super-in-override` no longer reports a `before()` without `super.before()`, nor a
+    `checkInternet` that inherits such a `before()`. Its quick fix, which added
+    `await super.before()`, was removed. The rule still reports the other overrides.
+  * `dispatch-sync-async-action`, `expect-without-waiting`, `wait-fail-never-matches` and
+    `reduce-without-await` now know that an action that sets `checkInternet` is async, even if
+    it overrides `before()` with a sync method.
+
 ## 1.0.1
 
 * Fixed the link to the Kiss docs in the README.

@@ -43,6 +43,12 @@ class WithCheckInternet extends KissAction<State> {
 class SubclassOfAsync extends AsyncBefore {
   reduce() { return this.state.add(2); }
 }
+
+class WithCheckInternetAndSyncBefore extends KissAction<State> {
+  checkInternet = { dialog: true };
+  before() { console.log('Saving'); }
+  reduce() { return this.state.add(1); }
+}
 `;
 
 Bdd(feature)
@@ -59,6 +65,8 @@ Bdd(feature)
   .example(val('Reason', 'it sets checkInternet'), val('Action', 'WithCheckInternet'), val('Message', 'sets `checkInternet`'), val('Type information', false))
   .example(val('Reason', 'its superclass has an async before'), val('Action', 'SubclassOfAsync'), val('Message', '`before` returns a promise'), val('Type information', true))
   .example(val('Reason', 'its superclass has an async before'), val('Action', 'SubclassOfAsync'), val('Message', '`before` returns a promise'), val('Type information', false))
+  .example(val('Reason', 'it sets checkInternet, even with a sync before'), val('Action', 'WithCheckInternetAndSyncBefore'), val('Message', 'sets `checkInternet`'), val('Type information', true))
+  .example(val('Reason', 'it sets checkInternet, even with a sync before'), val('Action', 'WithCheckInternetAndSyncBefore'), val('Message', 'sets `checkInternet`'), val('Type information', false))
   .run(async (ctx) => {
     const action = ctx.example.val('Action') as string;
     const code = `${prelude}
