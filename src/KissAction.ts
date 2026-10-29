@@ -163,7 +163,7 @@ export abstract class KissAction<St> {
   *
   * const store = createStore<State>({
   *   initialState: State.initialState,
-  *   onlineSource: (setOnline) => NetInfo.addEventListener((s) => setOnline(s.isConnected === true)),
+  *   onlineSource: (setOnline) => NetInfo.addEventListener((s) => setOnline(s.isConnected !== false)),
   * });
   * ```
   *
@@ -173,7 +173,7 @@ export abstract class KissAction<St> {
   *
   * ```typescript
   * protected hasInternet(): Promise<boolean> {
-  *   return NetInfo.fetch().then(state => state.isConnected === true);
+  *   return NetInfo.fetch().then(state => state.isConnected !== false);
   * }
   * ```
   *

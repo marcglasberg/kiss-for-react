@@ -479,7 +479,7 @@ interface ConstructorParams<St> {
    *
    * const store = createStore<State>({
    *   initialState: State.initialState,
-   *   onlineSource: (setOnline) => NetInfo.addEventListener((s) => setOnline(s.isConnected === true)),
+   *   onlineSource: (setOnline) => NetInfo.addEventListener((s) => setOnline(s.isConnected !== false)),
    * });
    * ```
    *
@@ -4328,7 +4328,7 @@ export class Store<St> {
    *    don't dispose the store while you still wait for it.
    * 3. Pauses the persistor, and cancels its pending save (a state change waiting for the
    *    throttle). A save that is already running still finishes. If you want the current state
-   *    saved first, call `await store.persistAndPause()` before.
+   *    saved first, call `await store.persistAndPausePersistor()` before.
    * 4. Stops listening to the focus and online sources (see `focusSource` and `onlineSource`
    *    in the constructor), if they were started. `isFocused` and `isOnline` keep their last
    *    values.
