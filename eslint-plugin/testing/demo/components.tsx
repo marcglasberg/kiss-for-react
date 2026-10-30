@@ -6,6 +6,7 @@
 /* eslint-disable kiss-for-react/dispatch-in-effect */
 /* eslint-disable kiss-for-react/store-state-in-render */
 /* eslint-disable kiss-for-react/then-on-dispatch-and-wait */
+/* eslint-disable kiss-for-react/conditional-status-hook */
 
 // Demonstrates the "Components and hooks" rules of the Kiss ESLint plugin
 // (eslint-plugin-kiss-for-react). Each warning is marked with a comment right above the line it
@@ -22,7 +23,10 @@ import {
   useDispatch,
   useDispatchAndWait,
   useDispatchWhen,
+  useExceptionFor,
+  useIsFailed,
   useIsStoreReady,
+  useIsWaiting,
   useObject,
   useSelect,
   useSelector,
@@ -467,4 +471,37 @@ class SaveAndLog extends Action {
     await this.dispatchAndWait(new SaveUser()).then(() => console.log('Saved'));
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// conditional-status-hook
+
+function ConditionalStatusHook({ isReady }: { isReady: boolean }) {
+  // kiss-for-react/conditional-status-hook
+  // (When the first hook returns true, the second one is not called. This breaks the rules of hooks)
+  // Fix (automatic): Will replace it with `useIsWaiting([LoadUser, SaveUser])`.
+  const isLoading = useIsWaiting(LoadUser) || useIsWaiting(SaveUser);
+
+  // kiss-for-react/conditional-status-hook
+  // (`useExceptionFor` with `??`)
+  // Fix (automatic): Will replace it with `useExceptionFor([LoadUser, SaveUser])`.
+  const error = useExceptionFor(LoadUser) ?? useExceptionFor(SaveUser);
+
+  // kiss-for-react/conditional-status-hook
+  // (`&&` means "both run", which an array doesn't mean, so there's no fix)
+  const isBusy = useIsWaiting(LoadUser) && useIsWaiting(SaveUser);
+
+  // kiss-for-react/conditional-status-hook
+  // (In a branch of `?:`)
+  const isFailed = isReady ? useIsFailed(LoadUser) : false;
+
+  // OK: one hook, with an array of action types.
+  const isWorking = useIsWaiting([LoadUser, SaveUser]);
+
+  // OK: each hook in its own line, and then the results are combined.
+  const isLoadingUser = useIsWaiting(LoadUser);
+  const isSavingUser = useIsWaiting(SaveUser);
+  const isLoadingAndSaving = isLoadingUser && isSavingUser;
+
+  return <p>{isLoading} {error?.message} {isBusy} {isFailed} {isWorking} {isLoadingAndSaving}</p>;
 }

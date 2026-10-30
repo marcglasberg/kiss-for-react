@@ -214,6 +214,7 @@ directories.
 - [`dispatch-in-render`](#dispatch-in-render) warning
 - [`store-state-in-render`](#store-state-in-render) warning
 - [`then-on-dispatch-and-wait`](#then-on-dispatch-and-wait) warning
+- [`conditional-status-hook`](#conditional-status-hook) error
 
 **Reducers**
 
@@ -499,6 +500,38 @@ parameter, or names it with a leading `_`, like `_status`. If the callback must 
 
 Quick fix (suggestion): wrap the callback's body in `if (status.isCompletedOk) { ... }`, adding
 the `status` parameter if needed.
+
+---
+
+### conditional-status-hook
+
+An error for `useIsWaiting`, `useIsFailed` or `useExceptionFor` called after `||`, `&&` or `??`,
+or in a branch of `? :`. Then the hook is not called in every render, which breaks React's rules
+of hooks. To ask about several actions, pass an array of action types:
+
+```tsx
+const isLoading = useIsWaiting(LoadUser) || useIsWaiting(LoadPosts); // Error
+const isLoading = useIsWaiting([LoadUser, LoadPosts]);               // OK
+
+const isBusy = useIsWaiting(LoadUser) && useIsWaiting(LoadPosts);    // Error, no fix
+const isLoadingUser = useIsWaiting(LoadUser);                        // OK
+const isLoadingPosts = useIsWaiting(LoadPosts);
+const isBusy = isLoadingUser && isLoadingPosts;
+```
+
+React's `rules-of-hooks` rule (from `eslint-plugin-react-hooks`) also reports these calls. This
+rule says how to fix them, and fixes them when it can.
+
+Quick fix (automatic): when all the operands call the same hook, with the same options, and the
+operator means "any of them", replace them with one call with an array of all the action types,
+in the same order. This gives the same result. The operator is `||` for `useIsWaiting` and
+`useIsFailed`, and `||` or `??` for `useExceptionFor`, which returns the exception of the first
+type in the array that has one. For example, `useIsWaiting([LoadUser, LoadPosts]) ||
+useIsWaiting(LoadComments)` becomes `useIsWaiting([LoadUser, LoadPosts, LoadComments])`. The
+action types must be known to be classes or arrays. With [type information](#type-information),
+an array in a variable is spread, like `useIsWaiting([...types, LoadComments])`. Without it, only
+names that start with an uppercase letter are taken as classes. Other cases, like `&&`, have no
+fix: call each hook in its own line, and then combine the results.
 
 ---
 

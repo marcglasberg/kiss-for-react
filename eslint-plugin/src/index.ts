@@ -11,6 +11,7 @@ import asyncFeatureInSyncAction from './rules/asyncFeatureInSyncAction.js';
 import avoidAbortDispatch from './rules/avoidAbortDispatch.js';
 import avoidUseAllState from './rules/avoidUseAllState.js';
 import avoidWrapReduce from './rules/avoidWrapReduce.js';
+import conditionalStatusHook from './rules/conditionalStatusHook.js';
 import copyMissingField from './rules/copyMissingField.js';
 import debugObserverInRelease from './rules/debugObserverInRelease.js';
 import dependenciesCastInAction from './rules/dependenciesCastInAction.js';
@@ -65,6 +66,7 @@ const rules = {
   'dispatch-in-render': dispatchInRender,
   'store-state-in-render': storeStateInRender,
   'then-on-dispatch-and-wait': thenOnDispatchAndWait,
+  'conditional-status-hook': conditionalStatusHook,
   'stale-state-after-await': staleStateAfterAwait,
   'prefer-state-parameter': preferStateParameter,
   'no-state-mutation': noStateMutation,
@@ -120,7 +122,7 @@ const rules = {
 const plugin = {
   meta: {
     name: 'eslint-plugin-kiss-for-react',
-    version: '1.0.1',
+    version: '1.1.0',
   },
   rules,
   configs: {} as Record<string, TSESLint.FlatConfig.Config>,
@@ -148,6 +150,7 @@ plugin.configs.recommended = {
     'kiss-for-react/dispatch-in-render': 'warn',
     'kiss-for-react/store-state-in-render': 'warn',
     'kiss-for-react/then-on-dispatch-and-wait': 'warn',
+    'kiss-for-react/conditional-status-hook': 'error',
     'kiss-for-react/stale-state-after-await': 'error',
     'kiss-for-react/prefer-state-parameter': 'warn',
     'kiss-for-react/no-state-mutation': 'error',
