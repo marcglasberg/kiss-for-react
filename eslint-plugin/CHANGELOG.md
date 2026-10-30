@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+* For the next Kiss version, where `isWaiting` and `useIsWaiting` also accept an array of
+  action types: `wait-fail-never-matches` now reports each sync action inside the array, like
+  `useIsWaiting([LoadUser, Increment])`, since a sync action never makes the result true.
+
 ## 1.0.2
 
 * For Kiss 2.0.5, where the store checks the internet of `checkInternet` before it calls

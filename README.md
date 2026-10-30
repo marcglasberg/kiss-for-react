@@ -304,6 +304,19 @@ function UserRow({ userId }: { userId: string }) {
 }
 ```
 
+To show one spinner or one error while any of several actions runs or fails, pass an array.
+`useExceptionFor([LoadUser, LoadPosts])` returns the `UserException` of the first type in
+the array that has one:
+
+```tsx
+const isLoading = useIsWaiting([LoadUser, LoadPosts]);
+const isFailed = useIsFailed([LoadUser, LoadPosts]);
+const error = useExceptionFor([LoadUser, LoadPosts]);
+```
+
+Don't write `useIsWaiting(LoadUser) || useIsWaiting(LoadPosts)`. When the first hook returns
+true, the second one is not called, and that breaks the rules of hooks.
+
 ### Suspense and error boundaries
 
 If you prefer React's `<Suspense>` and error boundaries to `isWaiting`/`isFailed` checks,
@@ -329,6 +342,9 @@ function UserCard({ userId }: { userId: string }) {
   );
 }
 ```
+
+When the component needs the result of several actions, pass an array:
+`useSuspense([LoadUser, LoadPosts])` suspends while an action of any of the types runs.
 
 &nbsp;
 
@@ -634,6 +650,8 @@ useStoreEffect({
   onUnmount: (store) => store.abort(LoadUser),
 });
 ```
+
+To abort the actions of several types, pass an array: `store.abort([LoadUser, LoadPosts])`.
 
 ### Throttle
 

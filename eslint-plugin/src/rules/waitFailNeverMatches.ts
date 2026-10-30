@@ -29,6 +29,9 @@ type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
  *
  * A sync action finishes during its dispatch, before anything can wait for it.
  *
+ * In an array, like `useIsWaiting([LoadUser, Increment])`, each sync action is reported, since it
+ * never makes the result `true`.
+ *
  * Abstract classes are not reported, since `isWaiting` also matches their subclasses. Neither
  * are classes that may become async: classes with subclasses (which `isWaiting` also matches),
  * and classes that override `wrapReduce`, or turn on `retry` or `unlimitedRetryCheckInternet`.
@@ -48,6 +51,9 @@ export default createRule({
       syncAction:
         '`{{action}}` is sync, so `{{method}}({{action}})` is always `false`. A sync action finishes ' +
         'during its dispatch, before anything can wait for it.',
+      syncActionInArray:
+        '`{{action}}` is sync, so it never makes `{{method}}([...])` true. A sync action finishes ' +
+        'during its dispatch, before anything can wait for it.',
     },
   },
   defaultOptions: [],
@@ -59,19 +65,27 @@ export default createRule({
       CallExpression(node) {
         const method = isWaitingMethod(node.callee, context);
         if (!method) return;
-        const classRef = node.arguments[0];
-        if (!classRef || classRef.type === AST_NODE_TYPES.SpreadElement) return;
+        const argument = node.arguments[0];
+        if (!argument || argument.type === AST_NODE_TYPES.SpreadElement) return;
 
-        if (isInsideOwnClass(node, classRef, context)) return;
-        const result = actionKindOfClassReference(classRef, context, typeInfo);
-        if (result.kind !== 'sync') return;
-        if (mayBecomeAsync(classRef, context, typeInfo)) return;
+        // `isWaiting([A, B])` checks each class in the array.
+        const unwrapped = unwrap(argument);
+        const inArray = unwrapped.type === AST_NODE_TYPES.ArrayExpression;
+        const classRefs = inArray ? unwrapped.elements : [argument];
 
-        context.report({
-          node: classRef,
-          messageId: 'syncAction',
-          data: {action: context.sourceCode.getText(classRef), method},
-        });
+        for (const classRef of classRefs) {
+          if (!classRef || classRef.type === AST_NODE_TYPES.SpreadElement) continue;
+          if (isInsideOwnClass(node, classRef, context)) continue;
+          const result = actionKindOfClassReference(classRef, context, typeInfo);
+          if (result.kind !== 'sync') continue;
+          if (mayBecomeAsync(classRef, context, typeInfo)) continue;
+
+          context.report({
+            node: classRef,
+            messageId: inArray ? 'syncActionInArray' : 'syncAction',
+            data: {action: context.sourceCode.getText(classRef), method},
+          });
+        }
       },
     };
   },

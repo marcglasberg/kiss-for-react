@@ -1537,6 +1537,7 @@ class Increment extends Action {
 const isWaiting = useIsWaiting(Increment);    // Warning
 const isWaiting = useIsWaiting(LoadUser);     // OK, if `LoadUser` is async
 const isFailed = useIsFailed(Increment);      // OK, sync actions can fail
+const isLoading = useIsWaiting([LoadUser, Increment]); // Warning, in `Increment`
 ```
 
 An action is sync when its `reduce` and `before` are sync, and it doesn't set

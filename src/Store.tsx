@@ -28,12 +28,12 @@ import { capTimeoutMillis, describeValue, isPlainObject, MAX_TIMEOUT_MILLIS } fr
 export type Failure = { statusKey: unknown, error: unknown };
 
 /**
- * One promise given to `useSuspense`, for a component suspended while an action of `type` (or
- * of a subclass) with `statusKey` is in progress. Resolved, and removed, when no such action is
- * in progress anymore. See `Store._suspenseValue`.
+ * One promise given to `useSuspense`, for a component suspended while an action of one of the
+ * `types` (or of a subclass) with `statusKey` is in progress. Resolved, and removed, when no
+ * such action is in progress anymore. See `Store._suspenseValue`.
  */
 type SuspenseWait = {
-  type: abstract new (...args: any[]) => KissAction<any>,
+  types: readonly (abstract new (...args: any[]) => KissAction<any>)[],
   statusKey: unknown,
   promise: Promise<void>,
   resolve: () => void,
@@ -3603,13 +3603,23 @@ export class Store<St> {
    * Pass `{ statusKey }` to abort only the actions with that `statusKey` (see
    * `KissAction.statusKey`): `store.abort(LoadUser, { statusKey: userId })`.
    *
+   * Pass an array of types to abort the actions of all of them. For example, when a screen
+   * closes: `onUnmount: (store) => store.abort([LoadUser, LoadPosts])`. A `statusKey` applies to
+   * all the types in the array.
+   *
    * To abort a single action instance, use its `abort()` method.
    */
-  abort<T extends KissAction<St>>(type: abstract new (...args: any[]) => T, options?: StatusOptions): void {
+  abort<T extends KissAction<St>>(
+    type: (abstract new (...args: any[]) => T) | readonly (abstract new (...args: any[]) => KissAction<St>)[],
+    options?: StatusOptions,
+  ): void {
+    const types = _toTypeArray(type);
     const statusKey = options?.statusKey;
+    const name = Array.isArray(type) ? `[${types.map(t => t.name).join(', ')}]` : types[0].name;
     for (const action of this._actionsInProgress) {
-      if (action instanceof type && (statusKey === undefined || _isSameNonReentrantKey(action.statusKey, statusKey)))
-        action._abort(`The action was aborted by store.abort(${type.name}).`);
+      if (types.some(t => action instanceof t) &&
+        (statusKey === undefined || _isSameNonReentrantKey(action.statusKey, statusKey)))
+        action._abort(`The action was aborted by store.abort(${name}).`);
     }
   }
 
@@ -3631,11 +3641,20 @@ export class Store<St> {
    *
    * Pass `{ statusKey }` to consider only the actions with that `statusKey` (see
    * `KissAction.statusKey`): `store.isWaiting(LoadUser, { statusKey: userId })`.
+   *
+   * Pass an array of types to know if an action of ANY of them is being processed:
+   * `store.isWaiting([LoadUser, LoadPosts])`. An empty array returns false. A `statusKey`
+   * applies to all the types in the array.
    */
-  isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T, options?: StatusOptions): boolean {
+  isWaiting<T extends KissAction<St>>(
+    type: (abstract new (...args: any[]) => T) | readonly (abstract new (...args: any[]) => KissAction<St>)[],
+    options?: StatusOptions,
+  ): boolean {
+    const types = _toTypeArray(type);
     const statusKey = options?.statusKey;
     for (const action of this._actionsInProgress) {
-      if (action instanceof type && (statusKey === undefined || _isSameNonReentrantKey(action.statusKey, statusKey))) {
+      if (types.some(t => action instanceof t) &&
+        (statusKey === undefined || _isSameNonReentrantKey(action.statusKey, statusKey))) {
         return true;
       }
     }
@@ -3651,9 +3670,16 @@ export class Store<St> {
    *
    * Pass `{ statusKey }` to consider only the failures with that `statusKey` (see
    * `KissAction.statusKey`): `store.isFailed(LoadUser, { statusKey: userId })`.
+   *
+   * Pass an array of types to know if ANY of them failed:
+   * `store.isFailed([LoadUser, LoadPosts])`. An empty array returns false. A `statusKey`
+   * applies to all the types in the array.
    */
-  isFailed<T extends KissAction<any>>(type: { new(...args: any[]): T }, options?: StatusOptions): boolean {
-    return this._findFailure(type, options) !== null;
+  isFailed<T extends KissAction<any>>(
+    type: { new(...args: any[]): T } | readonly { new(...args: any[]): KissAction<any> }[],
+    options?: StatusOptions,
+  ): boolean {
+    return _toTypeArray(type).some(t => this._findFailure(t, options) !== null);
   }
 
   /**
@@ -3666,11 +3692,23 @@ export class Store<St> {
    * `KissAction.statusKey`): `store.exceptionFor(LoadUser, { statusKey: userId })`. Without it,
    * if actions with different keys failed, you get the `UserException` of the most recent
    * failure.
+   *
+   * Pass an array of types to get the `UserException` of the first type in the array that has
+   * one: `store.exceptionFor([LoadUser, LoadPosts])`. Put the most important type first. An
+   * empty array returns `null`. A `statusKey` applies to all the types in the array.
    */
-  exceptionFor<T extends KissAction<St>>(type: {
-    new(...args: any[]): T
-  }, options?: StatusOptions): (UserException | null) {
-    const failures = this._failedActions.get(type);
+  exceptionFor<T extends KissAction<St>>(
+    type: { new(...args: any[]): T } | readonly { new(...args: any[]): KissAction<St> }[],
+    options?: StatusOptions,
+  ): (UserException | null) {
+    if (Array.isArray(type)) {
+      for (const t of type) {
+        const exception = this.exceptionFor(t, options);
+        if (exception !== null) return exception;
+      }
+      return null;
+    }
+    const failures = this._failedActions.get(type as { new(...args: any[]): T });
     if (failures === undefined) return null;
     const statusKey = options?.statusKey;
 
@@ -3701,12 +3739,22 @@ export class Store<St> {
    * Pass `{ statusKey }` to clear only the failure with that `statusKey` (see
    * `KissAction.statusKey`): `store.clearExceptionFor(LoadUser, { statusKey: userId })`.
    * Without it, all the failures of the type are cleared, whatever their keys.
+   *
+   * Pass an array of types to clear all of them: `store.clearExceptionFor([LoadUser, LoadPosts])`.
+   * The components are updated only once. A `statusKey` applies to all the types in the array.
    */
-  clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T }, options?: StatusOptions): void {
+  clearExceptionFor<T extends KissAction<St>>(
+    type: { new(...args: any[]): T } | readonly { new(...args: any[]): KissAction<St> }[],
+    options?: StatusOptions,
+  ): void {
     const statusKey = options?.statusKey;
-    const removed = (statusKey === undefined)
-      ? this._failedActions.delete(type)
-      : this._removeFailure(type, statusKey);
+    let removed = false;
+    for (const t of _toTypeArray(type)) {
+      const removedThis = (statusKey === undefined)
+        ? this._failedActions.delete(t)
+        : this._removeFailure(t, statusKey);
+      removed = removedThis || removed;
+    }
     if (removed) this._statusListeners.notify();
   }
 
@@ -3726,38 +3774,47 @@ export class Store<St> {
   }
 
   /**
-   * Internal: the value `useSuspense` reads as its snapshot, for the given action `type` and
-   * `statusKey` (`undefined` matches any key):
+   * Internal: the value `useSuspense` reads as its snapshot, for the given action `type` (or
+   * array of types) and `statusKey` (`undefined` matches any key):
    *
-   * - A promise, while an action of the type (or of a subclass) with that key is in progress,
-   *   as `isWaiting` sees it. The same promise object is returned until the action finishes, as
-   *   React's Suspense needs, and it resolves then (see `_resolveSuspenseWaits`). The promise
-   *   is created the first time it's asked for, so a store whose components never call
+   * - A promise, while an action of the type (or of a subclass), or of any of the types in the
+   *   array, with that key is in progress, as `isWaiting` sees it. The same promise object is
+   *   returned until no such action is in progress, as React's Suspense needs, and it resolves
+   *   then (see `_resolveSuspenseWaits`). Arrays are compared by their content, so an array
+   *   written inline in the component gets the same promise on every render. The promise is
+   *   created the first time it's asked for, so a store whose components never call
    *   `useSuspense` creates none.
    * - Otherwise, when `throwErrors` is true, the failure record of the type with that key, as
-   *   `isFailed` sees it (the exact type; without a key, the most recent failure). It's the
-   *   same object until the failure is replaced or cleared.
+   *   `isFailed` sees it (the exact type; without a key, the most recent failure). With an
+   *   array, the failure of the first type in the array that failed. It's the same object until
+   *   the failure is replaced or cleared.
    * - Otherwise `null`.
    *
    * @internal
    */
   _suspenseValue(
-    type: abstract new (...args: any[]) => KissAction<any>,
+    type: (abstract new (...args: any[]) => KissAction<any>) | readonly (abstract new (...args: any[]) => KissAction<any>)[],
     statusKey: unknown,
     throwErrors: boolean = true,
   ): Promise<void> | Failure | null {
-    if (this.isWaiting(type, { statusKey })) {
-      let wait = this._suspenseWaits.find(w => w.type === type && _isSameNonReentrantKey(w.statusKey, statusKey));
+    const types = _toTypeArray(type);
+    if (this.isWaiting(types, { statusKey })) {
+      let wait = this._suspenseWaits.find(w =>
+        _isSameTypeArray(w.types, types) && _isSameNonReentrantKey(w.statusKey, statusKey));
       if (wait === undefined) {
         let resolve!: () => void;
         const promise = new Promise<void>(r => resolve = r);
-        wait = { type, statusKey, promise, resolve };
+        wait = { types: [...types], statusKey, promise, resolve };
         this._suspenseWaits.push(wait);
       }
       return wait.promise;
     }
     if (!throwErrors) return null;
-    return this._findFailure(type as new (...args: any[]) => KissAction<any>, { statusKey });
+    for (const t of types) {
+      const failure = this._findFailure(t as new (...args: any[]) => KissAction<any>, { statusKey });
+      if (failure !== null) return failure;
+    }
+    return null;
   }
 
   /**
@@ -3768,7 +3825,7 @@ export class Store<St> {
     if (this._suspenseWaits.length === 0) return;
     for (let i = this._suspenseWaits.length - 1; i >= 0; i--) {
       const wait = this._suspenseWaits[i];
-      if (!this.isWaiting(wait.type, { statusKey: wait.statusKey })) {
+      if (!this.isWaiting(wait.types, { statusKey: wait.statusKey })) {
         this._suspenseWaits.splice(i, 1);
         wait.resolve();
       }
@@ -5552,6 +5609,16 @@ class PrintableSet<T> extends Set<T> {
  * days), by chaining timers. A delay of `Infinity` never fires. Returns a function that cancels
  * the timeout.
  */
+/** Returns the given action type as an array with one type, or the given array of types. */
+function _toTypeArray<T>(type: T | readonly T[]): readonly T[] {
+  return Array.isArray(type) ? type : [type as T];
+}
+
+/** True if both arrays have the same action types, in the same order. */
+function _isSameTypeArray(a: readonly unknown[], b: readonly unknown[]): boolean {
+  return a.length === b.length && a.every((type, i) => type === b[i]);
+}
+
 function _setLongTimeout(callback: () => void, millis: number): () => void {
   if (millis === Infinity) return () => {};
 

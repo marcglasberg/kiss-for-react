@@ -77,3 +77,24 @@ class Sync extends KissAction<State> {
       | Type information |
       | true             |
       | false            |
+
+  Scenario Outline: In an array of action types, each sync action is a warning.
+    Given A sync action and an async action.
+    When They are checked together with {Call}.
+    Then There is a warning only in the sync action, saying it never makes the result true.
+    Examples: 
+      | Call                                    | Method       | Type information |
+      | useIsWaiting([LoadCount, Increment])    | useIsWaiting | true             |
+      | useIsWaiting([LoadCount, Increment])    | useIsWaiting | false            |
+      | store.isWaiting([LoadCount, Increment]) | isWaiting    | true             |
+      | store.isWaiting([LoadCount, Increment]) | isWaiting    | false            |
+
+  Scenario Outline: An array with only async actions or abstract classes is fine, and so is isFailed with an array.
+    Given {Case}.
+    When The code is linted.
+    Then There are no warnings.
+    Examples: 
+      | Case                                                                       | Call                                                     |
+      | An array of an async action and an abstract class                          | useIsWaiting([LoadCount, BaseAction, WithCheckInternet]) |
+      | An empty array                                                             | useIsWaiting([])                                         |
+      | isFailed with an array that has a sync action, since sync actions can fail | useIsFailed([Increment, LoadCount])                      |

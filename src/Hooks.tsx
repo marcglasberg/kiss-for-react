@@ -751,10 +751,23 @@ export function useDispatchSync(): (action: KissAction<any>) => void {
  *
  * Pass `{ statusKey }` to consider only the actions with that `statusKey` (see
  * `KissAction.statusKey`): `useIsWaiting(LoadUser, { statusKey: userId })`.
+ *
+ * Pass an array of types to know if an action of ANY of them is being processed:
+ *
+ * ```ts
+ * const isLoading = useIsWaiting([LoadUser, LoadPosts]);
+ * ```
+ *
+ * Use this instead of `useIsWaiting(LoadUser) || useIsWaiting(LoadPosts)`, which breaks the rules
+ * of hooks: when the first hook returns true, the second one is not called. An empty array
+ * returns false. A `statusKey` applies to all the types in the array.
  */
-export function useIsWaiting(type: abstract new (...args: any[]) => KissAction<any>, options?: StatusOptions): boolean {
+export function useIsWaiting(type: (abstract new (...args: any[]) => KissAction<any>) | readonly (abstract new (...args: any[]) => KissAction<any>)[], options?: StatusOptions): boolean {
   const store = useStoreFromContext<any>();
   const statusKey = options?.statusKey;
+  // An array written inline is a new array in each render, so this callback is also new in each
+  // render. That's fine: `useSyncExternalStore` only subscribes again when `subscribe` changes,
+  // and it re-renders only when the returned value changes.
   const getIsWaiting = useCallback(() => store.isWaiting(type, { statusKey }), [store, type, statusKey]);
   return useSyncExternalStore(store._subscribeStatus, getIsWaiting, _returnFalse);
 }
@@ -862,8 +875,11 @@ export function useConfiguration<C = unknown>(): C {
  *
  * Pass `{ statusKey }` to consider only the failures with that `statusKey` (see
  * `KissAction.statusKey`): `useIsFailed(LoadUser, { statusKey: userId })`.
+ *
+ * Pass an array of types to know if ANY of them failed: `useIsFailed([LoadUser, LoadPosts])`.
+ * An empty array returns false. A `statusKey` applies to all the types in the array.
  */
-export function useIsFailed(type: { new(...args: any[]): KissAction<any> }, options?: StatusOptions): boolean {
+export function useIsFailed(type: { new(...args: any[]): KissAction<any> } | readonly { new(...args: any[]): KissAction<any> }[], options?: StatusOptions): boolean {
   const store = useStoreFromContext<any>();
   const statusKey = options?.statusKey;
   const getIsFailed = useCallback(() => store.isFailed(type, { statusKey }), [store, type, statusKey]);
@@ -884,8 +900,12 @@ export function useIsFailed(type: { new(...args: any[]): KissAction<any> }, opti
  * `KissAction.statusKey`): `useExceptionFor(LoadUser, { statusKey: userId })`. Without it,
  * if actions with different keys failed, you get the `UserException` of the most recent
  * failure.
+ *
+ * Pass an array of types to get the `UserException` of the first type in the array that has
+ * one: `useExceptionFor([LoadUser, LoadPosts])`. Put the most important type first. An empty
+ * array returns `null`. A `statusKey` applies to all the types in the array.
  */
-export function useExceptionFor(type: { new(...args: any[]): KissAction<any> }, options?: StatusOptions): UserException | null {
+export function useExceptionFor(type: { new(...args: any[]): KissAction<any> } | readonly { new(...args: any[]): KissAction<any> }[], options?: StatusOptions): UserException | null {
   const store = useStoreFromContext<any>();
   const statusKey = options?.statusKey;
   const getExceptionFor = useCallback(() => store.exceptionFor(type, { statusKey }), [store, type, statusKey]);
@@ -910,10 +930,12 @@ export function useExceptionFor(type: { new(...args: any[]): KissAction<any> }, 
  * Pass `{ statusKey }` to clear only the failure with that `statusKey` (see
  * `KissAction.statusKey`): `clearExceptionFor(LoadUser, { statusKey: userId })`. Without it,
  * all the failures of the type are cleared, whatever their keys.
+ *
+ * Pass an array of types to clear all of them: `clearExceptionFor([LoadUser, LoadPosts])`.
  */
-export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction<any> }, options?: StatusOptions) => void {
+export function useClearExceptionFor(): (type: { new(...args: any[]): KissAction<any> } | readonly { new(...args: any[]): KissAction<any> }[], options?: StatusOptions) => void {
   const store = useStoreFromContext<any>();
-  return useMemo(() => (type: { new(...args: any[]): KissAction<any> }, options?: StatusOptions) => {
+  return useMemo(() => (type: { new(...args: any[]): KissAction<any> } | readonly { new(...args: any[]): KissAction<any> }[], options?: StatusOptions) => {
     store.clearExceptionFor(type, options);
   }, [store]);
 }
@@ -973,6 +995,12 @@ export type SuspenseOptions = StatusOptions & {
  * `KissAction.statusKey`): `useSuspense(LoadUser, { statusKey: userId })`. Without it, the
  * component suspends while any action of the type runs, and throws its most recent failure.
  *
+ * Pass an array of types when the component needs the result of several actions:
+ * `useSuspense([LoadUser, LoadPosts])`. The component suspends while an action of ANY of the
+ * types runs, and renders again when none of them runs. Then, if any of them failed, it throws
+ * the error of the first type in the array that failed. A `statusKey` applies to all the types
+ * in the array.
+ *
  * On the server and while hydrating, the hook never suspends or throws, like `useIsWaiting`
  * and `useIsFailed` are `false` there (see `StoreProviderProps.serverState`). After hydration,
  * it follows the live store.
@@ -981,7 +1009,10 @@ export type SuspenseOptions = StatusOptions & {
  * the start, so its local state (`useState`, `useRef`) is lost. A component that already
  * rendered keeps its state while suspended. This is how React's Suspense works.
  */
-export function useSuspense(type: abstract new (...args: any[]) => KissAction<any>, options?: SuspenseOptions): void {
+export function useSuspense(
+  type: (abstract new (...args: any[]) => KissAction<any>) | readonly (abstract new (...args: any[]) => KissAction<any>)[],
+  options?: SuspenseOptions,
+): void {
   const store = useStoreFromContext<any>();
   const statusKey = options?.statusKey;
   const throwErrors = options?.throwErrors ?? true;
@@ -1141,8 +1172,13 @@ class StoreDispatchers<St> {
    * ```
    *
    * Pass `{ statusKey }` to abort only the actions with that `statusKey`.
+   *
+   * Pass an array of types to abort the actions of all of them: `abort([LoadUser, LoadPosts])`.
    */
-  abort<T extends KissAction<St>>(type: abstract new (...args: any[]) => T, options?: StatusOptions): void {
+  abort<T extends KissAction<St>>(
+    type: (abstract new (...args: any[]) => T) | readonly (abstract new (...args: any[]) => KissAction<St>)[],
+    options?: StatusOptions,
+  ): void {
     this.store.abort(type, options);
   }
 

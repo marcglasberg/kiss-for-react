@@ -815,8 +815,11 @@ export abstract class KissAction<St> {
    *
    * Pass `{ statusKey }` to consider only the actions with that `statusKey` (see `statusKey`):
    * `this.isWaiting(LoadUser, { statusKey: userId })`.
+   *
+   * Pass an array of types to know if an action of ANY of them is being processed:
+   * `this.isWaiting([LoadUser, LoadPosts])`.
    */
-  isWaiting<T extends KissAction<St>>(type: abstract new (...args: any[]) => T, options?: StatusOptions): boolean {
+  isWaiting<T extends KissAction<St>>(type: (abstract new (...args: any[]) => T) | readonly (abstract new (...args: any[]) => KissAction<St>)[], options?: StatusOptions): boolean {
     return this.store.isWaiting(type, options);
   }
 
@@ -829,8 +832,10 @@ export abstract class KissAction<St> {
    *
    * Pass `{ statusKey }` to consider only the failures with that `statusKey` (see `statusKey`):
    * `this.isFailed(LoadUser, { statusKey: userId })`.
+   *
+   * Pass an array of types to know if ANY of them failed: `this.isFailed([LoadUser, LoadPosts])`.
    */
-  isFailed<T extends KissAction<any>>(type: { new(...args: any[]): T }, options?: StatusOptions): boolean {
+  isFailed<T extends KissAction<any>>(type: { new(...args: any[]): T } | readonly { new(...args: any[]): KissAction<any> }[], options?: StatusOptions): boolean {
     return this.store.isFailed(type, options);
   }
 
@@ -843,10 +848,11 @@ export abstract class KissAction<St> {
    * Pass `{ statusKey }` to get the exception of the failure with that `statusKey` (see
    * `statusKey`): `this.exceptionFor(LoadUser, { statusKey: userId })`. Without it, if actions
    * with different keys failed, you get the `UserException` of the most recent failure.
+   *
+   * Pass an array of types to get the `UserException` of the first type in the array that has
+   * one: `this.exceptionFor([LoadUser, LoadPosts])`.
    */
-  exceptionFor<T extends KissAction<St>>(type: {
-    new(...args: any[]): T
-  }, options?: StatusOptions): (UserException | null) {
+  exceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T } | readonly { new(...args: any[]): KissAction<St> }[], options?: StatusOptions): (UserException | null) {
     return this.store.exceptionFor(type, options);
   }
 
@@ -866,8 +872,10 @@ export abstract class KissAction<St> {
    * Pass `{ statusKey }` to clear only the failure with that `statusKey` (see `statusKey`):
    * `this.clearExceptionFor(LoadUser, { statusKey: userId })`. Without it, all the failures of
    * the type are cleared, whatever their keys.
+   *
+   * Pass an array of types to clear all of them: `this.clearExceptionFor([LoadUser, LoadPosts])`.
    */
-  clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T }, options?: StatusOptions): void {
+  clearExceptionFor<T extends KissAction<St>>(type: { new(...args: any[]): T } | readonly { new(...args: any[]): KissAction<St> }[], options?: StatusOptions): void {
     return this.store.clearExceptionFor(type, options);
   }
 

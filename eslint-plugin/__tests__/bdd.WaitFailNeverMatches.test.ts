@@ -225,3 +225,47 @@ export class Decrement extends KissAction<State> {
     expect(result.messages.map((m) => m.text)).toEqual(['Increment']);
     expect(result.typeErrors).toEqual([]);
   });
+
+Bdd(feature)
+  .scenario('In an array of action types, each sync action is a warning.')
+  .given('A sync action and an async action.')
+  .when('They are checked together with {Call}.')
+  .then('There is a warning only in the sync action, saying it never makes the result true.')
+  .example(val('Call', 'useIsWaiting([LoadCount, Increment])'), val('Method', 'useIsWaiting'), val('Type information', true))
+  .example(val('Call', 'useIsWaiting([LoadCount, Increment])'), val('Method', 'useIsWaiting'), val('Type information', false))
+  .example(val('Call', 'store.isWaiting([LoadCount, Increment])'), val('Method', 'isWaiting'), val('Type information', true))
+  .example(val('Call', 'store.isWaiting([LoadCount, Increment])'), val('Method', 'isWaiting'), val('Type information', false))
+  .run(async (ctx) => {
+    const call = ctx.example.val('Call') as string;
+    const code = `${prelude}
+export function Counter() {
+  const isWaiting = ${call};
+  return isWaiting ? 'Loading' : 'Done';
+}
+`;
+    const result = lint(rule, code, {types: ctx.example.val('Type information') as boolean});
+    expect(result.messages.map((m) => m.text)).toEqual(['Increment']);
+    expect(result.messages[0].message).toContain(
+      `\`Increment\` is sync, so it never makes \`${ctx.example.val('Method')}([...])\` true`);
+    expect(result.typeErrors).toEqual([]);
+  });
+
+Bdd(feature)
+  .scenario('An array with only async actions or abstract classes is fine, and so is isFailed with an array.')
+  .given('{Case}.')
+  .when('The code is linted.')
+  .then('There are no warnings.')
+  .example(val('Case', 'An array of an async action and an abstract class'), val('Call', 'useIsWaiting([LoadCount, BaseAction, WithCheckInternet])'))
+  .example(val('Case', 'An empty array'), val('Call', 'useIsWaiting([])'))
+  .example(val('Case', 'isFailed with an array that has a sync action, since sync actions can fail'), val('Call', 'useIsFailed([Increment, LoadCount])'))
+  .run(async (ctx) => {
+    const code = `${prelude}
+export function Counter() {
+  return ${ctx.example.val('Call')};
+}
+`;
+    const result = lint(rule, code);
+    expect(result.messages).toEqual([]);
+    expect(result.typeErrors).toEqual([]);
+    expect(lint(rule, code, {types: false}).messages).toEqual([]);
+  });

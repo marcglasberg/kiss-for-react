@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.0.6
+
+### Changes
+
+* **The status functions accept an array of action types.** The array means "any of them":
+  * `useIsWaiting([LoadUser, LoadPosts])` is true while an action of any of the types runs.
+  * `useIsFailed([LoadUser, LoadPosts])` is true if any of the types failed.
+  * `useExceptionFor([LoadUser, LoadPosts])` returns the `UserException` of the first type 
+    in the array that has one. Put the most important type first.
+  * `clearExceptionFor([LoadUser, LoadPosts])` (from `useClearExceptionFor`) clears all 
+    the types, and updates the components only once.
+
+  * `useSuspense([LoadUser, LoadPosts])` suspends the component while an action of any of 
+    the types runs. Then, if any of them failed, it throws the error of the first type in
+    the array that failed.
+  * `store.abort([LoadUser, LoadPosts])` (and `abort` from `useStore`) aborts the actions 
+    of all the types.
+
+  The same is true for `store.isWaiting`, `store.isFailed`, `store.exceptionFor` and
+  `store.clearExceptionFor`, and for the same methods inside an action (`this.isWaiting`,
+  etc.). An empty array returns `false` (or `null`). A `statusKey` applies to all the types 
+  in the array. A single type still works as before: `useIsWaiting(LoadUser)`,
+  `useIsWaiting([LoadUser])` and `useIsWaiting([LoadUser, LoadPosts])` are all valid.
+
+  Use `useIsWaiting([LoadUser, LoadPosts])` instead of
+  `useIsWaiting(LoadUser) || useIsWaiting(LoadPosts)`, which breaks the rules of hooks: 
+  when the first hook returns true, the second one is not called.
+
 ## 2.0.5
 
 ### Changes
