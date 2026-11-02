@@ -93,6 +93,38 @@ jobs:
         env:
           CI: true
 
+  # The client-only examples: the React Native app (type check, lint, Jest tests) and the Vite
+  # web app (type check and production build, lint, Jest tests).
+  client-examples:
+    name: ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [TodoAppReactNative, todo-app-example]
+    defaults:
+      run:
+        working-directory: examples/${{ matrix.example }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 26.x
+          check-latest: true
+      - name: Verify the supported Node major and security floor
+        run: node scripts/check-node-runtime.cjs
+        working-directory: .
+      - name: Install the example
+        run: npm ci --no-audit --no-fund
+      - name: Type check
+        if: matrix.example == 'TodoAppReactNative'
+        run: npx tsc --noEmit
+      - name: Type check and build
+        if: matrix.example == 'todo-app-example'
+        run: npm run build
+      - run: npm run lint
+      - run: npm test -- --ci
+
   plugin-consumers:
     name: Packed ESLint plugin / ESLint ${{ matrix.eslint }}
     runs-on: ubuntu-latest
