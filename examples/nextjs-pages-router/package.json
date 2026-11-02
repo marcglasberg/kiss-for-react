@@ -10,7 +10,7 @@
     "test": "npm run build && playwright test"
   },
   "dependencies": {
-    "kiss-for-react": "file:../..",
+    "kiss-for-react": "^2.0.6",
     "next": "^16.4.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
@@ -20,6 +20,8 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "easy-bdd-tool-jest": "^1.1.0",
+    "eslint-plugin-kiss-for-react": "^1.1.0",
     "typescript": "~6.0.3"
   }
 }

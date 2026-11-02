@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "express": "^5.3.0",
-    "kiss-for-react": "file:../..",
+    "kiss-for-react": "^2.0.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -20,7 +20,9 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "easy-bdd-tool-jest": "^1.1.0",
     "esbuild": "^0.28.2",
+    "eslint-plugin-kiss-for-react": "^1.1.0",
     "typescript": "~6.0.3"
   },
   "allowScripts": {

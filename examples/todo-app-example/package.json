@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "kiss-for-react": "file:../..",
+    "kiss-for-react": "^2.0.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "@emotion/react": "^11.14.0",
@@ -23,7 +23,9 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "easy-bdd-tool-jest": "^1.1.0",
     "eslint": "^10.13.0",
+    "eslint-plugin-kiss-for-react": "^1.1.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.13.0",
