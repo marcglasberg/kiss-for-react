@@ -31,6 +31,7 @@ import lifecycleMethodCall from './rules/lifecycleMethodCall.js';
 import pollingActionRestartsPolling from './rules/pollingActionRestartsPolling.js';
 import pollingWithCaveat from './rules/pollingWithCaveat.js';
 import missingInitialState from './rules/missingInitialState.js';
+import missingStateClass from './rules/missingStateClass.js';
 import missingKeyParams from './rules/missingKeyParams.js';
 import missingSuperInOverride from './rules/missingSuperInOverride.js';
 import newValuesInUseObject from './rules/newValuesInUseObject.js';
@@ -48,6 +49,7 @@ import sequentialDeadlock from './rules/sequentialDeadlock.js';
 import serverPushAssociatedAction from './rules/serverPushAssociatedAction.js';
 import staleStateAfterAwait from './rules/staleStateAfterAwait.js';
 import stateClassMustBeImmutable from './rules/stateClassMustBeImmutable.js';
+import stateMethodsMustBeSync from './rules/stateMethodsMustBeSync.js';
 import storeInSelector from './rules/storeInSelector.js';
 import storeStateInRender from './rules/storeStateInRender.js';
 import testingFeatureInProduction from './rules/testingFeatureInProduction.js';
@@ -97,12 +99,14 @@ const rules = {
   'wait-fail-never-matches': waitFailNeverMatches,
   'wait-condition-without-timeout': waitConditionWithoutTimeout,
   'state-class-must-be-immutable': stateClassMustBeImmutable,
+  'state-methods-must-be-sync': stateMethodsMustBeSync,
   'prefer-readonly-collections': preferReadonlyCollections,
   'non-state-object-in-state': nonStateObjectInState,
   'copy-missing-field': copyMissingField,
   'event-name-suffix': eventNameSuffix,
   'event-not-spent-initially': eventNotSpentInitially,
   'missing-initial-state': missingInitialState,
+  'missing-state-class': missingStateClass,
   'route-in-state': routeInState,
   'user-exception-outside-action': userExceptionOutsideAction,
   'user-exception-without-cause': userExceptionWithoutCause,
@@ -122,7 +126,7 @@ const rules = {
 const plugin = {
   meta: {
     name: 'eslint-plugin-kiss-for-react',
-    version: '1.1.0',
+    version: '1.3.0',
   },
   rules,
   configs: {} as Record<string, TSESLint.FlatConfig.Config>,
@@ -136,7 +140,7 @@ const plugin = {
  * export default [kiss.configs.recommended];
  * ```
  *
- * The opt-in rules are not in it. Turn them on yourself, if you want them:
+ * The opt-in rules are not in it, including `missing-state-class`. Turn them on yourself, if you want them:
  * `avoid-abort-dispatch`, `avoid-wrap-reduce`, `missing-key-params`, `missing-initial-state`, `route-in-state`, `error-observer-without-environment`, `action-name-ends-with-action`, `action-name-ends-with-underscore-action`, `action-name-without-action`, `action-file-name-ends-with-action`, `action-file-name-starts-with-action`.
  */
 plugin.configs.recommended = {
@@ -178,6 +182,7 @@ plugin.configs.recommended = {
     'kiss-for-react/wait-fail-never-matches': 'warn',
     'kiss-for-react/wait-condition-without-timeout': 'warn',
     'kiss-for-react/state-class-must-be-immutable': 'warn',
+    'kiss-for-react/state-methods-must-be-sync': 'warn',
     'kiss-for-react/prefer-readonly-collections': 'warn',
     'kiss-for-react/non-state-object-in-state': 'warn',
     'kiss-for-react/copy-missing-field': 'warn',

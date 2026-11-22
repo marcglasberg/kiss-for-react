@@ -1,4 +1,6 @@
 /* eslint-disable kiss-for-react/state-class-must-be-immutable */
+/* eslint-disable kiss-for-react/no-state-mutation */
+/* eslint-disable kiss-for-react/state-methods-must-be-sync */
 /* eslint-disable kiss-for-react/prefer-readonly-collections */
 /* eslint-disable kiss-for-react/non-state-object-in-state */
 /* eslint-disable kiss-for-react/copy-missing-field */
@@ -485,3 +487,28 @@ abstract class NavigationAction extends KissAction<Navigation> {}
 class RouterInfo {
   constructor(readonly pathname: string) {}
 }
+
+// ===============================================================================================
+// State methods: synchronous calculations that do not mutate existing state.
+
+class MethodState {
+  // kiss-for-react/prefer-readonly-collections
+  // A mutable array also needs a readonly collection type.
+  // Fix (suggestion): Will change the type to `readonly string[]`.
+  readonly items: string[] = [];
+
+  append(value: string) {
+    // kiss-for-react/no-state-mutation
+    // Modifies the existing state's array. Return a new state with a new array instead.
+    this.items.push(value);
+    return this;
+  }
+
+  // kiss-for-react/state-methods-must-be-sync
+  // Move asynchronous work to an action. State methods should calculate synchronously.
+  async load() {
+    return 'Mary';
+  }
+}
+
+abstract class MethodStateAction extends KissAction<MethodState> {}

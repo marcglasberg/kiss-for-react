@@ -10,6 +10,40 @@ export type ClassNode = TSESTree.ClassDeclaration | TSESTree.ClassExpression;
 // imported as a type, since it's an optional dependency.
 const SYMBOL_PROPERTY = 4;
 const SYMBOL_CLASS = 32;
+const SYMBOL_ALIAS = 2097152;
+
+/** True only for the decorator exported by Kiss, including import aliases. */
+export function hasStateClassDecorator(node: ClassNode, context: Context, typeInfo: TypeInfo | null): boolean {
+  if (node.decorators.some((decorator) => kissImportName(decorator.expression, context) === 'stateClass')) return true;
+  if (!typeInfo) return false;
+  return hasStateClassTs(typeInfo.services.esTreeNodeToTSNodeMap.get(node) as ts.ClassLikeDeclaration,
+    typeInfo.checker, kissSourceDirs(typeInfo.services.program));
+}
+
+const kissDirsCache = new WeakMap<ts.Program, string[]>();
+function kissSourceDirs(program: ts.Program): string[] {
+  let dirs = kissDirsCache.get(program);
+  if (!dirs) {
+    dirs = program.getSourceFiles()
+      .filter((sf) => !sf.isDeclarationFile && /\bclass KissAction\b/.test(sf.text))
+      .map((sf) => sf.fileName.replace(/\\/g, '/').replace(/[^/]*$/, ''));
+    kissDirsCache.set(program, dirs);
+  }
+  return dirs;
+}
+
+function hasStateClassTs(node: ts.ClassLikeDeclaration, checker: ts.TypeChecker, kissDirs: string[]): boolean {
+  return !!node.modifiers?.some((modifier) => {
+    if (!('expression' in modifier)) return false;
+    const expression = (modifier as ts.Decorator).expression;
+    let symbol = checker.getSymbolAtLocation(expression);
+    if (symbol && (symbol.flags & SYMBOL_ALIAS)) symbol = checker.getAliasedSymbol(symbol);
+    return symbol?.getName() === 'stateClass' && !!symbol.declarations?.some((declaration) => {
+      const file = declaration.getSourceFile().fileName.replace(/\\/g, '/');
+      return file.includes('/node_modules/kiss-for-react/') || kissDirs.some((dir) => file.startsWith(dir));
+    });
+  });
+}
 
 /**
  * A field of a class: a property declared in the class body, like `readonly name: string`,
@@ -86,7 +120,7 @@ export function classNameOf(classNode: ClassNode): string {
 }
 
 /**
- * True if the class is a state class: the state `St` of a `KissAction<St>`, `Store<St>` or
+ * True if the class is a state class: an optional `@stateClass` class, the state `St` of a `KissAction<St>`, `Store<St>` or
  * `createStore<St>`, or a class it contains (the types of its fields, recursively, including
  * array elements, `Map` and `Set` type arguments, and unions), or a superclass of those.
  *
@@ -141,9 +175,7 @@ function computeProgramInfo(program: ts.Program, checker: ts.TypeChecker): Progr
   const sourceFiles = program.getSourceFiles();
 
   // Kiss's own source files, when Kiss is not in `node_modules` (as in the Kiss repo itself).
-  const kissDirs = sourceFiles
-    .filter((sf) => !sf.isDeclarationFile && /\bclass KissAction\b/.test(sf.text))
-    .map((sf) => sf.fileName.replace(/\\/g, '/').replace(/[^/]*$/, ''));
+  const kissDirs = kissSourceDirs(program);
 
   const userFileCache = new Map<ts.SourceFile, boolean>();
   const isUserFile = (sf: ts.SourceFile): boolean => {
@@ -201,6 +233,11 @@ function computeProgramInfo(program: ts.Program, checker: ts.TypeChecker): Progr
   for (const sf of sourceFiles) {
     if (!isUserFile(sf)) continue;
     for (const node of candidatesOf(sf)) {
+      if ('members' in node && hasStateClassTs(node as ts.ClassLikeDeclaration, checker, kissDirs)) {
+        const name = (node as ts.ClassLikeDeclaration).name;
+        const symbol = name ? checker.getSymbolAtLocation(name) : undefined;
+        if (symbol) collect(checker.getDeclaredTypeOfSymbol(symbol));
+      }
       const stateType = stateTypeOfCandidate(node, checker);
       if (stateType) collect(stateType);
     }
@@ -218,7 +255,7 @@ function candidatesOf(sf: ts.SourceFile): ts.Node[] {
   const mayHaveStore = sf.text.includes('Store');
   const visit = (node: ts.Node): void => {
     const any = node as any;
-    if (Array.isArray(any.heritageClauses) && any.heritageClauses.length > 0 && Array.isArray(any.members) && any.name) {
+    if (Array.isArray(any.members) && any.name && (any.heritageClauses?.length || any.modifiers?.some((m: any) => m.expression))) {
       result.push(node);
     } else if (mayHaveStore && 'arguments' in any && any.expression) {
       const name = nameOfTsExpression(any.expression);
@@ -241,7 +278,7 @@ function nameOfTsExpression(expression: any): string | undefined {
 // The state type that a candidate node tells, if any.
 function stateTypeOfCandidate(node: ts.Node, checker: ts.TypeChecker): ts.Type | null {
   const any = node as any;
-  if (any.heritageClauses) {
+  if ('members' in any) {
     const symbol = checker.getSymbolAtLocation(any.name);
     if (!symbol || !(symbol.flags & SYMBOL_CLASS)) return null;
     const type = checker.getDeclaredTypeOfSymbol(symbol);
@@ -325,6 +362,8 @@ function computeFileStateClasses(context: Context): Set<ClassNode> {
   };
 
   walk(context.sourceCode.ast, (node) => {
+    if ((node.type === AST_NODE_TYPES.ClassDeclaration || node.type === AST_NODE_TYPES.ClassExpression) &&
+      hasStateClassDecorator(node, context, null)) addClass(node);
     // `class Action extends KissAction<State>`
     if ((node.type === AST_NODE_TYPES.ClassDeclaration || node.type === AST_NODE_TYPES.ClassExpression) &&
       node.superClass && node.superTypeArguments && kissImportName(node.superClass, context) === 'KissAction') {

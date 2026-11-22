@@ -12,7 +12,7 @@ import { ClassNode, classNameOf, fieldsOf, isStateClass } from '../stateClasses.
  * }
  * ```
  *
- * A state class is the `St` of a `Store<St>` or `KissAction<St>`, and the classes it contains.
+ * A state class is an optional `@stateClass` class, the `St` of a `Store<St>` or `KissAction<St>`, and the classes it contains.
  * Kiss compares states by identity, so changing a field in place doesn't re-render the
  * components, and isn't persisted.
  *

@@ -37,12 +37,13 @@ const NAMING_RULES = [
   'action-file-name-starts-with-action',
 ].map((name) => `kiss-for-react/${name}`);
 
+// The annotation rule runs only in `state-annotations.ts`, so existing demos need no decorators.
 // The same as `testing/demo/eslint.config.mjs`, but with the plugin's source, instead of the built plugin.
 function createEslint(): ESLint {
   const allRules: Linter.RulesRecord = {...(plugin.configs.recommended.rules as Linter.RulesRecord)};
   for (const name of Object.keys(plugin.rules)) {
     const rule = `kiss-for-react/${name}`;
-    if (!NAMING_RULES.includes(rule)) allRules[rule] ??= 'warn';
+    if (!NAMING_RULES.includes(rule) && name !== 'missing-state-class') allRules[rule] ??= 'warn';
   }
   return new ESLint({
     cwd: demoDir,
@@ -57,6 +58,10 @@ function createEslint(): ESLint {
         plugins: {'kiss-for-react': plugin as any},
         rules: allRules,
         linterOptions: {reportUnusedDisableDirectives: 'warn'},
+      },
+      {
+        files: ['state-annotations.ts'],
+        rules: {'kiss-for-react/missing-state-class': 'warn'},
       },
       {
         files: ['naming.ts'],

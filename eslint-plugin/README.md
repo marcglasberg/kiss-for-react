@@ -102,7 +102,11 @@ But with type information, they find more mistakes, and report fewer false ones:
 
 * They know the classes, stores and state declared in other files. For example,
   `dispatch-sync-async-action` then finds async actions declared in other files, and the
-  state class rules know which classes are part of the state.
+  state class rules follow the types of state fields to find nested state classes.
+  If a store uses `State`, `State` has a field of type `User[]`, and `User` has a field of
+  type `Address`, the plugin identifies all three as state classes, even when each class
+  is declared in a separate file. Class annotations are optional; see
+  [`missing-state-class`](#missing-state-class) if you want to require them.
 * They check that a class really is a Kiss action, or that an object really is a Kiss store,
   instead of guessing from the code.
 * Some quick fixes can do more, like adding a parameter with its type.
@@ -110,14 +114,21 @@ But with type information, they find more mistakes, and report fewer false ones:
 The rule `non-state-object-in-state` only works with type information. Each rule's
 description says when type information matters.
 
-To turn it on, add the `projectService` option of `typescript-eslint`:
+To turn on type information, set `languageOptions.parserOptions.projectService` to `true`.
+For example, use this complete `eslint.config.mjs` in your project's root directory:
 
 ```js
+import { defineConfig } from 'eslint/config';
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import kiss from 'eslint-plugin-kiss-for-react';
+
 export default defineConfig(
   js.configs.recommended,
   tseslint.configs.recommended,
   kiss.configs.recommended,
   {
+    files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -127,6 +138,19 @@ export default defineConfig(
   },
 );
 ```
+
+The TypeScript project service uses the nearest `tsconfig.json` for each TypeScript file.
+Make sure that the TypeScript files you lint belong to that project. For example, if your
+source files are in `src`, your existing `tsconfig.json` can include them with
+`"include": ["src"]`. Keep the compiler options your project already needs.
+
+You can keep `tseslint.configs.recommended`, as shown above. Using
+`tseslint.configs.recommendedTypeChecked` also enables additional TypeScript ESLint rules,
+but the Kiss rules do not require that preset.
+
+Run `npx eslint .` to check your files. See the
+[TypeScript ESLint type information guide](https://typescript-eslint.io/getting-started/typed-linting/)
+for more configuration details.
 
 Linting with type information is slower, since ESLint uses TypeScript to type-check the
 files. For most projects, it's still fast enough to use all the time.
@@ -256,7 +280,9 @@ directories.
 
 **State classes**
 
+- [`missing-state-class`](#missing-state-class) opt-in warning
 - [`state-class-must-be-immutable`](#state-class-must-be-immutable) warning
+- [`state-methods-must-be-sync`](#state-methods-must-be-sync) warning
 - [`prefer-readonly-collections`](#prefer-readonly-collections) warning
 - [`non-state-object-in-state`](#non-state-object-in-state) warning
 - [`copy-missing-field`](#copy-missing-field) warning
@@ -632,6 +658,10 @@ methods that change arrays (`push`, `pop`, `shift`, `unshift`, `splice`, `sort`,
 It checks:
 
 * `this.state` and `this.initialState` in actions.
+* `this` and its fields in instance methods, getters, setters and function fields of state
+  classes, identified automatically or annotated with `@stateClass`. Arrow callbacks retain
+  the instance’s `this`. Constructors are excluded so fields can be initialized. Static
+  methods, nested regular functions with their own `this`, and unrelated classes are excluded.
 * The state parameter of the function returned by an async `reduce`, of the selectors of
   `useSelect`, `useSelector` and `useObject`, of the conditions of `waitCondition`, `dispatchWhen` and
   `useDispatchWhen`, and of the function of `UpdateStateAction`.
@@ -639,7 +669,26 @@ It checks:
   returns a part of the state, like `useSelect((state: State) => state.items)`.
 
 Changing new objects is fine, like `const items = [...this.state.items]; items.push(x)`.
-Methods that return a new array, like `toSorted`, are fine too.
+Methods that return a new array, like `toSorted`, are fine too. The same applies inside
+state methods:
+
+```ts
+@stateClass
+class Counter {
+  constructor(readonly count: number) {}
+
+  increment() {
+    this.count++; // Error (also rejected by TypeScript because count is readonly).
+  }
+
+  next() { return new Counter(this.count + 1); } // OK.
+  isPositive() { return this.count > 0; }         // OK: a query can return a boolean.
+  unchanged() { return this; }                   // OK: no state was modified.
+}
+```
+
+This rule detects specific mutations. It does not prove that a method is pure, trace all
+calls to helper functions, or require a new instance from every method.
 
 Without [type information](#type-information), only paths that start at the state are
 checked, like `this.state.items.push(x)`, and the methods of maps and sets are not checked,
@@ -1605,6 +1654,111 @@ any object with these methods is checked, since the `timeoutMillis` option is sp
 
 ---
 
+### missing-state-class
+
+An optional warning for each detected state class without its own `@stateClass` decorator
+from `kiss-for-react`. The rule is **off by default**. Automatic state class identification
+continues to work whether this rule is enabled or disabled.
+
+The optional [`@stateClass` decorator](../README.md#optional-stateclass-decorator) declares
+the class's purpose in its own file. Readers, AI agents, and other lint tools can recognize
+state classes without finding their stores. The decorator also makes the Kiss state rules
+check a class before a store uses it. This rule exists to keep those explicit declarations
+complete as classes are added to the state:
+
+```ts
+import { createStore, stateClass } from 'kiss-for-react';
+
+class User {                         // Warning: missing @stateClass
+  constructor(public readonly name: string) {}
+}
+
+@stateClass
+class State {
+  constructor(public readonly user: User) {}
+}
+
+createStore({ initialState: new State(new User('Mary')) });
+```
+
+Add `@stateClass` above `class User` to resolve the warning. Each detected state class needs
+its own annotation, including nested classes and base classes. An annotation on a base class
+does not satisfy the rule for a subclass. Imports with aliases, such as
+`import { stateClass as state } from 'kiss-for-react'` and `@state`, are accepted, as are
+namespace imports such as `@kiss.stateClass`. A different decorator named `stateClass`
+does not count.
+
+Enable the rule after the recommended configuration:
+
+```js
+export default defineConfig(
+  // Keep your existing TypeScript parser and type information configuration.
+  kiss.configs.recommended,
+  {
+    rules: {
+      'kiss-for-react/missing-state-class': 'warn',
+    },
+  },
+);
+```
+
+With [type information](#type-information), the plugin follows the store and action state
+types, nested field types, collections, unions, and base classes across the TypeScript
+project. Without type information, detection is limited to classes declared in the linted
+file. Classes from dependencies are not checked. Interfaces and plain object state do not
+need class annotations.
+
+The decorator does not change the class, freeze its instances, or add runtime metadata.
+Using the decorator requires a compiler that accepts decorator syntax. TypeScript 5 or
+later supports modern class decorators without `experimentalDecorators`; the decorator
+also supports legacy class decorators enabled by that option. If your application uses
+Babel, SWC, or another compiler, check that compiler's decorator support. For setup examples, see
+[configuring the optional decorator](../README.md#configuring-decorators). Applications
+that do not use the decorator need no decorator configuration. The decorator does add a
+runtime import and compiler-generated decorator calls.
+
+No automatic fix is offered: adding decorator syntax can require compiler configuration.
+
+---
+
+### state-methods-must-be-sync
+
+A warning, enabled by default, for asynchronous instance methods and function fields of
+state classes. Keep state methods as synchronous calculations. Put asynchronous work,
+such as network requests, in Kiss actions:
+
+```ts
+import { stateClass } from 'kiss-for-react';
+
+@stateClass
+class User {
+  constructor(readonly name: string) {}
+
+  async loadProfile() { /* ... */ }             // Warning.
+  loadMore = async () => 'Mary';                // Warning.
+  pending() { return Promise.resolve('Mary'); } // Warning with type information.
+  withName(name: string) { return new User(name); } // OK.
+  isNamed() { return this.name.length > 0; }        // OK.
+  unchanged() { return this; }                      // OK.
+}
+```
+
+The rule uses automatic state class detection and the optional `@stateClass` decorator.
+No annotation is required. With [type information](#type-information), classes are found
+across files, and methods, getters, and callable fields that return promises or other
+thenables are reported even without `async`. A union that includes a promise is reported.
+Without type information, only the `async` keyword is checked, including async generators.
+
+Static methods and constructors are excluded. A nested async function does not cause a
+warning merely because it is declared inside a synchronous method. An `any` or `unknown`
+return type does not establish that the method is asynchronous. The rule does not prove
+purity or require methods to return new instances. Queries and unchanged `this` returns
+are allowed. Use [`no-state-mutation`](#no-state-mutation) to detect changes to existing state.
+
+No automatic fix is offered: removing `async` or moving work to an action can change behavior.
+
+---
+
 ### state-class-must-be-immutable
 
 A warning for a field of a state class that is not `readonly`. Kiss compares states by
@@ -1620,7 +1774,8 @@ class State {
 }
 ```
 
-A state class is the `State` of a `KissAction<State>`, `Store<State>` or
+A state class is a class annotated with the optional `@stateClass` decorator, the
+`State` of a `KissAction<State>`, `Store<State>` or
 `createStore<State>`, and the classes it contains: the types of its fields (also inside
 arrays, maps, sets and unions, like `readonly User[]` or `Settings | null`), and their
 superclasses. Static fields, getters and methods are not reported.

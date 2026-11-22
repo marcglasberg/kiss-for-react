@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.3.0
+
+* `no-state-mutation` (error by default) now checks `this` in state instance methods,
+  accessors and function fields, including nested fields and, with type information,
+  aliases and collection operations. Constructors and static members are excluded.
+  New local objects, queries and returning unchanged `this` remain allowed.
+* New `state-methods-must-be-sync` rule (warning by default): reports asynchronous state
+  instance methods and function fields. With type information, also detects promise and
+  thenable returns, including getters and unions. Static members are excluded.
+* Both checks use automatic state class detection and the optional `@stateClass` decorator.
+  Neither check claims full purity or requires every method to return a new instance.
+* Added decorator configuration examples for modern and legacy TypeScript compilation.
+
+## 1.2.0
+
+* New opt-in rule `missing-state-class` (off by default): requires the optional
+  `@stateClass` decorator from Kiss on detected state classes, including nested classes
+  and base classes. Explicit annotations help readers, AI agents, and other lint tools
+  recognize state classes in their own files.
+* State class rules also recognize `@stateClass` classes before a store uses them,
+  including aliases and namespace imports. Automatic state class identification remains
+  available without annotations. Type information enables detection across files.
+
 ## 1.1.0
 
 * New rule `conditional-status-hook` (error): reports `useIsWaiting`, `useIsFailed` and

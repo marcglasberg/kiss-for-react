@@ -9,6 +9,7 @@ can see them in your IDE, and try their quick fixes. They are not meant to run.
 | `reducers.ts`      | Reducers: stale state, state mutation, `return null`...                  |
 | `actions.ts`       | Action methods and features: `after`, `before`, `retry`, `nonReentrant`, the base action, the dependencies... |
 | `dispatching.ts`   | Dispatching and waiting: `dispatchSync`, `dispatchAndWait`, `ready()`, `waitCondition`... |
+| `state-annotations.ts` | Optional `@stateClass` annotations and `missing-state-class` |
 | `state-classes.ts` | State classes: immutability, collections, objects that are not state...  |
 | `errors.ts`        | Errors: `UserException`, `errorObserver`, the `environment`              |
 | `debugging.ts`     | Debugging and testing features in production code                        |
@@ -53,6 +54,12 @@ npx eslint --no-inline-config eslint-plugin/testing/demo/components.tsx
 
 The naming rules report every action, so the demo config turns them on only in `naming.ts`. In a
 real project, turn on only one of the 3 action-name rules, and one of the 2 file-name rules.
+
+## The state annotation rule
+
+The demo config enables `missing-state-class` only in `state-annotations.ts`. This keeps
+the other examples usable without decorators. In a real project, enable the rule if you
+want every detected state class to declare its purpose for readers, AI agents, and tools.
 
 ## Keeping the demo up to date
 

@@ -21,11 +21,12 @@ const namingRules = [
   'action-file-name-starts-with-action',
 ].map((name) => `kiss-for-react/${name}`);
 
+// The annotation rule is only on in `state-annotations.ts`, so other demos need no decorators.
 // The other opt-in rules are not in the recommended config, so they're added here as warnings.
 const allRules = { ...kiss.configs.recommended.rules };
 for (const name of Object.keys(kiss.rules)) {
   const rule = `kiss-for-react/${name}`;
-  if (!namingRules.includes(rule)) allRules[rule] ??= 'warn';
+  if (!namingRules.includes(rule) && name !== 'missing-state-class') allRules[rule] ??= 'warn';
 }
 
 export default [
@@ -45,6 +46,10 @@ export default [
       // warning when one of them is not needed anymore.
       reportUnusedDisableDirectives: 'warn',
     },
+  },
+  {
+    files: ['state-annotations.ts'],
+    rules: { 'kiss-for-react/missing-state-class': 'warn' },
   },
   {
     files: ['naming.ts'],

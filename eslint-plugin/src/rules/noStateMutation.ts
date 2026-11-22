@@ -2,7 +2,7 @@ import { AST_NODE_TYPES, ASTUtils, TSESLint, TSESTree } from '@typescript-eslint
 import type * as ts from 'typescript';
 import { asyncReducerOf } from './asyncReducers.js';
 import { createRule, getTypeInfo, isFunction, isKissActionClass, kissImportName, returnedExpressions, TypeInfo, intrinsicName } from '../utils.js';
-import { ClassNode, isKissStoreType } from '../stateClasses.js';
+import { ClassNode, isKissStoreType, isStateClass } from '../stateClasses.js';
 
 type Context = Readonly<TSESLint.RuleContext<string, readonly unknown[]>>;
 type Variable = TSESLint.Scope.Variable;
@@ -43,6 +43,13 @@ const ELEMENT_METHODS = new Set(['at', 'get', 'find', 'findLast']);
  * classes often have methods called `add` or `set` that return a new state). With type
  * information, it also follows variables, like `const items = this.state.items`, and only
  * reports the methods of real arrays, maps and sets.
+ *
+ * Also checks `this` in instance methods, accessors and function fields of automatically
+ * detected or `@stateClass` state classes. Arrow callbacks retain the instance's `this`;
+ * nested regular functions and other objects' methods do not. Constructors are excluded
+ * so fields can be initialized. Static methods and unrelated classes are excluded.
+ * New local objects can be changed. This rule does not prove purity or require every
+ * method to return a new instance: queries and unchanged `this` returns are allowed.
  */
 export default createRule({
   name: 'no-state-mutation',
@@ -179,6 +186,7 @@ class StateAnalysis {
    */
   isState(expression: TSESTree.Node): boolean {
     const node = unwrapExpression(expression);
+    if (node.type === AST_NODE_TYPES.ThisExpression) return this.isStateThis(node);
     if (node.type === AST_NODE_TYPES.Identifier) {
       const variable = ASTUtils.findVariable(this.context.sourceCode.getScope(node), node.name);
       return !!variable && this.isStateVariable(variable);
@@ -187,7 +195,8 @@ class StateAnalysis {
       const name = propertyName(node);
       // `this.state` and `this.initialState` in an action.
       if (node.object.type === AST_NODE_TYPES.ThisExpression) {
-        return (name === 'state' || name === 'initialState') && !node.computed && this.isActionThis(node.object);
+        return this.isStateThis(node.object) ||
+          ((name === 'state' || name === 'initialState') && !node.computed && this.isActionThis(node.object));
       }
       // `store.state`, with type information.
       if (name === 'state' && !node.computed && this.typeInfo && isKissStoreType(this.typeOf(node.object))) return true;
@@ -232,6 +241,27 @@ class StateAnalysis {
   private typeOf(node: TSESTree.Node): ts.Type {
     const {checker, services} = this.typeInfo!;
     return checker.getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node));
+  }
+
+  /** Resolves lexical `this` without treating another object's methods as state methods. */
+  private isStateThis(thisNode: TSESTree.ThisExpression): boolean {
+    for (let current: TSESTree.Node | undefined = thisNode.parent; current; current = current.parent) {
+      if (current.type === AST_NODE_TYPES.ArrowFunctionExpression) continue;
+      if (current.type === AST_NODE_TYPES.FunctionExpression) {
+        const member: TSESTree.Node = current.parent;
+        if (member.type === AST_NODE_TYPES.MethodDefinition && member.value === current) {
+          return !member.static && member.kind !== 'constructor' &&
+            isStateClass(member.parent.parent, this.context, this.typeInfo);
+        }
+        if (member.type !== AST_NODE_TYPES.PropertyDefinition || member.value !== current) return false;
+      }
+      if (current.type === AST_NODE_TYPES.PropertyDefinition) {
+        return !current.static && isStateClass(current.parent.parent, this.context, this.typeInfo);
+      }
+      if (current.type === AST_NODE_TYPES.FunctionDeclaration || current.type === AST_NODE_TYPES.ClassBody ||
+        current.type === AST_NODE_TYPES.StaticBlock || current.type === AST_NODE_TYPES.Program) return false;
+    }
+    return false;
   }
 
   /** True if `this` is the instance of a Kiss action (in a method or property of the action class). */
