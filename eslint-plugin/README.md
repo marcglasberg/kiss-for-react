@@ -1660,7 +1660,7 @@ An optional warning for each detected state class without its own `@stateClass` 
 from `kiss-for-react`. The rule is **off by default**. Automatic state class identification
 continues to work whether this rule is enabled or disabled.
 
-The optional [`@stateClass` decorator](../README.md#optional-stateclass-decorator) declares
+The optional `@stateClass` decorator, exported by `kiss-for-react` starting in 2.0.7, declares
 the class's purpose in its own file. Readers, AI agents, and other lint tools can recognize
 state classes without finding their stores. The decorator also makes the Kiss state rules
 check a class before a store uses it. This rule exists to keep those explicit declarations
@@ -1708,14 +1708,31 @@ project. Without type information, detection is limited to classes declared in t
 file. Classes from dependencies are not checked. Interfaces and plain object state do not
 need class annotations.
 
+#### Configuring decorators
+
 The decorator does not change the class, freeze its instances, or add runtime metadata.
 Using the decorator requires a compiler that accepts decorator syntax. TypeScript 5 or
 later supports modern class decorators without `experimentalDecorators`; the decorator
 also supports legacy class decorators enabled by that option. If your application uses
-Babel, SWC, or another compiler, check that compiler's decorator support. For setup examples, see
-[configuring the optional decorator](../README.md#configuring-decorators). Applications
+Babel, SWC, or another compiler, check that compiler's decorator support. Applications
 that do not use the decorator need no decorator configuration. The decorator does add a
 runtime import and compiler-generated decorator calls.
+
+When TypeScript 5 or later compiles the application, no decorator option is required for
+the modern format: omit `experimentalDecorators`, or set it to `false`. Keep your existing
+compiler options. For the legacy format, set this option in `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "experimentalDecorators": true
+  }
+}
+```
+
+Choose the format supported by your application's compiler. Do not enable the legacy
+option merely to use the modern format. ESLint's `projectService: true` enables type
+information for lint rules; it does not configure decorator compilation.
 
 No automatic fix is offered: adding decorator syntax can require compiler configuration.
 

@@ -44,8 +44,7 @@
  * the same as the previous one. Reading `value` doesn't spend the event.
  *
  * The event object itself is immutable: the store keeps which events were spent (see
- * `store.isEventSpent`). So the state stays immutable, and two stores that share the same
- * state (in two tests, for example) each spend the event on their own.
+ * `store.isEventSpent`). So consuming an event does not change any object in the state.
  *
  * Each event is handled by one component only: the first one whose effect runs. For two
  * components to react, create two events in the state. Or use `EvtState`, when it's fine to

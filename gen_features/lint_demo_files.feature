@@ -9,17 +9,18 @@ Feature: Lint: demo files
     And The eslint-disable lines at the top are exactly the rules the file shows.
     And With the eslint-disable lines, the file has no warnings at all.
     Examples: 
-      | File             |
-      | actions.ts       |
-      | components.tsx   |
-      | debugging.ts     |
-      | dispatching.ts   |
-      | errors.ts        |
-      | naming.ts        |
-      | reducers.ts      |
-      | state-classes.ts |
-      | state.ts         |
-      | user.test.ts     |
+      | File                 |
+      | actions.ts           |
+      | components.tsx       |
+      | debugging.ts         |
+      | dispatching.ts       |
+      | errors.ts            |
+      | naming.ts            |
+      | reducers.ts          |
+      | state-annotations.ts |
+      | state-classes.ts     |
+      | state.ts             |
+      | user.test.ts         |
 
   Scenario: Together, the demo files show all the rules of the plugin.
     Given All the demo files.

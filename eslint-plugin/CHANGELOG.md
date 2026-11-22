@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.0
+## 1.3.1
 
 * `no-state-mutation` (error by default) now checks `this` in state instance methods,
   accessors and function fields, including nested fields and, with type information,
@@ -12,9 +12,6 @@
 * Both checks use automatic state class detection and the optional `@stateClass` decorator.
   Neither check claims full purity or requires every method to return a new instance.
 * Added decorator configuration examples for modern and legacy TypeScript compilation.
-
-## 1.2.0
-
 * New opt-in rule `missing-state-class` (off by default): requires the optional
   `@stateClass` decorator from Kiss on detected state classes, including nested classes
   and base classes. Explicit annotations help readers, AI agents, and other lint tools

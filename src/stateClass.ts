@@ -18,7 +18,7 @@
  * decorators. For the legacy format, set `compilerOptions.experimentalDecorators: true`
  * in `tsconfig.json`. Babel or SWC must also be configured to accept the chosen decorator
  * format if they compile the application. ESLint's `projectService` is a separate setting.
- * The README's "Configuring decorators" section gives a configuration example.
+ * The linter README's "Configuring decorators" section gives a configuration example.
  *
  * @example
  * ```ts

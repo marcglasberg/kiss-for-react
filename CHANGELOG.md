@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.7
+
+* Added optional `@stateClass` decorator to mark state classes for linters, without 
+  changing behaviors in any way. See 
+  the [linter documentation](eslint-plugin/README.md#missing-state-class).
+
 ## 2.0.6
 
 ### Changes

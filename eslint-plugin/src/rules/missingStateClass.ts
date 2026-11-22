@@ -17,7 +17,7 @@ import { ClassNode, classNameOf, hasStateClassDecorator, isStateClass } from '..
  * TypeScript 5+ accepts modern decorators with `experimentalDecorators` absent or false;
  * use `compilerOptions.experimentalDecorators: true` in tsconfig.json only for the legacy
  * format. The decorator supports both formats. Babel/SWC must accept the chosen format
- * if they compile the application. See the main README's "Configuring decorators" section.
+ * if they compile the application. See the linter README's "Configuring decorators" section.
  * ESLint type information (`projectService`) does not configure decorator compilation.
  */
 export default createRule({

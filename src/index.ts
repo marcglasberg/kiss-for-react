@@ -1,5 +1,6 @@
 import { PersistAction, PersistException, Persistor, PersistorDummy, PersistorPrinterDecorator, } from './Persistor';
 import { ClassPersistor } from './ClassPersistor';
+export { stateClass } from './stateClass';
 import { ProcessPersistence } from './ProcessPersistence';
 import {
   ActionStatus,

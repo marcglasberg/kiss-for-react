@@ -38,24 +38,22 @@ Feature: Lint: the rules that know LoadPages actions
     When The code is linted, with or without type information.
     Then There is an error in {Member}, which says: {Message}
     Examples: 
-      | Override                                                         | Code                                                      | Member         | Message                                                                                                                       |
-      | an abortDispatch that does not call super.abortDispatch()        | abortDispatch() { return this.state.todos === null; }     | abortDispatch  | doesn't call `super.abortDispatch()`                                                                                          |
-      | an ignoreFresh getter that does not read super.ignoreFresh       | get ignoreFresh() { return this.force; }
-  force = false; | ignoreFresh    | doesn't read `super.ignoreFresh`, so a `'next'` or `'previous'` of this `LoadPages` is aborted while the list is fresh        |
-      | an ignoreThrottle getter that does not read super.ignoreThrottle | get ignoreThrottle() { return true; }                     | ignoreThrottle | doesn't read `super.ignoreThrottle`, so a `'next'` or `'previous'` of this `LoadPages` is aborted while the list is throttled |
-      | a statusKey getter                                               | get statusKey() { return 'todos'; }                       | statusKey      | Don't override `statusKey` in a `LoadPages`                                                                                   |
+      | Override                                                         | Code                                                       | Member         | Message                                                                                                                       |
+      | an abortDispatch that does not call super.abortDispatch()        | abortDispatch() { return this.state.todos === null; }      | abortDispatch  | doesn't call `super.abortDispatch()`                                                                                          |
+      | an ignoreFresh getter that does not read super.ignoreFresh       | get ignoreFresh() { return this.force; }\n  force = false; | ignoreFresh    | doesn't read `super.ignoreFresh`, so a `'next'` or `'previous'` of this `LoadPages` is aborted while the list is fresh        |
+      | an ignoreThrottle getter that does not read super.ignoreThrottle | get ignoreThrottle() { return true; }                      | ignoreThrottle | doesn't read `super.ignoreThrottle`, so a `'next'` or `'previous'` of this `LoadPages` is aborted while the list is throttled |
+      | a statusKey getter                                               | get statusKey() { return 'todos'; }                        | statusKey      | Don't override `statusKey` in a `LoadPages`                                                                                   |
 
   Scenario Outline: In a LoadPages, overrides that keep its loading rules are fine.
     Given A LoadPages with {Override}.
     When The code is linted, with or without type information.
     Then There are no errors.
     Examples: 
-      | Override                                                 | Code                                                                           |
-      | an abortDispatch that calls super.abortDispatch()        | abortDispatch() { return super.abortDispatch() || this.state.todos === null; } |
-      | an ignoreFresh getter that reads super.ignoreFresh       | get ignoreFresh() { return this.force || super.ignoreFresh; }
-  force = false; |
-      | pagesKeyParams, instead of statusKey                     | pagesKeyParams() { return 'todos'; }                                           |
-      | the same overrides, in an action that is not a LoadPages |                                                                                |
+      | Override                                                 | Code                                                                              |
+      | an abortDispatch that calls super.abortDispatch()        | abortDispatch() { return super.abortDispatch() \|\| this.state.todos === null; }  |
+      | an ignoreFresh getter that reads super.ignoreFresh       | get ignoreFresh() { return this.force \|\| super.ignoreFresh; }\n  force = false; |
+      | pagesKeyParams, instead of statusKey                     | pagesKeyParams() { return 'todos'; }                                              |
+      | the same overrides, in an action that is not a LoadPages |                                                                                   |
 
   Scenario Outline: A LoadPages with fields, without pagesKeyParams, is a warning.
     Given A subclass of LoadPages with the field postId, that doesn't override pagesKeyParams.
@@ -72,13 +70,9 @@ Feature: Lint: the rules that know LoadPages actions
     When The code is linted, with or without type information.
     Then There is no warning.
     Examples: 
-      | Case                                                           | Code                                                                                            |
-      | A LoadPages without fields (maxPages and which are not fields) | 
-  constructor(which: PagesToLoad = 'refresh') { super(which); }
-  maxPages = 5;                |
-      | A LoadPages with a field, that overrides pagesKeyParams        | 
-  constructor(readonly postId: string) { super(); }
-  pagesKeyParams() { return this.postId; } |
+      | Case                                                           | Code                                                                                              |
+      | A LoadPages without fields (maxPages and which are not fields) | \n  constructor(which: PagesToLoad = 'refresh') { super(which); }\n  maxPages = 5;                |
+      | A LoadPages with a field, that overrides pagesKeyParams        | \n  constructor(readonly postId: string) { super(); }\n  pagesKeyParams() { return this.postId; } |
 
   Scenario: A LoadPages with retry is not reported by retry-without-non-reentrant.
     Given A LoadPages with retry, which already runs one load per list at a time, and can't use nonReentrant.
