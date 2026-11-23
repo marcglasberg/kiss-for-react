@@ -1,14 +1,12 @@
 # Changelog
 
-## 2.0.7
+## 2.0.8
 
 * Added optional `@stateClass` decorator to mark state classes for linters, without 
   changing behaviors in any way. See 
   the [linter documentation](eslint-plugin/README.md#missing-state-class).
 
 ## 2.0.6
-
-### Changes
 
 * **The status functions accept an array of action types.** The array means "any of them":
   * `useIsWaiting([LoadUser, LoadPosts])` is true while an action of any of the types runs.
@@ -35,8 +33,6 @@
   when the first hook returns true, the second one is not called.
 
 ## 2.0.5
-
-### Changes
 
 * **`checkInternet` no longer needs `super.before()`.** Note:
   * The internet is now checked before your `before()` runs. If there is no internet,
@@ -65,8 +61,6 @@
   the docs and the ESLint rule `missing-super-in-override` warned about it.
 
 ## 2.0.4
-
-### Bug fixes
 
 * **`store.dispose()` now waits for the async prop disposals that started before it.** When a
   prop with an async `dispose` was removed with `disposeProp`, `disposeProps` or
@@ -145,8 +139,6 @@
   read-only fields still keep the constructor's values.
 
 ## 2.0.0
-
-### New features
 
 * New **`server` option** of `createStore`, for the store that loads the data of a request in
   server-side rendering (the one the server code creates per request, dispatches the loading

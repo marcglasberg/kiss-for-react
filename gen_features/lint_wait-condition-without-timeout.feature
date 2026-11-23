@@ -1,0 +1,48 @@
+Feature: Lint: wait-condition-without-timeout
+
+  Scenario Outline: A wait for a condition without a timeout is reported outside tests.
+    Given {Where}.
+    When It waits for a condition with timeoutMillis {Timeout}.
+    Then There is a warning on the timeout.
+    Examples: 
+      | Where                                    | Timeout | Code                                                                                                                                                                                 |
+      | The store's waitCondition                | 0       | \nexport async function run() {\n  await store.waitCondition((state) => state.price >= 100, { timeoutMillis: 0 });\n}                                                                |
+      | The store's dispatchWhen                 | -1      | \nstore.dispatchWhen(new BuyStock(), (state) => state.price >= 100, { timeoutMillis: -1 });                                                                                          |
+      | The function returned by useDispatchWhen | 0       | \nexport function useBuy() {\n  const dispatchWhen = useDispatchWhen();\n  return () => dispatchWhen(new BuyStock(), (state: State) => state.price >= 100, { timeoutMillis: 0 });\n} |
+      | The dispatchWhen of useStore()           | 0       | \nexport function useBuy() {\n  const s = useStore();\n  return () => s.dispatchWhen(new BuyStock(), (state: State) => state.price >= 100, { timeoutMillis: 0 });\n}                 |
+      | An action's waitCondition                | 0       | \nclass WaitForPrice extends KissAction<State> {\n  async reduce() {\n    await this.waitCondition((state) => state.price >= 100, { timeoutMillis: 0 });\n    return null;\n  }\n}   |
+
+  Scenario: A wait with a timeout is fine.
+    Given The store's waitCondition and dispatchWhen.
+    When They wait with timeoutMillis 5000, or with a timeout from a variable.
+    Then There are no warnings.
+
+  Scenario: Nothing is reported in tests.
+    Given A waitCondition with timeoutMillis 0.
+    When The code is in a test file.
+    Then There are no warnings.
+
+  Scenario: With type information, other objects with a waitCondition method are not reported.
+    Given An object that is not a Kiss store, with a waitCondition method.
+    When It is called with timeoutMillis 0.
+    Then With type information, there is no warning.
+    And Without type information, there is a warning, since the timeoutMillis option is specific to Kiss.
+
+  Scenario Outline: A wait with an infinite timeout is reported too, since it means no timeout.
+    Given {Where}.
+    When It waits for a condition with timeoutMillis {Timeout}.
+    Then There is a warning on the timeout.
+    Examples: 
+      | Where                     | Timeout                  |
+      | The store's waitCondition | Infinity                 |
+      | The store's waitCondition | Number.POSITIVE_INFINITY |
+      | The store's dispatchWhen  | Infinity                 |
+
+  Scenario Outline: The warning says if the wait can be cancelled.
+    Given {Where}, without a timeout.
+    When The code is linted.
+    Then The warning says: {Message}
+    Examples: 
+      | Where                     | Message                      |
+      | The store's waitCondition | it can't be cancelled        |
+      | The store's dispatchWhen  | only a `logOut()` cancels it |

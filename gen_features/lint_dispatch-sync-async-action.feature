@@ -1,0 +1,54 @@
+Feature: Lint: dispatch-sync-async-action
+
+  Scenario Outline: dispatchSync of an async action is an error.
+    Given An action that is async because {Reason}.
+    When It is dispatched with store.dispatchSync.
+    Then There is an error, saying why the action is async.
+    And The suggestions replace dispatchSync with dispatch or dispatchAndWait.
+    Examples: 
+      | Reason                                         | Action                         | Message                    | Type information |
+      | its reduce is async                            | AsyncReduce                    | `reduce` returns a promise | true             |
+      | its reduce is async                            | AsyncReduce                    | `reduce` returns a promise | false            |
+      | its before is async                            | AsyncBefore                    | `before` returns a promise | true             |
+      | its before is async                            | AsyncBefore                    | `before` returns a promise | false            |
+      | it sets checkInternet                          | WithCheckInternet              | sets `checkInternet`       | true             |
+      | it sets checkInternet                          | WithCheckInternet              | sets `checkInternet`       | false            |
+      | its superclass has an async before             | SubclassOfAsync                | `before` returns a promise | true             |
+      | its superclass has an async before             | SubclassOfAsync                | `before` returns a promise | false            |
+      | it sets checkInternet, even with a sync before | WithCheckInternetAndSyncBefore | sets `checkInternet`       | true             |
+      | it sets checkInternet, even with a sync before | WithCheckInternetAndSyncBefore | sets `checkInternet`       | false            |
+
+  Scenario: dispatchSync of a sync action is fine.
+    Given A sync action.
+    When It is dispatched with store.dispatchSync.
+    Then There are no errors.
+
+  Scenario Outline: The action can be in a variable, or dispatched with the function from useDispatchSync.
+    Given An async action.
+    When It is dispatched {How}.
+    Then There is an error.
+    Examples: 
+      | How                                           | Code                                                                                                                        |
+      | from a const variable                         | \nconst action = new AsyncReduce();\nstore.dispatchSync(action);                                                            |
+      | with the function returned by useDispatchSync | \nexport function Button() {\n  const dispatchSync = useDispatchSync();\n  return () => dispatchSync(new AsyncReduce());\n} |
+
+  Scenario: With type information, the action's type is enough to know it's async.
+    Given A function that gets an action typed as an async action class, and dispatches it with dispatchSync.
+    When The code is linted.
+    Then With type information, there is an error.
+    And Without type information, there is no error, since the action's class is unknown.
+
+  Scenario: An action typed only as KissAction is not reported.
+    Given A function that gets an action typed as KissAction, and dispatches it with dispatchSync.
+    When The code is linted with type information.
+    Then There are no errors, since the action could be sync.
+
+  Scenario Outline: The function from useDispatchSync is checked whatever its name.
+    Given An async action.
+    When It is dispatched with the function from useDispatchSync, in a variable called dispatchNow.
+    Then There is an error, with or without type information.
+    And There are no suggestions, since the function can't be renamed to another dispatch method.
+    Examples: 
+      | Type information |
+      | true             |
+      | false            |

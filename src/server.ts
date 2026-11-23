@@ -10,6 +10,8 @@
 //
 // Keep it in sync with `index.ts`: `__tests__/bdd.ServerEntryPoint.test.ts` checks that it
 // exports everything of `index.ts` that is not a hook.
+export { stateClass } from './stateClass';
+
 import { PersistAction, PersistException, Persistor, PersistorDummy, PersistorPrinterDecorator, } from './Persistor';
 import { ClassPersistor } from './ClassPersistor';
 import { ProcessPersistence } from './ProcessPersistence';
